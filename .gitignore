@@ -1,7 +1,9 @@
 .DS_Store
+.env
 .coverage
 .omc/
 .pytest_cache/
+.knowledgeforge/
 .venv/
 __pycache__/
 *.pyc

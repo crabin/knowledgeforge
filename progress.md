@@ -93,6 +93,111 @@
   - /Users/lpb/workspace/myProjects/KnowledgeForge/uv.lock
   - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
 
+### 阶段 5：批次 B 后置治理骨架
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 扩展治理相关 schema，新增结构化抽取、图谱同步、质量检测、版本记录和 post-storage 聚合结果模型
+  - 新建 `postprocess`、`graph`、`quality`、`versioning` 模块骨架
+  - 实现 `PostStoragePipeline`，按“结构化抽取 -> 路径关联 -> 质量检测 -> 版本记录”串联治理流程
+  - 将 post-storage pipeline 接入 LangGraph 主流程，在 Markdown 落盘后继续执行治理节点
+  - 扩展 API 返回内容，暴露治理结果和失败分类
+  - 补充治理链路测试，验证 extraction、graph_sync、quality_check、version_record 都能返回
+  - 清理临时验证目录
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/postprocess/extractor.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/postprocess/pipeline.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/graph/neo4j_adapter.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/quality/checker.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/versioning/recorder.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+
+### 阶段 6：批次 C 质量闭环与恢复能力
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 扩展质量检测规则，新增冲突、重复、引用与图谱一致性检查项
+  - 将治理失败分类为 `repair_flow` 与 `research_flow`，并生成下一轮动作建议
+  - 新增本地 JSON 状态持久化存储与审计日志
+  - 新增 `/tasks/<task_id>/resume` 接口，实现任务恢复执行
+  - 为恢复流程加入最大轮次保护
+  - 将运行态目录切换到 `.knowledgeforge/` 并加入 `.gitignore`
+  - 增加跨应用重建恢复、research flow 回流与 max rounds 的测试覆盖
+  - 清理临时验证目录
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/.gitignore
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/config.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/quality/checker.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/postprocess/pipeline.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/state_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/audit.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+
+### 阶段 7：阶段 8 版本冻结与研报分支
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 扩展版本记录，增加 `frozen`、`frozen_at`、`report_eligible` 字段
+  - 新增 frozen version 本地存储，固化通过质检后的冻结快照
+  - 在任务持久化时自动冻结合格版本并记录审计事件
+  - 新增 report service，只基于 frozen version 生成研报结果
+  - 新增 `/tasks/<task_id>/frozen` 与 `/tasks/<task_id>/report` 接口
+  - 限制未冻结任务无法获取 frozen version 或生成 report
+  - 增加冻结版本与报告边界测试
+  - 清理临时验证目录
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/config.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/versioning/recorder.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/frozen_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/reporting/report_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+
+### 阶段 8：env 配置接入真实调用层
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 将 `.env` / `.env.example` 的 LLM、Embedding、Neo4j、MySQL、ChromaDB 配置统一接入 `AppConfig`
+  - 新增 OpenAI 兼容聊天与 Embedding 客户端
+  - 将 `QueryEngine` 改为通过配置注入的聊天与 Embedding 客户端生成查询摘要和向量
+  - 新增 Neo4j 图谱客户端，并将 `Neo4jPathMapper` 改为尝试实际写入图数据库
+  - 在图谱不可达时保留明确错误信息，但默认不阻塞本地主链路
+  - 新增 `/config/status` 用于查看配置状态，不暴露密钥
+  - 补充调用层集成测试与配置加载测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/pyproject.toml
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/.gitignore
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/.env.example
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/config.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/llms/openai_compatible.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/graph/client.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/graph/neo4j_adapter.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/postprocess/pipeline.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_integration_layers.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -100,6 +205,10 @@
 | planning-review | task_plan.md | 形成可执行实施阶段与首批批次 | 已形成 8 个阶段、3 个批次与实现顺序 | 通过 |
 | pytest | `python3 -m pytest tests/test_workflow.py` | 主链路与参数校验通过 | 2 个测试通过 | 通过 |
 | uv-pytest | `uv run pytest tests/test_workflow.py` | uv 环境可安装项目并通过测试 | 2 个测试通过 | 通过 |
+| governance-pytest | `uv run pytest tests/test_workflow.py` | 后置治理骨架接入后主链路与治理结果通过 | 3 个测试通过 | 通过 |
+| recovery-pytest | `uv run pytest tests/test_workflow.py` | 回流分类、恢复与最大轮次保护通过 | 5 个测试通过 | 通过 |
+| frozen-report-pytest | `uv run pytest tests/test_workflow.py` | 冻结版本与研报边界通过 | 7 个测试通过 | 通过 |
+| env-layer-pytest | `uv run pytest tests/test_workflow.py tests/test_integration_layers.py` | env 配置接入真实调用层后仍通过 | 10 个测试通过 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -109,9 +218,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 4：uv 项目初始化已完成 |
-| 我要去哪里？ | 阶段 6：进入后置治理接口骨架 |
-| 目标是什么？ | 接入结构化抽取、Neo4j、质量检测和版本记录骨架 |
+| 我在哪里？ | 阶段 8：env 配置接入真实调用层已完成 |
+| 我要去哪里？ | 进入下一轮增强或提交当前基线 |
+| 目标是什么？ | 继续深化真实检索、真实解析与严格图谱同步 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 
