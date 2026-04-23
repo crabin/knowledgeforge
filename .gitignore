@@ -1,0 +1,11 @@
+.DS_Store
+.coverage
+.omc/
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+
+save/
+
+knowledgeforge.egg-info/
