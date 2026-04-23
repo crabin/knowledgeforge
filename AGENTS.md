@@ -110,6 +110,15 @@ For non-trivial implementation work in this repo:
 4. Before claiming completion, run `superpowers:verification-before-completion`.
 5. After meaningful code changes, use `superpowers:requesting-code-review`.
 
+## Completion Discipline
+
+After each meaningful task, sync project state before closing the work:
+
+1. Update `progress.md` with the completed work, confirmed verification results, and any remaining follow-up items.
+2. If the task changes the active implementation direction, sync `task_plan.md` and `findings.md` as needed.
+3. Check git state, stage the intended project changes, and create a commit unless the user explicitly says not to commit.
+4. Keep `AGENTS.md` and `CLAUDE.md` aligned when repository-level working rules change.
+
 ## Domain Document Rules
 
 Knowledge documents should stay traceable to source, agent, round, timestamp, and local path.
@@ -136,6 +145,123 @@ When quality checks fail, distinguish between:
 Never return a generic "failed" result without classifying the problem.
 
 # [KnowledgeForge] recent context, 2026-04-23 11:54pm GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 3:01am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:57am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:50am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:49am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:48am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:48am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:46am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:45am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:43am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:42am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:29am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:23am GMT+9
+
+No previous sessions found.
+</claude-mem-context>
+
+
+<claude-mem-context>
+# Memory Context
+
+# [KnowledgeForge] recent context, 2026-04-24 2:23am GMT+9
 
 No previous sessions found.
 </claude-mem-context>

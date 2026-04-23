@@ -262,6 +262,20 @@
   - 真实网络抓取仍可能退回到 query-plan 型趋势输出，因此 crawler 抓取质量仍需继续收敛
   - `tests/test_workflow.py` 本轮未重新做全量最终确认
 
+### 阶段 11：仓库协作规则补充
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 在 `AGENTS.md` 与 `CLAUDE.md` 中新增“Completion Discipline”规则
+  - 明确每次有意义任务完成后，必须同步 `progress.md`
+  - 明确当任务改变实现方向时，需要同步 `task_plan.md` 与 `findings.md`
+  - 明确默认需要检查 git 状态并提交，除非用户明确要求不提交
+  - 明确仓库级规则变更时，`AGENTS.md` 与 `CLAUDE.md` 必须保持一致
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/AGENTS.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/CLAUDE.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|

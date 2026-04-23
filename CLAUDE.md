@@ -110,6 +110,15 @@ For non-trivial implementation work in this repo:
 4. Before claiming completion, run `superpowers:verification-before-completion`.
 5. After meaningful code changes, use `superpowers:requesting-code-review`.
 
+## Completion Discipline
+
+After each meaningful task, sync project state before closing the work:
+
+1. Update `progress.md` with the completed work, confirmed verification results, and any remaining follow-up items.
+2. If the task changes the active implementation direction, sync `task_plan.md` and `findings.md` as needed.
+3. Check git state, stage the intended project changes, and create a commit unless the user explicitly says not to commit.
+4. Keep `AGENTS.md` and `CLAUDE.md` aligned when repository-level working rules change.
+
 ## Domain Document Rules
 
 Knowledge documents should stay traceable to source, agent, round, timestamp, and local path.
