@@ -34,6 +34,8 @@ class SourceRecord:
     retrieved_at: str
     reliability: Literal["high", "medium", "low", "unknown"]
     agent: str
+    source_type: str = "reference"
+    snippet: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

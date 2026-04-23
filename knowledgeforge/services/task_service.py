@@ -38,8 +38,9 @@ class TaskService:
         self._audit_logger = AuditLogger(config.audit_root)
         self._frozen_store = FrozenVersionStore(config.frozen_root)
         self._report_service = ReportService()
-        query_chat_client = OpenAICompatibleChatClient(config.openai)
-        query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai)
+        query_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
+        query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
+        media_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
         graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
             insight_engine=InsightEngine(),
@@ -47,7 +48,9 @@ class TaskService:
                 chat_client=query_chat_client,
                 embedding_client=query_embedding_client,
             ),
-            media_engine=MediaEngine(),
+            media_engine=MediaEngine(
+                chat_client=media_chat_client,
+            ),
             evaluator=CompletenessEvaluator(),
             writer=MarkdownKnowledgeWriter(config),
             post_storage_pipeline=PostStoragePipeline(

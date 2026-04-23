@@ -198,6 +198,70 @@
   - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_integration_layers.py
   - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
 
+### 阶段 9：QueryEngine 节点化重构与单引擎测试
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 参考 BettaFish 的 QueryEngine 设计思路，将 `QueryEngine` 从单文件占位实现重构为 `search -> summary -> formatting` 的节点化结构
+  - 新增 `state/`、`prompts/`、`tools/crawler.py`、`utils/` 等配套模块
+  - 明确检索策略为“官方文档优先，教程补充”
+  - 新增三引擎单独测试脚本 `scripts/test_single_engines.py`
+  - 新增 `tests/test_query_engine.py`
+  - 在依赖中补充 `beautifulsoup4`
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/base_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/utils/ranking.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/utils/text_processing.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/pyproject.toml
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/uv.lock
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - QueryEngine 专项测试已通过
+  - 单引擎脚本可运行
+  - `tests/test_workflow.py` 仍需一次最终稳定化确认，不按已全绿记录
+  - crawler 的真实检索质量与官方域名过滤策略仍需继续收敛
+
+### 阶段 10：MediaEngine 节点化重构与趋势观点补充
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 参考 BettaFish 的 MediaEngine 设计思路，将 `MediaEngine` 从占位实现重构为 `search -> summary -> formatting` 的节点化结构
+  - 新增 `state/`、`prompts/`、`tools/crawler.py`、`utils/` 等配套模块
+  - 明确 `MediaEngine` 职责为“补充当下观点与未来走向”，不与 QueryEngine 的权威事实检索重叠
+  - 为技术领域加入“中外技术社区混合”的默认来源策略，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补充 `V2EX / 掘金 / 知乎`
+  - 新增 MediaEngine 专项测试 `tests/test_media_engine.py`
+  - 更新三引擎单独测试脚本，使 `media` 路径支持真实构造和更短超时的 smoke test
+  - 在 `TaskService` 中为 MediaEngine 注入真实 chat client
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/base_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/utils/ranking.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/utils/text_processing.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - MediaEngine 专项测试已通过
+  - `scripts/test_single_engines.py --engine media ...` 可运行
+  - 真实网络抓取仍可能退回到 query-plan 型趋势输出，因此 crawler 抓取质量仍需继续收敛
+  - `tests/test_workflow.py` 本轮未重新做全量最终确认
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -209,6 +273,10 @@
 | recovery-pytest | `uv run pytest tests/test_workflow.py` | 回流分类、恢复与最大轮次保护通过 | 5 个测试通过 | 通过 |
 | frozen-report-pytest | `uv run pytest tests/test_workflow.py` | 冻结版本与研报边界通过 | 7 个测试通过 | 通过 |
 | env-layer-pytest | `uv run pytest tests/test_workflow.py tests/test_integration_layers.py` | env 配置接入真实调用层后仍通过 | 10 个测试通过 | 通过 |
+| query-engine-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py` | QueryEngine 节点化重构后的专项测试与集成层验证通过 | 通过 | 通过 |
+| single-engine-script | `uv run python scripts/test_single_engines.py --engine all --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 官方文档` | 三引擎单独测试脚本可运行 | 可运行 | 通过 |
+| media-engine-pytest | `uv run pytest tests/test_media_engine.py tests/test_query_engine.py tests/test_integration_layers.py` | MediaEngine 节点化重构后专项测试与既有 Query/集成层验证通过 | 6 个测试通过 | 通过 |
+| media-single-engine-script | `uv run python scripts/test_single_engines.py --engine media --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 社区观点` | MediaEngine 单独脚本可运行 | 可运行 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -218,9 +286,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8：env 配置接入真实调用层已完成 |
-| 我要去哪里？ | 进入下一轮增强或提交当前基线 |
-| 目标是什么？ | 继续深化真实检索、真实解析与严格图谱同步 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9 和阶段 10 的 QueryEngine / MediaEngine 节点化重构已落地，但都按保守口径保留后续验证项 |
+| 我要去哪里？ | 进入 QueryEngine / MediaEngine crawler 质量增强与 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方文档优先检索、社区趋势抓取质量，以及测试稳定性 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

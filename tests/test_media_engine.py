@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from agent.MediaEngine.agent import MediaEngine
+from agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
+from agent.MediaEngine.utils.ranking import is_technical_context, score_media_url
+from knowledgeforge.models import RequestContext
+
+
+class FakeMediaChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "social_queries": [
+                    "LangGraph site:x.com OR site:twitter.com opinion trend",
+                    "LangGraph site:reddit.com discussion adoption",
+                ],
+                "community_queries": [
+                    "LangGraph site:news.ycombinator.com discussion",
+                    "LangGraph site:github.com discussions OR site:v2ex.com",
+                ],
+                "blog_queries": [
+                    "LangGraph engineering blog future trend",
+                    "LangGraph site:juejin.cn OR site:zhihu.com blog analysis",
+                ],
+                "reasoning": "优先抓取技术社区和博客，再用社交媒体补充观点热度。",
+                "is_technical": True,
+            }
+        return {
+            "summary": "LangGraph 当前在技术社区中的主流看法偏积极，但讨论重点已经转向复杂工作流的可维护性与落地边界。",
+            "current_sentiment": "整体偏积极，但对复杂度控制保持谨慎。",
+            "mainstream_views": ["社区认可其在多步骤编排上的表达力。"],
+            "debates": ["是否会引入额外抽象成本仍有分歧。"],
+            "adoption_signals": ["工程博客开始记录真实接入经验。"],
+            "future_directions": ["后续讨论将更聚焦生产化治理与最佳实践沉淀。"],
+            "coverage_topics": ["工作流编排", "状态持久化"],
+        }
+
+
+class FakeMediaCrawler:
+    def search(self, *, query: str, platform_type: str, is_technical: bool, max_results: int = 5):
+        title_map = {
+            "social": ("LangGraph on X", "https://x.com/example/status/1"),
+            "community": ("LangGraph HN Thread", "https://news.ycombinator.com/item?id=1"),
+            "blog": ("LangGraph Engineering Blog", "https://example.dev/blog/langgraph"),
+        }
+        title, url = title_map[platform_type]
+        return [
+            MediaSearchHit(
+                title=title,
+                url=url,
+                snippet=f"{platform_type} perspective about adoption and tradeoffs",
+                platform_type=platform_type,
+                score=9.0 if platform_type == "community" else 7.0,
+            )
+        ]
+
+    def fetch_documents(self, hits, *, max_documents: int = 8):
+        return [
+            MediaCrawledDocument(
+                title=hit.title,
+                url=hit.url,
+                snippet=hit.snippet,
+                content=f"{hit.title} content covering current views, debates, and adoption signals.",
+                platform_type=hit.platform_type,
+                publisher="publisher.test",
+                score=hit.score,
+            )
+            for hit in hits
+        ]
+
+
+class EmptyMediaCrawler:
+    def search(self, *, query: str, platform_type: str, is_technical: bool, max_results: int = 5):
+        return []
+
+    def fetch_documents(self, hits, *, max_documents: int = 8):
+        return []
+
+
+def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> None:
+    engine = MediaEngine(
+        chat_client=FakeMediaChatClient(),
+        crawler=FakeMediaCrawler(),
+    )
+    context = RequestContext(
+        domain="LangGraph",
+        subdomains=["工作流编排", "状态持久化"],
+        time_window="近 12 个月",
+        focus_points=["社区观点", "未来走向"],
+        constraints=[],
+        initial_strategy=["LangGraph community trend"],
+    )
+
+    result = engine.run(context, round_number=1)
+
+    assert "主流看法" in result.key_points[0]
+    assert "落地边界" in result.summary
+    assert {source.source_type for source in result.sources} == {"social", "community", "blog"}
+    assert any(item == "社交媒体：" for item in result.raw_material)
+    assert any(item == "技术社区：" for item in result.raw_material)
+    assert any(item == "博客/长文：" for item in result.raw_material)
+
+
+def test_media_engine_fallback_keeps_traceable_sources() -> None:
+    engine = MediaEngine(
+        chat_client=None,
+        crawler=EmptyMediaCrawler(),
+    )
+    context = RequestContext(
+        domain="深度学习",
+        subdomains=["模型训练"],
+        time_window="近 12 个月",
+        focus_points=["社区观点"],
+        constraints=[],
+        initial_strategy=["deep learning community trend"],
+    )
+
+    result = engine.run(context, round_number=1)
+
+    assert result.sources
+    assert {source.source_type for source in result.sources} == {"social", "community", "blog"}
+    assert any("社交查询：" in item for item in result.raw_material)
+
+
+def test_media_ranking_prefers_technical_community_sources() -> None:
+    assert is_technical_context("深度学习", ["模型训练"], ["社区观点"]) is True
+    community_score = score_media_url(
+        "https://news.ycombinator.com/item?id=123",
+        platform_type="community",
+        requested_type="community",
+        is_technical=True,
+        snippet="community discussion about adoption trend",
+    )
+    social_score = score_media_url(
+        "https://x.com/someone/status/123",
+        platform_type="social",
+        requested_type="social",
+        is_technical=True,
+        snippet="opinion trend",
+    )
+
+    assert community_score > social_score

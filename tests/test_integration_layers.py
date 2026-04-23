@@ -3,29 +3,71 @@ from __future__ import annotations
 from agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.graph.neo4j_adapter import Neo4jPathMapper
 from knowledgeforge.models import DocumentArtifact, RequestContext, StructuredExtractionResult
+from agent.QueryEngine.state.state import CrawledDocument, SearchHit
 
 
 class FakeChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
     def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "official_queries": ["langgraph official documentation"],
+                "tutorial_queries": ["langgraph tutorial guide"],
+                "official_domains": ["langchain-ai.github.io"],
+                "reasoning": "优先查询官方文档，再补充教程。",
+            }
         return {
             "summary": "使用真实 LLM 客户端生成的检索摘要。",
             "key_points": ["权威来源优先", "保留来源元数据"],
             "coverage_topics": ["工作流编排", "知识沉淀"],
-            "recommended_queries": ["知识工程 工作流编排 官方资料"],
-            "authoritative_sources": [
-                {
-                    "title": "LangGraph Docs",
-                    "url": "https://langchain-ai.github.io/langgraph/",
-                    "publisher": "LangChain",
-                    "reliability": "high",
-                }
-            ],
+            "official_findings": ["LangGraph Docs 提供官方说明。"],
+            "tutorial_findings": ["LangGraph Tutorial 提供补充示例。"],
         }
 
 
 class FakeEmbeddingClient:
     def embed_texts(self, texts: list[str]):
         return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+class FakeCrawler:
+    def search(self, *, query: str, source_type: str, official_domains: list[str], max_results: int = 5):
+        if source_type == "official":
+            return [
+                SearchHit(
+                    title="LangGraph Docs",
+                    url="https://langchain-ai.github.io/langgraph/",
+                    snippet="Official reference",
+                    source_type="official",
+                    score=10.0,
+                )
+            ]
+        return [
+            SearchHit(
+                title="LangGraph Tutorial",
+                url="https://example.com/tutorial/langgraph",
+                snippet="Tutorial reference",
+                source_type="tutorial",
+                score=4.0,
+            )
+        ]
+
+    def fetch_documents(self, hits, *, max_documents: int = 6):
+        return [
+            CrawledDocument(
+                title=hit.title,
+                url=hit.url,
+                snippet=hit.snippet,
+                content=f"{hit.title} content",
+                source_type=hit.source_type,
+                publisher="publisher.test",
+                score=hit.score,
+            )
+            for hit in hits
+        ]
 
 
 class FakeNeo4jClient:
@@ -37,7 +79,11 @@ class FakeNeo4jClient:
 
 
 def test_query_engine_uses_chat_and_embedding_clients() -> None:
-    engine = QueryEngine(chat_client=FakeChatClient(), embedding_client=FakeEmbeddingClient())
+    engine = QueryEngine(
+        chat_client=FakeChatClient(),
+        embedding_client=FakeEmbeddingClient(),
+        crawler=FakeCrawler(),
+    )
     context = RequestContext(
         domain="知识工程",
         subdomains=["工作流编排", "知识沉淀"],
