@@ -9,12 +9,14 @@ from bs4 import BeautifulSoup
 from agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
 from agent.MediaEngine.utils.ranking import classify_platform_type, score_media_url
 from agent.MediaEngine.utils.text_processing import extract_media_text
+from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 
 
 class MediaPerspectiveCrawler:
     def __init__(self, timeout: float = 3.0, user_agent: str = "KnowledgeForgeMediaBot/0.1") -> None:
         self._timeout = timeout
         self._headers = {"User-Agent": user_agent}
+        self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0))
 
     def search(
         self,
@@ -24,6 +26,15 @@ class MediaPerspectiveCrawler:
         is_technical: bool,
         max_results: int = 5,
     ) -> list[MediaSearchHit]:
+        browser_hits = self._search_with_browser(
+            query=query,
+            platform_type=platform_type,
+            is_technical=is_technical,
+            max_results=max_results,
+        )
+        if browser_hits:
+            return browser_hits
+
         url = "https://html.duckduckgo.com/html/"
         try:
             with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
@@ -76,6 +87,20 @@ class MediaPerspectiveCrawler:
         documents: list[MediaCrawledDocument] = []
         with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
             for hit in hits[:max_documents]:
+                browser_content = self._browser.fetch_text(hit.url)
+                if browser_content:
+                    documents.append(
+                        MediaCrawledDocument(
+                            title=hit.title,
+                            url=hit.url,
+                            snippet=hit.snippet,
+                            content=browser_content,
+                            platform_type=hit.platform_type,
+                            publisher=urlparse(hit.url).netloc or "unknown",
+                            score=hit.score,
+                        )
+                    )
+                    continue
                 try:
                     response = client.get(hit.url)
                     response.raise_for_status()
@@ -94,3 +119,33 @@ class MediaPerspectiveCrawler:
                     )
                 )
         return documents
+
+    def _search_with_browser(
+        self,
+        *,
+        query: str,
+        platform_type: str,
+        is_technical: bool,
+        max_results: int,
+    ) -> list[MediaSearchHit]:
+        browser_results = self._browser.search_duckduckgo(query, limit=max_results)
+        if not browser_results:
+            return []
+        hits = [
+            MediaSearchHit(
+                title=result.title,
+                url=result.url,
+                snippet=result.snippet,
+                platform_type=classify_platform_type(result.url, requested_type=platform_type),
+                score=score_media_url(
+                    result.url,
+                    platform_type=classify_platform_type(result.url, requested_type=platform_type),
+                    requested_type=platform_type,
+                    is_technical=is_technical,
+                    snippet=result.snippet,
+                ),
+            )
+            for result in browser_results
+        ]
+        hits.sort(key=lambda item: item.score, reverse=True)
+        return hits[:max_results]

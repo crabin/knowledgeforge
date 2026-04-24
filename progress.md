@@ -388,6 +388,25 @@
   - 现在线路问题已经可以从脚本日志直接定位，而不需要只看最终 fallback 输出猜原因
   - `ML` 这个例子暴露出的真实问题是 “LLM 首轮超时 + 搜索结果无命中”，不是“agent 没跑”
 
+### 阶段 17：Query / Media crawler 接入 agent-browser
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 参考 `agent-browser` skill，将浏览器式搜索与正文抓取接入 QueryEngine / MediaEngine 的 crawler
+  - 新增 `knowledgeforge/tools/agent_browser_cli.py`，封装 `agent-browser` 的搜索页打开、结果提取、正文抓取与清理逻辑
+  - 调整 Query / Media crawler 为“优先走 browser，失败再退回 httpx” 的双路径
+  - 保持现有测试接口不变，避免影响 Engine 其余节点与主流程
+  - 复测 `ML` 场景，确认真实问题已从“只看最终 fallback”转为“可以观察浏览器抓取是否命中”
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/tools/agent_browser_cli.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - Query / Media crawler 现在已经具备 browser-first 抓取能力
+  - `ML` 场景下浏览器抓取并没有立刻解决无命中问题，说明 query 质量仍是关键瓶颈
+  - 现阶段最稳的路径是“浏览器抓取增强 + query normalization”组合，而不是只切换抓取后端
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -411,6 +430,7 @@
 | official-domain-script | `uv run python scripts/test_single_engines.py --engine query --domain LangGraph --subdomain 工作流编排 --focus-point 官方文档 --focus-point 最佳实践` | QueryEngine 单引擎脚本可展示候选官方域名识别结果 | 可运行 | 通过 |
 | live-script-ml | `uv run python scripts/test_single_engines.py --domain ML` | 脚本默认要求真实来源，未命中时应明确失败退出 | `query, media` 未拿到真实来源，脚本以 exit 2 退出 | 通过 |
 | live-script-ml-logs | `uv run python scripts/test_single_engines.py --domain ML --allow-fallback` | 脚本应输出 LLM、query、抓取站点等过程日志 | 已确认输出 `LLM timeout`、query 明细、站点命中/无命中和抓取日志 | 通过 |
+| browser-crawler-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py tests/test_media_engine.py` | 接入 browser-first crawler 后既有测试仍通过 | 6 个测试通过 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -420,9 +440,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-16 的 Query / Media 增强已落地，单引擎脚本也具备真实联调和过程日志能力 |
-| 我要去哪里？ | 继续增强官方来源自动识别精度、ReAct 反思策略、crawlers 的真实抓取质量，以及 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方检索自动识别、社区趋势抓取和真实联调成功率 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-17 的 Query / Media 增强已落地，crawler 也已切到 browser-first |
+| 我要去哪里？ | 继续增强 query normalization、官方来源自动识别精度、ReAct 反思策略，以及 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量、官方检索自动识别和社区趋势抓取成功率 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 
