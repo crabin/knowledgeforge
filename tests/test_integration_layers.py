@@ -19,6 +19,14 @@ class FakeChatClient:
                 "official_domains": ["langchain-ai.github.io"],
                 "reasoning": "优先查询官方文档，再补充教程。",
             }
+        if self.calls == 2:
+            return {
+                "missing_aspects": [],
+                "supplementary_official_queries": [],
+                "supplementary_tutorial_queries": [],
+                "candidate_official_domains": ["langchain-ai.github.io"],
+                "reasoning": "首轮结果已足够，并确认官方候选域名。",
+            }
         return {
             "summary": "使用真实 LLM 客户端生成的检索摘要。",
             "key_points": ["权威来源优先", "保留来源元数据"],
@@ -106,6 +114,7 @@ def test_query_engine_uses_chat_and_embedding_clients() -> None:
     assert result.summary == "使用真实 LLM 客户端生成的检索摘要。"
     assert result.sources[0].title == "LangGraph Docs"
     assert any("Embedding 已生成" in item for item in result.raw_material)
+    assert any("候选官方域名：" in item for item in result.raw_material)
 
 
 def test_neo4j_path_mapper_uses_client_when_available() -> None:

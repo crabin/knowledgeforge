@@ -21,12 +21,14 @@ REFLECTION_SCHEMA = {
         "missing_aspects": {"type": "array", "items": {"type": "string"}},
         "supplementary_official_queries": {"type": "array", "items": {"type": "string"}},
         "supplementary_tutorial_queries": {"type": "array", "items": {"type": "string"}},
+        "candidate_official_domains": {"type": "array", "items": {"type": "string"}},
         "reasoning": {"type": "string"},
     },
     "required": [
         "missing_aspects",
         "supplementary_official_queries",
         "supplementary_tutorial_queries",
+        "candidate_official_domains",
         "reasoning",
     ],
 }
@@ -67,7 +69,8 @@ REFLECTION_SYSTEM_PROMPT = f"""
 强制规则：
 1. 优先检查是否缺官方文档、规范说明、核心主题覆盖。
 2. 如果官方资料已足够，但缺少落地示例或最佳实践，再补 tutorial 查询。
-3. 如果当前结果已经足够，也要返回空的 supplementary 查询数组。
+3. 尽量从首轮结果中提取候选官方域名，写入 candidate_official_domains。
+4. 如果当前结果已经足够，也要返回空的 supplementary 查询数组。
 4. 只返回 JSON。
 
 输出 JSON Schema：

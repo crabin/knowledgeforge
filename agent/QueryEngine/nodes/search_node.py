@@ -10,6 +10,7 @@ from agent.QueryEngine.utils.ranking import (
     PREFERRED_TECH_REFERENCE_DOMAINS,
     PREFERRED_TUTORIAL_DOMAINS,
     build_site_constrained_queries,
+    detect_candidate_official_domains,
 )
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -129,7 +130,7 @@ class QuerySearchNode(BaseQueryNode):
             hits = self._crawler.search(
                 query=query,
                 source_type="official",
-                official_domains=state.search_plan.official_domains if state.search_plan else [],
+                official_domains=state.candidate_official_domains or (state.search_plan.official_domains if state.search_plan else []),
                 preferred_domains=[],
                 max_results=4,
             )
@@ -148,6 +149,10 @@ class QuerySearchNode(BaseQueryNode):
             all_hits.extend(hits)
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
+        state.candidate_official_domains = self._merge_candidate_domains(
+            state,
+            detect_candidate_official_domains(state.request_context.domain, deduped_hits),
+        )
         state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
 
         if embedding_client is not None and state.crawled_documents:
@@ -177,3 +182,14 @@ class QuerySearchNode(BaseQueryNode):
             seen.add(query)
             deduped.append(query)
         return deduped
+
+    @staticmethod
+    def _merge_candidate_domains(state: QueryEngineState, domains: list[str]) -> list[str]:
+        merged = list(state.candidate_official_domains)
+        for domain in state.search_plan.official_domains if state.search_plan else []:
+            if domain not in merged:
+                merged.append(domain)
+        for domain in domains:
+            if domain not in merged:
+                merged.append(domain)
+        return merged

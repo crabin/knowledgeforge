@@ -21,6 +21,7 @@ class ReflectionPlan:
     missing_aspects: list[str]
     supplementary_official_queries: list[str]
     supplementary_tutorial_queries: list[str]
+    candidate_official_domains: list[str]
     reasoning: str
 
 
@@ -55,6 +56,7 @@ class QueryEngineState:
     round_number: int
     search_plan: SearchPlan | None = None
     reflection_plan: ReflectionPlan | None = None
+    candidate_official_domains: list[str] = field(default_factory=list)
     search_hits: list[SearchHit] = field(default_factory=list)
     crawled_documents: list[CrawledDocument] = field(default_factory=list)
     summary_payload: dict[str, Any] = field(default_factory=dict)

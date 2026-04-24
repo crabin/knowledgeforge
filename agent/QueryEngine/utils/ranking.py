@@ -54,3 +54,31 @@ def reliability_for_source_type(source_type: str) -> str:
 def build_site_constrained_queries(query: str, preferred_domains: list[str], max_domains: int = 3) -> list[str]:
     compact_query = " ".join(query.split())
     return [f"{compact_query} site:{domain}" for domain in preferred_domains[:max_domains]]
+
+
+def detect_candidate_official_domains(domain: str, hits: list[object], limit: int = 3) -> list[str]:
+    candidates: list[str] = []
+    domain_token = domain.lower().replace(" ", "").replace("-", "")
+    for hit in hits:
+        url = getattr(hit, "url", "")
+        title = getattr(hit, "title", "")
+        snippet = getattr(hit, "snippet", "")
+        if not url:
+            continue
+        netloc = urlparse(url).netloc.lower()
+        path = urlparse(url).path.lower()
+        combined = f"{title} {snippet} {url}".lower()
+        looks_official = (
+            any(hint in netloc for hint in OFFICIAL_HINTS)
+            or any(hint in path for hint in ("docs", "documentation", "reference", "manual"))
+            or "official" in combined
+            or domain_token in netloc.replace(".", "").replace("-", "")
+        )
+        looks_non_official = any(hint in netloc for hint in TUTORIAL_HINTS) or any(
+            hint in netloc for hint in ("reddit.com", "stackoverflow.com", "medium.com", "dev.to", "substack.com")
+        )
+        if looks_official and not looks_non_official and netloc not in candidates:
+            candidates.append(netloc)
+        if len(candidates) >= limit:
+            break
+    return candidates

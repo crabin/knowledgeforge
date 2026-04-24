@@ -63,6 +63,11 @@ class QueryReflectionNode(BaseQueryNode):
                     for item in payload.get("supplementary_tutorial_queries", [])
                     if str(item).strip()
                 ],
+                candidate_official_domains=[
+                    str(item).strip()
+                    for item in payload.get("candidate_official_domains", state.candidate_official_domains)
+                    if str(item).strip()
+                ],
                 reasoning=str(payload.get("reasoning", "")).strip() or "已完成首轮反思。",
             )
         except Exception:
@@ -91,5 +96,6 @@ class QueryReflectionNode(BaseQueryNode):
             missing_aspects=missing_aspects,
             supplementary_official_queries=supplementary_official_queries[:2],
             supplementary_tutorial_queries=supplementary_tutorial_queries[:2],
+            candidate_official_domains=state.candidate_official_domains[:3],
             reasoning="按官方覆盖度和教程补充情况完成首轮反思。",
         )

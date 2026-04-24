@@ -15,6 +15,7 @@ class QueryFormattingNode(BaseQueryNode):
         raw_material = [
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
+            f"候选官方域名：{', '.join(state.candidate_official_domains) if state.candidate_official_domains else '无'}",
             "官方文档优先：",
             *[
                 f"- {doc.title} | {doc.url}"

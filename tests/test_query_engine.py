@@ -23,6 +23,7 @@ class FakeChatClient:
                 "missing_aspects": ["缺少最佳实践案例"],
                 "supplementary_official_queries": [],
                 "supplementary_tutorial_queries": ["langgraph best practices tutorial"],
+                "candidate_official_domains": ["langchain-ai.github.io"],
                 "reasoning": "官方资料已有，但还需要补教程案例。",
             }
         return {
@@ -115,6 +116,8 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any("官方文档优先" in item for item in result.key_points)
     assert any("官方文档优先：" in item or item == "官方文档优先：" for item in result.raw_material)
     assert any("反思结论：" in item for item in result.raw_material)
+    assert any("候选官方域名：" in item for item in result.raw_material)
     assert any("检索轨迹：" in item for item in result.raw_material)
     assert any(query == "langgraph best practices tutorial" for _, query in crawler.queries)
     assert any("site:github.com" in query for _, query in crawler.queries if _ == "tutorial")
+    assert any("langchain-ai.github.io" in item for item in result.raw_material)
