@@ -82,6 +82,13 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "frozen version not found"}), 404
         return jsonify(frozen), 200
 
+    @app.get("/tasks/<task_id>/logs")
+    def get_task_logs(task_id: str):
+        logs = service.get_task_logs(task_id)
+        if logs is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(logs), 200
+
     @app.post("/tasks/<task_id>/report")
     def generate_report(task_id: str):
         report = service.generate_report(task_id)

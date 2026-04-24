@@ -77,4 +77,12 @@ class QueryEngine(BaseEngine):
             ],
             collected_at=timestamp,
             round_number=round_number,
+            execution_log=[
+                {
+                    "event": "query_engine_fallback_result",
+                    "timestamp": timestamp,
+                    "node": "QueryEngine",
+                    "details": {"reason": "unhandled_query_engine_error"},
+                }
+            ],
         )

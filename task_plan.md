@@ -26,6 +26,9 @@
 - QueryEngine 查询计划决策化
   - 已完成：QueryEngine 在联网查询前先生成结构化 `SearchQuestion` 决策表，逐项执行 Google 风格查询，记录每题预期信息、满足标准、fallback 查询、执行状态和检索轨迹。
   - 已完成：fallback query-plan 来源降级为 `unknown`，避免把“计划”误判为高可信证据。
+- QueryEngine 中间日志可见化
+  - 已完成：任务响应新增 `execution_log` 聚合字段，QueryEngine 写出计划、检索、反思、总结 fallback 等结构化事件。
+  - 已完成：新增 `/tasks/{task_id}/logs` 读取 audit jsonl，前端展示“QueryEngine 查询计划”和“调用与执行日志”。
 - 技术领域社区优先策略
   - 技术领域默认采用中外技术社区混合来源，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补 `V2EX / 掘金 / 知乎`。
 - crawler 质量增强

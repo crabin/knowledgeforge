@@ -17,6 +17,7 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
+from knowledgeforge.utils.time import now_iso
 
 
 class QuerySearchNode(BaseQueryNode):
@@ -89,6 +90,14 @@ class QuerySearchNode(BaseQueryNode):
                 system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
+            state.execution_log.append(
+                {
+                    "event": "query_plan_llm_completed",
+                    "timestamp": now_iso(),
+                    "node": "QuerySearchNode",
+                    "details": {"payload_keys": sorted(payload.keys())},
+                }
+            )
             questions = self._parse_questions(payload.get("questions", []))
             official_queries = [
                 str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
@@ -118,6 +127,14 @@ class QuerySearchNode(BaseQueryNode):
                 questions=questions,
             )
         except Exception:
+            state.execution_log.append(
+                {
+                    "event": "query_plan_fallback_used",
+                    "timestamp": now_iso(),
+                    "node": "QuerySearchNode",
+                    "details": {"reason": "llm_plan_failed"},
+                }
+            )
             return self._fallback_plan(state)
 
     def _fallback_plan(self, state: QueryEngineState) -> SearchPlan:
@@ -196,6 +213,28 @@ class QuerySearchNode(BaseQueryNode):
             official_queries=official_queries,
             tutorial_queries=tutorial_queries,
         )
+        state.execution_log.append(
+            {
+                "event": "query_plan_created",
+                "timestamp": now_iso(),
+                "node": "QuerySearchNode",
+                "details": {
+                    "question_count": len(plan_questions),
+                    "questions": [
+                        {
+                            "question": question.question,
+                            "google_query": question.google_query,
+                            "expected_info": question.expected_info,
+                            "source_priority": question.source_priority,
+                            "success_criteria": question.success_criteria,
+                            "fallback_queries": question.fallback_queries,
+                            "status": question.status,
+                        }
+                        for question in plan_questions
+                    ],
+                },
+            }
+        )
         for question in plan_questions:
             question.status = "searched"
             source_type = self._question_source_type(question)
@@ -221,9 +260,36 @@ class QuerySearchNode(BaseQueryNode):
                         "status": "satisfied" if self._question_satisfied(hits) else "insufficient",
                     }
                 )
+                state.execution_log.append(
+                    {
+                        "event": "query_search_executed",
+                        "timestamp": now_iso(),
+                        "node": "QuerySearchNode",
+                        "details": {
+                            "question": question.question,
+                            "query": query,
+                            "expected_info": question.expected_info,
+                            "source_type": source_type,
+                            "hits": len(hits),
+                            "status": "satisfied" if self._question_satisfied(hits) else "insufficient",
+                        },
+                    }
+                )
                 question_hits.extend(hits)
                 all_hits.extend(hits)
             question.status = "satisfied" if self._question_satisfied(question_hits) else "insufficient"
+            state.execution_log.append(
+                {
+                    "event": "query_question_completed",
+                    "timestamp": now_iso(),
+                    "node": "QuerySearchNode",
+                    "details": {
+                        "question": question.question,
+                        "status": question.status,
+                        "total_hits": len(question_hits),
+                    },
+                }
+            )
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
         state.candidate_official_domains = self._merge_candidate_domains(
@@ -231,6 +297,17 @@ class QuerySearchNode(BaseQueryNode):
             detect_candidate_official_domains(state.request_context.domain, deduped_hits),
         )
         state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
+        state.execution_log.append(
+            {
+                "event": "query_documents_fetched",
+                "timestamp": now_iso(),
+                "node": "QuerySearchNode",
+                "details": {
+                    "hit_count": len(deduped_hits),
+                    "document_count": len(state.crawled_documents),
+                },
+            }
+        )
         wiki_doc = (
             self._crawler.fetch_wikipedia_supplement(state.normalized_domain or state.request_context.domain)
             if hasattr(self._crawler, "fetch_wikipedia_supplement") and hasattr(self._crawler, "_wiki")
@@ -246,8 +323,26 @@ class QuerySearchNode(BaseQueryNode):
                 )
                 for doc, vector in zip(state.crawled_documents, vectors):
                     doc.embedding_dimensions = len(vector)
+                state.execution_log.append(
+                    {
+                        "event": "query_embeddings_completed",
+                        "timestamp": now_iso(),
+                        "node": "QuerySearchNode",
+                        "details": {
+                            "document_count": len(state.crawled_documents),
+                            "dimensions": state.crawled_documents[0].embedding_dimensions,
+                        },
+                    }
+                )
             except Exception:
-                pass
+                state.execution_log.append(
+                    {
+                        "event": "query_embeddings_failed",
+                        "timestamp": now_iso(),
+                        "node": "QuerySearchNode",
+                        "details": {"document_count": len(state.crawled_documents)},
+                    }
+                )
 
     @staticmethod
     def _parse_questions(items: object) -> list[SearchQuestion]:

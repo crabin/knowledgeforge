@@ -127,6 +127,7 @@
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
               <button type="button" data-task-action="report">生成研报</button>
+              <button type="button" data-task-action="logs">查看日志</button>
             </div>
           </form>
         </div>
@@ -139,6 +140,20 @@
         </div>
         <div class="summary-strip" id="summary-strip">
           <div class="empty-state">执行操作后会显示 task_id、状态、文档路径、质量检查与版本信息。</div>
+        </div>
+        <div class="trace-grid" aria-label="查询计划与执行日志">
+          <section class="trace-panel">
+            <h3>QueryEngine 查询计划</h3>
+            <div id="query-plan-output" class="trace-list">
+              <div class="empty-state">任务完成后会显示查询计划。</div>
+            </div>
+          </section>
+          <section class="trace-panel">
+            <h3>调用与执行日志</h3>
+            <div id="execution-log-output" class="trace-list">
+              <div class="empty-state">任务完成或查看日志后会显示执行事件。</div>
+            </div>
+          </section>
         </div>
         <pre id="response-output" aria-live="polite">{}</pre>
       </section>

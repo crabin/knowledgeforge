@@ -95,6 +95,7 @@ class QueryFormattingNode(BaseQueryNode):
             sources=sources,
             collected_at=state.collected_at,
             round_number=state.round_number,
+            execution_log=state.execution_log,
         )
 
     @staticmethod

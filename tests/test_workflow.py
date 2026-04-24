@@ -240,6 +240,33 @@ def test_post_storage_result_contains_graph_and_extraction(tmp_path: Path) -> No
     assert governance["failure_category"] is None
 
 
+def test_task_response_and_logs_include_query_execution_trace(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+
+    response = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    query_output = payload["agent_outputs"]["QueryEngine"]
+    assert any(item == "查询计划：" for item in query_output["raw_material"])
+    assert payload["execution_log"]
+    assert any(entry["event"] == "query_plan_created" for entry in payload["execution_log"])
+    assert any(entry["event"] == "query_search_executed" for entry in payload["execution_log"])
+
+    logs = client.get(f"/tasks/{payload['task_id']}/logs")
+    assert logs.status_code == 200
+    events = [entry["event"] for entry in logs.get_json()["logs"]]
+    assert "query_plan_created" in events
+    assert "query_search_executed" in events
+
+
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

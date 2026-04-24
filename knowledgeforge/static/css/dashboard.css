@@ -186,6 +186,56 @@ h3 {
   gap: 10px;
 }
 
+.trace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.trace-panel {
+  min-height: 220px;
+  padding: 14px;
+  border: 1px solid rgba(23, 33, 31, 0.14);
+  border-radius: 8px;
+  background: #fbf8ee;
+}
+
+.trace-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.trace-item {
+  padding: 10px;
+  border: 1px solid rgba(23, 33, 31, 0.1);
+  border-radius: 6px;
+  background: #fffdf8;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.trace-item strong,
+.trace-item span,
+.trace-item code {
+  display: block;
+}
+
+.trace-item span {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.trace-item code {
+  margin-top: 8px;
+  color: var(--blue);
+  white-space: pre-wrap;
+}
+
 .config-item,
 .summary-item {
   min-height: 76px;
@@ -344,7 +394,8 @@ button:disabled {
 
   .flow-grid,
   .config-grid,
-  .summary-strip {
+  .summary-strip,
+  .trace-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -364,6 +415,7 @@ button:disabled {
   .flow-grid,
   .config-grid,
   .summary-strip,
+  .trace-grid,
   .button-row,
   .button-grid {
     grid-template-columns: 1fr;

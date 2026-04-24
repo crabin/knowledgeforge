@@ -109,6 +109,7 @@ class EngineRunResult:
     sources: list[SourceRecord]
     collected_at: str
     round_number: int
+    execution_log: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

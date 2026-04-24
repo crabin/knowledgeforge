@@ -697,10 +697,48 @@
   - QueryEngine 已具备“先决策、后检索”的可审计计划阶段
   - 只有 query-plan 而无真实网页证据时不会再输出高可信来源
 
+### 阶段 28：QueryEngine 中间日志输出与前端可见化
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 为 `EngineRunResult` 增加可选 `execution_log`
+  - QueryEngine 在计划生成、逐项检索、问题完成、文档抓取、Embedding、反思和总结 fallback 时写入结构化事件
+  - `TaskService` 聚合各 Engine 的 execution log 到任务响应顶层，并同步写入 audit jsonl
+  - `AuditLogger` 增加读取能力，新增 `/tasks/<task_id>/logs`
+  - 前端结果区新增“QueryEngine 查询计划”和“调用与执行日志”面板，并在任务操作中增加“查看日志”
+  - 验证 5000 当前被 macOS AirTunes 占用，使用 5001 启动 Flask smoke
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/audit.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_query_engine.py tests/test_workflow.py tests/test_dashboard.py`：24 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：79 个测试通过
+  - `curl http://127.0.0.1:5001/`：页面包含 QueryEngine 查询计划、调用与执行日志、查看日志
+  - `curl http://127.0.0.1:5001/tasks/<task_id>/logs`：返回 `query_plan_created` 与 `query_search_executed`
+- 当前保守结论：
+  - 任务响应、前端和 audit jsonl 现在都能看到 QueryEngine 查询计划与中间执行事件
+  - 浏览器中的 5000 不是当前 Flask 服务；本轮可用地址是 `http://127.0.0.1:5001/`
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 27 已完成；QueryEngine 已新增结构化查询计划、逐项执行状态和不足项补检索 |
+| 我在哪里？ | 阶段 28 已完成；QueryEngine 查询计划与中间执行事件已进入任务响应、audit log 和前端面板 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

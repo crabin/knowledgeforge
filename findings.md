@@ -113,6 +113,12 @@
 - fallback reflection 只针对 `status=insufficient` 的问题生成补检索，避免泛化重复搜索；LLM reflection 也拿到完整问题清单和检索轨迹。
 - query-plan fallback 来源现在统一标记为 `publisher=query-plan`、`reliability=unknown`、`source_type=query_plan`，避免“只有计划没有网页证据”时误通过来源质量门禁。
 
+## QueryEngine 日志可见化结论
+- 仅把计划写进 `raw_material` 不够，前端需要结构化字段才能稳定展示；因此 `EngineRunResult.execution_log` 作为各 Engine 的可选执行事件输出，当前先由 QueryEngine 填充。
+- `TaskService` 会把各 Engine 的 `execution_log` 聚合到任务响应顶层，并同步写入 audit jsonl；这样 UI、API 和磁盘日志看到的是同一组事件。
+- 新增 `/tasks/{task_id}/logs` 用于读取 audit 日志，适合前端“查看日志”按钮和后续排障。
+- 端口 5000 在当前机器被 macOS AirTunes 占用并返回 403；本轮验证使用 `http://127.0.0.1:5001/`。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

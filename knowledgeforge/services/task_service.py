@@ -206,11 +206,19 @@ class TaskService:
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         if task_id in self._tasks:
-            return self._serialize_state(self._tasks[task_id])
+            return self._attach_execution_log(self._serialize_state(self._tasks[task_id]))
         return self._state_store.load(task_id)
 
     def get_frozen_version(self, task_id: str) -> dict[str, Any] | None:
         return self._frozen_store.load(task_id)
+
+    def get_task_logs(self, task_id: str) -> dict[str, Any] | None:
+        if self.get_task(task_id) is None:
+            return None
+        return {
+            "task_id": task_id,
+            "logs": self._audit_logger.read(task_id),
+        }
 
     def generate_report(self, task_id: str) -> dict[str, Any] | None:
         frozen_payload = self._frozen_store.load(task_id)
@@ -271,8 +279,10 @@ class TaskService:
         task_id = state["task_id"]
         self._tasks[task_id] = state
         payload = self._serialize_state(state)
-        self._state_store.save(task_id, payload)
         self._freeze_version_if_eligible(task_id, payload)
+        self._attach_execution_log(payload)
+        self._state_store.save(task_id, payload)
+        self._log_agent_execution(task_id, payload)
         self._audit_logger.log(
             task_id,
             audit_event,
@@ -282,6 +292,31 @@ class TaskService:
             },
         )
         return payload
+
+    def _attach_execution_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        execution_log = payload.setdefault("execution_log", [])
+        agent_outputs = payload.get("agent_outputs", {})
+        for agent_name, output in agent_outputs.items():
+            for entry in output.get("execution_log", []):
+                record = {
+                    "agent": agent_name,
+                    "event": str(entry.get("event", "agent_execution_event")),
+                    "timestamp": entry.get("timestamp"),
+                    "node": entry.get("node"),
+                    "details": entry.get("details", {}),
+                }
+                if record not in execution_log:
+                    execution_log.append(record)
+        return payload
+
+    def _log_agent_execution(self, task_id: str, payload: dict[str, Any]) -> None:
+        for entry in payload.get("execution_log", []):
+            event = str(entry.get("event", "agent_execution_event"))
+            details = dict(entry.get("details", {}))
+            details["agent"] = entry.get("agent")
+            details["node"] = entry.get("node")
+            details["event_timestamp"] = entry.get("timestamp")
+            self._audit_logger.log(task_id, event, details)
 
     def _freeze_version_if_eligible(self, task_id: str, payload: dict[str, Any]) -> None:
         post_storage = payload.get("post_storage_result") or {}

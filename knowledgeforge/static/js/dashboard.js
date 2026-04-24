@@ -9,6 +9,8 @@ const healthDot = document.querySelector("#health-dot");
 const healthLabel = document.querySelector("#health-label");
 const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
+const queryPlanOutput = document.querySelector("#query-plan-output");
+const executionLogOutput = document.querySelector("#execution-log-output");
 
 async function requestJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -50,6 +52,8 @@ function showPayload(payload) {
   output.textContent = JSON.stringify(payload, null, 2);
   syncKnownIds(payload);
   renderSummary(payload);
+  renderQueryPlan(payload);
+  renderExecutionLog(payload);
 }
 
 function showError(error) {
@@ -60,6 +64,8 @@ function showError(error) {
   };
   output.textContent = JSON.stringify(payload, null, 2);
   renderSummary(payload);
+  renderQueryPlan(payload);
+  renderExecutionLog(payload);
 }
 
 function syncKnownIds(payload) {
@@ -121,6 +127,43 @@ function renderConfig(payload) {
       const rendered = typeof value === "boolean" ? (value ? "已配置" : "未配置") : String(value);
       const tone = value === true ? "tone-ok" : value === false ? "tone-bad" : "";
       return `<div class="config-item"><strong>${escapeHtml(label)}</strong><span class="${tone}">${escapeHtml(rendered)}</span></div>`;
+    })
+    .join("");
+}
+
+function renderQueryPlan(payload) {
+  const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
+  const rawMaterial = queryOutput?.raw_material || [];
+  const planStart = rawMaterial.indexOf("查询计划：");
+  const planItems = planStart >= 0
+    ? rawMaterial.slice(planStart + 1).filter((item) => String(item).startsWith("- Q") || String(item).startsWith("  "))
+    : [];
+
+  if (!planItems.length) {
+    queryPlanOutput.innerHTML = '<div class="empty-state">暂无结构化查询计划。</div>';
+    return;
+  }
+
+  queryPlanOutput.innerHTML = planItems
+    .map((item) => `<div class="trace-item">${escapeHtml(item)}</div>`)
+    .join("");
+}
+
+function renderExecutionLog(payload) {
+  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  if (!logs.length) {
+    executionLogOutput.innerHTML = '<div class="empty-state">暂无调用或执行日志。</div>';
+    return;
+  }
+
+  executionLogOutput.innerHTML = logs
+    .slice(-24)
+    .map((entry) => {
+      const event = entry.event || "event";
+      const timestamp = entry.timestamp || "";
+      const agent = entry.agent || entry.details?.agent || "";
+      const details = entry.details ? JSON.stringify(entry.details) : "";
+      return `<div class="trace-item"><strong>${escapeHtml(event)}</strong><span>${escapeHtml([timestamp, agent].filter(Boolean).join(" · "))}</span><code>${escapeHtml(details)}</code></div>`;
     })
     .join("");
 }
@@ -231,6 +274,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
+      logs: [`/tasks/${encodeURIComponent(taskId)}/logs`, "GET"],
     }[action];
 
     setBusy(button, true);

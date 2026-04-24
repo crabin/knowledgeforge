@@ -6,6 +6,7 @@ from agent.QueryEngine.nodes.base_node import BaseQueryNode
 from agent.QueryEngine.prompts.prompts import REFLECTION_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState, ReflectionPlan
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.utils.time import now_iso
 
 
 class QueryReflectionNode(BaseQueryNode):
@@ -21,6 +22,19 @@ class QueryReflectionNode(BaseQueryNode):
                 state.candidate_official_domains.append(domain)
         if reflection.missing_aspects:
             state.observation_notes.extend(reflection.missing_aspects)
+        state.execution_log.append(
+            {
+                "event": "query_reflection_completed",
+                "timestamp": now_iso(),
+                "node": "QueryReflectionNode",
+                "details": {
+                    "missing_aspects": reflection.missing_aspects,
+                    "supplementary_official_queries": reflection.supplementary_official_queries,
+                    "supplementary_tutorial_queries": reflection.supplementary_tutorial_queries,
+                    "reasoning": reflection.reasoning,
+                },
+            }
+        )
         return state
 
     def _build_reflection(self, state: QueryEngineState) -> ReflectionPlan:

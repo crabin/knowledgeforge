@@ -6,6 +6,7 @@ from agent.QueryEngine.nodes.base_node import BaseQueryNode
 from agent.QueryEngine.prompts.prompts import SUMMARY_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.utils.time import now_iso
 
 
 class QuerySummaryNode(BaseQueryNode):
@@ -49,8 +50,24 @@ class QuerySummaryNode(BaseQueryNode):
                 system_prompt=SUMMARY_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
+            state.execution_log.append(
+                {
+                    "event": "query_summary_llm_completed",
+                    "timestamp": now_iso(),
+                    "node": "QuerySummaryNode",
+                    "details": {"payload_keys": sorted(state.summary_payload.keys())},
+                }
+            )
         except Exception:
             state.summary_payload = self._fallback_summary(state)
+            state.execution_log.append(
+                {
+                    "event": "query_summary_fallback_used",
+                    "timestamp": now_iso(),
+                    "node": "QuerySummaryNode",
+                    "details": {"reason": "llm_summary_failed"},
+                }
+            )
         return state
 
     @staticmethod
