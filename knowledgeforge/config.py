@@ -80,11 +80,13 @@ class AppConfig:
     )
     save_root: Path = Path("save")
     task_state_root: Path = Path(".knowledgeforge/tasks")
+    intake_session_root: Path = Path(".knowledgeforge/intake_sessions")
     audit_root: Path = Path(".knowledgeforge/audit")
     frozen_root: Path = Path(".knowledgeforge/frozen")
     max_rounds: int = 3
     log_level: str = "INFO"
     strict_graph_sync: bool = False
+    enable_live_crawlers: bool = False
 
     @classmethod
     def from_env(cls, env_file: str | Path = ".env") -> AppConfig:
@@ -116,6 +118,7 @@ class AppConfig:
                 mysql_database_url=_get_required("MYSQL_DATABASE_URL"),
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
         )
 
     def show_config_status(self) -> dict[str, bool | str]:
@@ -145,3 +148,10 @@ def _get_int(name: str, default: int) -> int:
     if value is None or value.strip() == "":
         return default
     return int(value)
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
