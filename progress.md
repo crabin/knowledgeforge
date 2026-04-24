@@ -276,6 +276,40 @@
   - /Users/lpb/workspace/myProjects/KnowledgeForge/CLAUDE.md
   - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
 
+### 阶段 12：QueryEngine / MediaEngine ReAct 闭环升级
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 为 `QueryEngine` 新增 `reflection_node`，将内部流程升级为“首次检索 -> 反思 -> 补检索 -> 总结”
+  - 为 `MediaEngine` 新增 `reflection_node`，将内部流程升级为“首次观点检索 -> 反思 -> 补检索 -> 趋势总结”
+  - 在两个 Engine 的 state 中补充 `search_history`、`observation_notes`、`reflection_notes`、`iteration_count`
+  - 在 prompt 中补充反思阶段的 structured output 约束
+  - 在 formatting 输出中加入 `反思结论`、`缺口` 和 `检索轨迹`
+  - 更新专项测试，验证反思后会触发补检索查询
+  - 重新验证单引擎脚本，确认 Query / Insight / Media 的独立运行路径仍可用
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - 两个 Engine 已具备最小 ReAct 闭环，但当前补检索轮次固定为 1
+  - 反思节点已经能输出缺口和补检索 query，但策略仍偏规则化，后续可以继续增强
+  - `tests/test_workflow.py` 本轮仍未重新做全量最终确认
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -291,6 +325,8 @@
 | single-engine-script | `uv run python scripts/test_single_engines.py --engine all --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 官方文档` | 三引擎单独测试脚本可运行 | 可运行 | 通过 |
 | media-engine-pytest | `uv run pytest tests/test_media_engine.py tests/test_query_engine.py tests/test_integration_layers.py` | MediaEngine 节点化重构后专项测试与既有 Query/集成层验证通过 | 6 个测试通过 | 通过 |
 | media-single-engine-script | `uv run python scripts/test_single_engines.py --engine media --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 社区观点` | MediaEngine 单独脚本可运行 | 可运行 | 通过 |
+| react-engine-pytest | `uv run pytest tests/test_media_engine.py tests/test_query_engine.py tests/test_integration_layers.py` | QueryEngine / MediaEngine ReAct 闭环升级后仍通过专项测试与集成层验证 | 6 个测试通过 | 通过 |
+| react-single-engine-script | `uv run python scripts/test_single_engines.py --engine all --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 官方文档 --focus-point 社区观点` | 三引擎脚本在 ReAct 升级后仍可运行 | 可运行 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -300,9 +336,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9 和阶段 10 的 QueryEngine / MediaEngine 节点化重构已落地，但都按保守口径保留后续验证项 |
-| 我要去哪里？ | 进入 QueryEngine / MediaEngine crawler 质量增强与 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方文档优先检索、社区趋势抓取质量，以及测试稳定性 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9/10 的节点化重构和阶段 12 的 ReAct 闭环升级已落地，但仍保留后续增强项 |
+| 我要去哪里？ | 继续增强 ReAct 反思策略、crawlers 的真实抓取质量，以及 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方检索、社区趋势抓取和 ReAct 补检索质量 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

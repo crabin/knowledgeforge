@@ -22,8 +22,29 @@ MEDIA_SEARCH_PLAN_SYSTEM_PROMPT = """
 """
 
 
+MEDIA_REFLECTION_SYSTEM_PROMPT = """
+请根据首轮社交媒体、技术社区、博客材料，判断当前趋势观察还缺什么。
+
+要求：
+1. 重点检查是否缺：主流看法、争议点、采用信号、未来走向。
+2. 如果技术社区讨论不足，优先补 community 查询。
+3. 如果案例和趋势长文不足，补 blog 查询。
+4. 如果热度和即时讨论不足，补 social 查询。
+5. 如果当前已足够，也要返回空数组。
+
+输出 JSON：
+{
+  "missing_aspects": ["..."],
+  "supplementary_social_queries": ["..."],
+  "supplementary_community_queries": ["..."],
+  "supplementary_blog_queries": ["..."],
+  "reasoning": "..."
+}
+"""
+
+
 MEDIA_SUMMARY_SYSTEM_PROMPT = """
-请基于抓取到的社交媒体、技术社区、博客材料，输出“当前观点与未来走向”的结构化总结。
+请基于抓取到的社交媒体、技术社区、博客材料以及反思结果，输出“当前观点与未来走向”的结构化总结。
 
 要求：
 1. summary 必须概括当前主流看法，而不是复述事实文档。

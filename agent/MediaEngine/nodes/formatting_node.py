@@ -15,6 +15,7 @@ class MediaFormattingNode(BaseMediaNode):
 
         raw_material = [
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
+            f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             "社交媒体：",
             *[f"- {doc.title} | {doc.url}" for doc in social_docs[:3]],
             "技术社区：",
@@ -22,6 +23,8 @@ class MediaFormattingNode(BaseMediaNode):
             "博客/长文：",
             *[f"- {doc.title} | {doc.url}" for doc in blog_docs[:3]],
         ]
+        if state.reflection_plan and state.reflection_plan.missing_aspects:
+            raw_material.extend([f"- 缺口：{item}" for item in state.reflection_plan.missing_aspects])
         sources = [
             SourceRecord(
                 title=doc.title,
@@ -54,6 +57,8 @@ class MediaFormattingNode(BaseMediaNode):
                     ],
                 ]
             )
+        if state.search_history:
+            raw_material.append(f"检索轨迹：{len(state.search_history)} 次查询，补检索轮次 {state.iteration_count}。")
 
         key_points: list[str] = []
         if payload.get("current_sentiment"):

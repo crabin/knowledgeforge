@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent.MediaEngine.nodes.formatting_node import MediaFormattingNode
+from agent.MediaEngine.nodes.reflection_node import MediaReflectionNode
 from agent.MediaEngine.nodes.search_node import MediaSearchNode
 from agent.MediaEngine.nodes.summary_node import MediaSummaryNode
 from agent.MediaEngine.state.state import MediaEngineState
@@ -22,6 +23,7 @@ class MediaEngine(BaseEngine):
         self._chat_client = chat_client
         self._crawler = crawler or MediaPerspectiveCrawler()
         self._search_node = MediaSearchNode(chat_client=self._chat_client, crawler=self._crawler)
+        self._reflection_node = MediaReflectionNode(chat_client=self._chat_client)
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)
         self._formatting_node = MediaFormattingNode()
 
@@ -29,6 +31,19 @@ class MediaEngine(BaseEngine):
         state = MediaEngineState.from_context(context=context, round_number=round_number)
         try:
             state = self._search_node.run(state)
+            state = self._reflection_node.run(state)
+            if state.reflection_plan and (
+                state.reflection_plan.supplementary_social_queries
+                or state.reflection_plan.supplementary_community_queries
+                or state.reflection_plan.supplementary_blog_queries
+            ):
+                state = self._search_node.supplement(
+                    state,
+                    social_queries=state.reflection_plan.supplementary_social_queries,
+                    community_queries=state.reflection_plan.supplementary_community_queries,
+                    blog_queries=state.reflection_plan.supplementary_blog_queries,
+                    is_technical=state.search_plan.is_technical if state.search_plan else False,
+                )
             state = self._summary_node.run(state)
             return self._formatting_node.run(state)
         except Exception:

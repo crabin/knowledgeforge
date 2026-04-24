@@ -15,6 +15,23 @@ SEARCH_PLAN_SCHEMA = {
 }
 
 
+REFLECTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "missing_aspects": {"type": "array", "items": {"type": "string"}},
+        "supplementary_official_queries": {"type": "array", "items": {"type": "string"}},
+        "supplementary_tutorial_queries": {"type": "array", "items": {"type": "string"}},
+        "reasoning": {"type": "string"},
+    },
+    "required": [
+        "missing_aspects",
+        "supplementary_official_queries",
+        "supplementary_tutorial_queries",
+        "reasoning",
+    ],
+}
+
+
 SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -43,9 +60,24 @@ SEARCH_PLAN_SYSTEM_PROMPT = f"""
 """
 
 
+REFLECTION_SYSTEM_PROMPT = f"""
+你是 KnowledgeForge 的 QueryEngine 反思器。
+请根据首轮检索结果判断：当前结果还缺什么，是否需要继续补检索。
+
+强制规则：
+1. 优先检查是否缺官方文档、规范说明、核心主题覆盖。
+2. 如果官方资料已足够，但缺少落地示例或最佳实践，再补 tutorial 查询。
+3. 如果当前结果已经足够，也要返回空的 supplementary 查询数组。
+4. 只返回 JSON。
+
+输出 JSON Schema：
+{json.dumps(REFLECTION_SCHEMA, ensure_ascii=False, indent=2)}
+"""
+
+
 SUMMARY_SYSTEM_PROMPT = f"""
 你是 KnowledgeForge 的 QueryEngine 总结器。
-请基于抓取到的网页材料，输出“官方文档优先、教程补充”的结构化总结。
+请基于抓取到的网页材料和反思结果，输出“官方文档优先、教程补充”的结构化总结。
 
 要求：
 1. summary 用中文，先写结论，再写范围。

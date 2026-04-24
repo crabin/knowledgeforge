@@ -30,39 +30,29 @@ class QuerySearchNode(BaseQueryNode):
     ) -> QueryEngineState:
         plan = self._build_plan(state)
         state.search_plan = plan
+        self._append_search_results(
+            state,
+            official_queries=plan.official_queries,
+            tutorial_queries=plan.tutorial_queries,
+            embedding_client=embedding_client,
+        )
+        return state
 
-        all_hits = []
-        for query in plan.official_queries:
-            all_hits.extend(
-                self._crawler.search(
-                    query=query,
-                    source_type="official",
-                    official_domains=plan.official_domains,
-                    max_results=4,
-                )
-            )
-        for query in plan.tutorial_queries:
-            all_hits.extend(
-                self._crawler.search(
-                    query=query,
-                    source_type="tutorial",
-                    official_domains=plan.official_domains,
-                    max_results=3,
-                )
-            )
-        deduped_hits = self._dedupe_hits(all_hits)
-        state.search_hits = deduped_hits
-        state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=6)
-
-        if embedding_client is not None and state.crawled_documents:
-            try:
-                vectors = embedding_client.embed_texts(
-                    [doc.content[:800] or doc.snippet or doc.title for doc in state.crawled_documents]
-                )
-                for doc, vector in zip(state.crawled_documents, vectors):
-                    doc.embedding_dimensions = len(vector)
-            except Exception:
-                pass
+    def supplement(
+        self,
+        state: QueryEngineState,
+        *,
+        official_queries: list[str],
+        tutorial_queries: list[str],
+        embedding_client: OpenAICompatibleEmbeddingClient | None = None,
+    ) -> QueryEngineState:
+        self._append_search_results(
+            state,
+            official_queries=official_queries,
+            tutorial_queries=tutorial_queries,
+            embedding_client=embedding_client,
+        )
+        state.iteration_count += 1
         return state
 
     def _build_plan(self, state: QueryEngineState) -> SearchPlan:
@@ -120,3 +110,44 @@ class QuerySearchNode(BaseQueryNode):
             seen.add(hit.url)
             deduped.append(hit)
         return deduped
+
+    def _append_search_results(
+        self,
+        state: QueryEngineState,
+        *,
+        official_queries: list[str],
+        tutorial_queries: list[str],
+        embedding_client: OpenAICompatibleEmbeddingClient | None,
+    ) -> None:
+        all_hits = list(state.search_hits)
+        for query in official_queries:
+            hits = self._crawler.search(
+                query=query,
+                source_type="official",
+                official_domains=state.search_plan.official_domains if state.search_plan else [],
+                max_results=4,
+            )
+            state.search_history.append({"query": query, "source_type": "official", "hits": len(hits)})
+            all_hits.extend(hits)
+        for query in tutorial_queries:
+            hits = self._crawler.search(
+                query=query,
+                source_type="tutorial",
+                official_domains=state.search_plan.official_domains if state.search_plan else [],
+                max_results=3,
+            )
+            state.search_history.append({"query": query, "source_type": "tutorial", "hits": len(hits)})
+            all_hits.extend(hits)
+        deduped_hits = self._dedupe_hits(all_hits)
+        state.search_hits = deduped_hits
+        state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
+
+        if embedding_client is not None and state.crawled_documents:
+            try:
+                vectors = embedding_client.embed_texts(
+                    [doc.content[:800] or doc.snippet or doc.title for doc in state.crawled_documents]
+                )
+                for doc, vector in zip(state.crawled_documents, vectors):
+                    doc.embedding_dimensions = len(vector)
+            except Exception:
+                pass

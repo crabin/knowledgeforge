@@ -14,6 +14,7 @@ class QueryFormattingNode(BaseQueryNode):
 
         raw_material = [
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
+            f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             "官方文档优先：",
             *[
                 f"- {doc.title} | {doc.url}"
@@ -29,6 +30,8 @@ class QueryFormattingNode(BaseQueryNode):
             raw_material.append(
                 f"Embedding 已生成：{len(state.crawled_documents)} 个文档向量，维度示例 {state.crawled_documents[0].embedding_dimensions}。"
             )
+        if state.reflection_plan and state.reflection_plan.missing_aspects:
+            raw_material.extend([f"- 缺口：{item}" for item in state.reflection_plan.missing_aspects])
         sources = [
             SourceRecord(
                 title=doc.title,
@@ -49,6 +52,12 @@ class QueryFormattingNode(BaseQueryNode):
                     "未抓到实时网页内容，已保留官方优先的查询规划作为最小可追溯输出。",
                     *[f"- 官方查询：{query}" for query in (state.search_plan.official_queries if state.search_plan else [])],
                     *[f"- 教程查询：{query}" for query in (state.search_plan.tutorial_queries if state.search_plan else [])],
+                ]
+            )
+        if state.search_history:
+            raw_material.extend(
+                [
+                    f"检索轨迹：{len(state.search_history)} 次查询，补检索轮次 {state.iteration_count}。",
                 ]
             )
 

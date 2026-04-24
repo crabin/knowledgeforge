@@ -17,6 +17,14 @@ class SearchPlan:
 
 
 @dataclass(slots=True)
+class ReflectionPlan:
+    missing_aspects: list[str]
+    supplementary_official_queries: list[str]
+    supplementary_tutorial_queries: list[str]
+    reasoning: str
+
+
+@dataclass(slots=True)
 class SearchHit:
     title: str
     url: str
@@ -46,9 +54,14 @@ class QueryEngineState:
     request_context: RequestContext
     round_number: int
     search_plan: SearchPlan | None = None
+    reflection_plan: ReflectionPlan | None = None
     search_hits: list[SearchHit] = field(default_factory=list)
     crawled_documents: list[CrawledDocument] = field(default_factory=list)
     summary_payload: dict[str, Any] = field(default_factory=dict)
+    search_history: list[dict[str, Any]] = field(default_factory=list)
+    observation_notes: list[str] = field(default_factory=list)
+    reflection_notes: list[str] = field(default_factory=list)
+    iteration_count: int = 0
     collected_at: str = field(default_factory=now_iso)
 
     @classmethod

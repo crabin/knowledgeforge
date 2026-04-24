@@ -29,6 +29,14 @@ class FakeMediaChatClient:
                 "reasoning": "优先抓取技术社区和博客，再用社交媒体补充观点热度。",
                 "is_technical": True,
             }
+        if self.calls == 2:
+            return {
+                "missing_aspects": ["缺少博客中的采用信号"],
+                "supplementary_social_queries": [],
+                "supplementary_community_queries": [],
+                "supplementary_blog_queries": ["LangGraph production engineering blog adoption"],
+                "reasoning": "首轮观点足够，但还缺更明确的工程采用信号。",
+            }
         return {
             "summary": "LangGraph 当前在技术社区中的主流看法偏积极，但讨论重点已经转向复杂工作流的可维护性与落地边界。",
             "current_sentiment": "整体偏积极，但对复杂度控制保持谨慎。",
@@ -41,7 +49,11 @@ class FakeMediaChatClient:
 
 
 class FakeMediaCrawler:
+    def __init__(self) -> None:
+        self.queries: list[tuple[str, str]] = []
+
     def search(self, *, query: str, platform_type: str, is_technical: bool, max_results: int = 5):
+        self.queries.append((platform_type, query))
         title_map = {
             "social": ("LangGraph on X", "https://x.com/example/status/1"),
             "community": ("LangGraph HN Thread", "https://news.ycombinator.com/item?id=1"),
@@ -82,9 +94,10 @@ class EmptyMediaCrawler:
 
 
 def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> None:
+    crawler = FakeMediaCrawler()
     engine = MediaEngine(
         chat_client=FakeMediaChatClient(),
-        crawler=FakeMediaCrawler(),
+        crawler=crawler,
     )
     context = RequestContext(
         domain="LangGraph",
@@ -103,6 +116,9 @@ def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> N
     assert any(item == "社交媒体：" for item in result.raw_material)
     assert any(item == "技术社区：" for item in result.raw_material)
     assert any(item == "博客/长文：" for item in result.raw_material)
+    assert any("反思结论：" in item for item in result.raw_material)
+    assert any("检索轨迹：" in item for item in result.raw_material)
+    assert any(query == "LangGraph production engineering blog adoption" for _, query in crawler.queries)
 
 
 def test_media_engine_fallback_keeps_traceable_sources() -> None:

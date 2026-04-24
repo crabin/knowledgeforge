@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
+from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
 from agent.QueryEngine.nodes.search_node import QuerySearchNode
 from agent.QueryEngine.nodes.summary_node import QuerySummaryNode
 from agent.QueryEngine.state.state import QueryEngineState
@@ -27,6 +28,7 @@ class QueryEngine(BaseEngine):
         self._embedding_client = embedding_client
         self._crawler = crawler or DomainKnowledgeCrawler()
         self._search_node = QuerySearchNode(chat_client=self._chat_client, crawler=self._crawler)
+        self._reflection_node = QueryReflectionNode(chat_client=self._chat_client)
         self._summary_node = QuerySummaryNode(chat_client=self._chat_client)
         self._formatting_node = QueryFormattingNode()
 
@@ -34,6 +36,17 @@ class QueryEngine(BaseEngine):
         state = QueryEngineState.from_context(context=context, round_number=round_number)
         try:
             state = self._search_node.run(state, embedding_client=self._embedding_client)
+            state = self._reflection_node.run(state)
+            if state.reflection_plan and (
+                state.reflection_plan.supplementary_official_queries
+                or state.reflection_plan.supplementary_tutorial_queries
+            ):
+                state = self._search_node.supplement(
+                    state,
+                    official_queries=state.reflection_plan.supplementary_official_queries,
+                    tutorial_queries=state.reflection_plan.supplementary_tutorial_queries,
+                    embedding_client=self._embedding_client,
+                )
             state = self._summary_node.run(state)
             return self._formatting_node.run(state)
         except Exception:

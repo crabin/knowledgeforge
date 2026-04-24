@@ -39,6 +39,10 @@ class MediaSummaryNode(BaseMediaNode):
                     "blog_queries": state.search_plan.blog_queries if state.search_plan else [],
                     "reasoning": state.search_plan.reasoning if state.search_plan else "",
                 },
+                "reflection": {
+                    "missing_aspects": state.reflection_plan.missing_aspects if state.reflection_plan else [],
+                    "reasoning": state.reflection_plan.reasoning if state.reflection_plan else "",
+                },
                 "documents": documents_payload,
             },
             ensure_ascii=False,

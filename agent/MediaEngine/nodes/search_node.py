@@ -23,38 +23,32 @@ class MediaSearchNode(BaseMediaNode):
     def run(self, state: MediaEngineState, **kwargs) -> MediaEngineState:
         plan = self._build_plan(state)
         state.search_plan = plan
+        self._append_search_results(
+            state,
+            social_queries=plan.social_queries,
+            community_queries=plan.community_queries,
+            blog_queries=plan.blog_queries,
+            is_technical=plan.is_technical,
+        )
+        return state
 
-        all_hits = []
-        for query in plan.social_queries:
-            all_hits.extend(
-                self._crawler.search(
-                    query=query,
-                    platform_type="social",
-                    is_technical=plan.is_technical,
-                    max_results=3,
-                )
-            )
-        for query in plan.community_queries:
-            all_hits.extend(
-                self._crawler.search(
-                    query=query,
-                    platform_type="community",
-                    is_technical=plan.is_technical,
-                    max_results=4,
-                )
-            )
-        for query in plan.blog_queries:
-            all_hits.extend(
-                self._crawler.search(
-                    query=query,
-                    platform_type="blog",
-                    is_technical=plan.is_technical,
-                    max_results=3,
-                )
-            )
-
-        state.search_hits = self._dedupe_hits(all_hits)
-        state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=8)
+    def supplement(
+        self,
+        state: MediaEngineState,
+        *,
+        social_queries: list[str],
+        community_queries: list[str],
+        blog_queries: list[str],
+        is_technical: bool,
+    ) -> MediaEngineState:
+        self._append_search_results(
+            state,
+            social_queries=social_queries,
+            community_queries=community_queries,
+            blog_queries=blog_queries,
+            is_technical=is_technical,
+        )
+        state.iteration_count += 1
         return state
 
     def _build_plan(self, state: MediaEngineState) -> MediaSearchPlan:
@@ -136,3 +130,44 @@ class MediaSearchNode(BaseMediaNode):
             seen.add(hit.url)
             deduped.append(hit)
         return deduped
+
+    def _append_search_results(
+        self,
+        state: MediaEngineState,
+        *,
+        social_queries: list[str],
+        community_queries: list[str],
+        blog_queries: list[str],
+        is_technical: bool,
+    ) -> None:
+        all_hits = list(state.search_hits)
+        for query in social_queries:
+            hits = self._crawler.search(
+                query=query,
+                platform_type="social",
+                is_technical=is_technical,
+                max_results=3,
+            )
+            state.search_history.append({"query": query, "platform_type": "social", "hits": len(hits)})
+            all_hits.extend(hits)
+        for query in community_queries:
+            hits = self._crawler.search(
+                query=query,
+                platform_type="community",
+                is_technical=is_technical,
+                max_results=4,
+            )
+            state.search_history.append({"query": query, "platform_type": "community", "hits": len(hits)})
+            all_hits.extend(hits)
+        for query in blog_queries:
+            hits = self._crawler.search(
+                query=query,
+                platform_type="blog",
+                is_technical=is_technical,
+                max_results=3,
+            )
+            state.search_history.append({"query": query, "platform_type": "blog", "hits": len(hits)})
+            all_hits.extend(hits)
+
+        state.search_hits = self._dedupe_hits(all_hits)
+        state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=10)
