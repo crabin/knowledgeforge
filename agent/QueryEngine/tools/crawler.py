@@ -22,6 +22,7 @@ class DomainKnowledgeCrawler:
         query: str,
         source_type: str,
         official_domains: list[str],
+        preferred_domains: list[str] | None = None,
         max_results: int = 5,
     ) -> list[SearchHit]:
         url = "https://html.duckduckgo.com/html/"
@@ -48,7 +49,7 @@ class DomainKnowledgeCrawler:
                     url=result_url,
                     snippet=snippet,
                     source_type=source_type,
-                    score=score_url(result_url, source_type, official_domains),
+                    score=score_url(result_url, source_type, official_domains, preferred_domains),
                 )
             )
 

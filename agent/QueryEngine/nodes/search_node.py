@@ -6,6 +6,11 @@ from agent.QueryEngine.nodes.base_node import BaseQueryNode
 from agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState, SearchPlan
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from agent.QueryEngine.utils.ranking import (
+    PREFERRED_TECH_REFERENCE_DOMAINS,
+    PREFERRED_TUTORIAL_DOMAINS,
+    build_site_constrained_queries,
+)
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
@@ -125,15 +130,18 @@ class QuerySearchNode(BaseQueryNode):
                 query=query,
                 source_type="official",
                 official_domains=state.search_plan.official_domains if state.search_plan else [],
+                preferred_domains=[],
                 max_results=4,
             )
             state.search_history.append({"query": query, "source_type": "official", "hits": len(hits)})
             all_hits.extend(hits)
-        for query in tutorial_queries:
+        expanded_tutorial_queries = self._expand_preferred_queries(tutorial_queries)
+        for query in expanded_tutorial_queries:
             hits = self._crawler.search(
                 query=query,
                 source_type="tutorial",
                 official_domains=state.search_plan.official_domains if state.search_plan else [],
+                preferred_domains=self._preferred_domains(),
                 max_results=3,
             )
             state.search_history.append({"query": query, "source_type": "tutorial", "hits": len(hits)})
@@ -151,3 +159,21 @@ class QuerySearchNode(BaseQueryNode):
                     doc.embedding_dimensions = len(vector)
             except Exception:
                 pass
+
+    @staticmethod
+    def _preferred_domains() -> list[str]:
+        return [*PREFERRED_TUTORIAL_DOMAINS, *PREFERRED_TECH_REFERENCE_DOMAINS]
+
+    def _expand_preferred_queries(self, tutorial_queries: list[str]) -> list[str]:
+        expanded: list[str] = []
+        for query in tutorial_queries:
+            expanded.append(query)
+            expanded.extend(build_site_constrained_queries(query, self._preferred_domains()))
+        deduped: list[str] = []
+        seen = set()
+        for query in expanded:
+            if query in seen:
+                continue
+            seen.add(query)
+            deduped.append(query)
+        return deduped

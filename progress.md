@@ -310,6 +310,27 @@
   - 反思节点已经能输出缺口和补检索 query，但策略仍偏规则化，后续可以继续增强
   - `tests/test_workflow.py` 本轮仍未重新做全量最终确认
 
+### 阶段 13：QueryEngine 预定义优先来源策略
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 在 QueryEngine 代码中预定义教程/参考类优先来源集合
+  - 将 tutorial 查询扩展为“通用查询 + 预定义高质量站点 site 查询”
+  - 保持官方文档查询不写死域名，仍通过通用检索和自动识别来发现真正官方来源
+  - 扩展 crawler 排序逻辑，使预定义高质量来源在教程/参考类结果中获得更高优先级
+  - 更新 QueryEngine 与集成层测试，验证会生成带 `site:github.com` 等限定的 tutorial 查询
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/utils/ranking.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_integration_layers.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - 预定义来源优先策略已生效，但目前主要作用于 tutorial / reference 类查询
+  - 官方来源仍依赖自动识别，符合“不写死官方文档域名”的要求
+  - 真实网页抓取命中率仍受网络与 crawler 超时影响，后续可继续增强
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -327,6 +348,8 @@
 | media-single-engine-script | `uv run python scripts/test_single_engines.py --engine media --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 社区观点` | MediaEngine 单独脚本可运行 | 可运行 | 通过 |
 | react-engine-pytest | `uv run pytest tests/test_media_engine.py tests/test_query_engine.py tests/test_integration_layers.py` | QueryEngine / MediaEngine ReAct 闭环升级后仍通过专项测试与集成层验证 | 6 个测试通过 | 通过 |
 | react-single-engine-script | `uv run python scripts/test_single_engines.py --engine all --domain LangGraph --subdomain 工作流编排 --subdomain 状态持久化 --focus-point 官方文档 --focus-point 社区观点` | 三引擎脚本在 ReAct 升级后仍可运行 | 可运行 | 通过 |
+| query-priority-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py tests/test_media_engine.py` | QueryEngine 引入预定义优先来源策略后仍通过专项测试与集成层验证 | 6 个测试通过 | 通过 |
+| query-priority-script | `uv run python scripts/test_single_engines.py --engine query --domain LangGraph --subdomain 工作流编排 --focus-point 官方文档 --focus-point 最佳实践` | QueryEngine 单引擎脚本在优先来源策略下可运行 | 可运行 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -337,8 +360,8 @@
 | 问题 | 答案 |
 |------|------|
 | 我在哪里？ | 阶段 8 已完成；阶段 9/10 的节点化重构和阶段 12 的 ReAct 闭环升级已落地，但仍保留后续增强项 |
-| 我要去哪里？ | 继续增强 ReAct 反思策略、crawlers 的真实抓取质量，以及 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方检索、社区趋势抓取和 ReAct 补检索质量 |
+| 我要去哪里？ | 继续增强官方来源自动识别、ReAct 反思策略、crawlers 的真实抓取质量，以及 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方检索自动识别、社区趋势抓取和 ReAct 补检索质量 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

@@ -34,7 +34,15 @@ class FakeEmbeddingClient:
 
 
 class FakeCrawler:
-    def search(self, *, query: str, source_type: str, official_domains: list[str], max_results: int = 5):
+    def search(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None = None,
+        max_results: int = 5,
+    ):
         if source_type == "official":
             return [
                 SearchHit(
