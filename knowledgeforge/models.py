@@ -14,6 +14,7 @@ FailureCategory = Literal[
     "graph_write_failed",
     "path_association_failed",
     "quality_check_failed",
+    "source_quality_failed",
 ]
 
 
@@ -121,6 +122,7 @@ class CompletenessResult:
     reasons: list[str]
     missing_topics: list[str]
     supplement_queries: list[str]
+    failure_categories: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

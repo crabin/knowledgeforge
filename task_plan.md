@@ -7,6 +7,8 @@
 阶段 8：版本冻结与研报分支已完成
 
 ## 下一轮增强 / 当前进行中的补充工作
+- 质量流水线来源门禁
+  - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。
 - Browser 抓取稳定性
   - 继续收敛 `agent-browser` 的超时行为、会话复用方式和页面关闭策略，避免同一次任务里反复卡住。
 - crawler 降级策略

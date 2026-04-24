@@ -147,30 +147,34 @@ class MediaSearchNode(BaseMediaNode):
         is_technical: bool,
     ) -> None:
         all_hits = list(state.search_hits)
+        domain_phrases = self._domain_phrases(state)
         for query in social_queries:
-            hits = self._crawler.search(
+            hits = self._search(
                 query=query,
                 platform_type="social",
                 is_technical=is_technical,
                 max_results=3,
+                domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "social", "hits": len(hits)})
             all_hits.extend(hits)
         for query in community_queries:
-            hits = self._crawler.search(
+            hits = self._search(
                 query=query,
                 platform_type="community",
                 is_technical=is_technical,
                 max_results=4,
+                domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "community", "hits": len(hits)})
             all_hits.extend(hits)
         for query in blog_queries:
-            hits = self._crawler.search(
+            hits = self._search(
                 query=query,
                 platform_type="blog",
                 is_technical=is_technical,
                 max_results=3,
+                domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "blog", "hits": len(hits)})
             all_hits.extend(hits)
@@ -209,3 +213,41 @@ class MediaSearchNode(BaseMediaNode):
             seen.add(key)
             deduped.append(cleaned)
         return deduped
+
+    @staticmethod
+    def _domain_phrases(state: MediaEngineState) -> list[str]:
+        return MediaSearchNode._dedupe_terms(
+            [
+                state.normalized_domain or state.request_context.domain,
+                state.request_context.domain,
+                *state.domain_aliases,
+                *state.search_terms,
+            ]
+        )
+
+    def _search(
+        self,
+        *,
+        query: str,
+        platform_type: str,
+        is_technical: bool,
+        max_results: int,
+        domain_phrases: list[str],
+    ):
+        try:
+            return self._crawler.search(
+                query=query,
+                platform_type=platform_type,
+                is_technical=is_technical,
+                max_results=max_results,
+                domain_phrases=domain_phrases,
+            )
+        except TypeError as exc:
+            if "domain_phrases" not in str(exc):
+                raise
+            return self._crawler.search(
+                query=query,
+                platform_type=platform_type,
+                is_technical=is_technical,
+                max_results=max_results,
+            )

@@ -43,7 +43,7 @@ def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
 
     def fake_provider(*, provider_name: str, **kwargs):
         provider_calls.append(provider_name)
-        if provider_name == "duckduckgo":
+        if provider_name == "google":
             return []
         state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
         return [
@@ -66,7 +66,7 @@ def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         max_results=3,
     )
 
-    assert provider_calls == ["duckduckgo", "bing"]
+    assert provider_calls == ["google", "bing"]
     assert hits
     assert hits[0].url == "https://example.com/query-fallback"
 
@@ -78,7 +78,7 @@ def test_media_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
 
     def fake_provider(*, provider_name: str, **kwargs):
         provider_calls.append(provider_name)
-        if provider_name == "duckduckgo":
+        if provider_name == "google":
             return []
         state = __import__("agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
         return [
@@ -100,6 +100,6 @@ def test_media_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         max_results=3,
     )
 
-    assert provider_calls == ["duckduckgo", "bing"]
+    assert provider_calls == ["google", "bing"]
     assert hits
     assert hits[0].url == "https://example.com/media-fallback"

@@ -623,12 +623,55 @@
   - 完整性评估和质量检测只检查“是否有来源/章节/实体”，没有检查来源是否相关、权威、可支撑结论
   - 因此错误文档被写入、通过质检、冻结为 verified
 
+### 阶段 26：质量流水线来源门禁优化
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 执行 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`
+  - Query / Media crawler 新增 Google、Bing、DuckDuckGo、Brave HTTP provider 顺序，并解析 Google / Brave 结果
+  - Query crawler 新增 Bing redirect URL 解码、领域短语相关性过滤和 Wikipedia summary supplement
+  - Media crawler 复用领域短语过滤，并将未知平台分类从 requested_type 回退改为 `unknown`
+  - Query source reliability 改为结合 URL 与候选官方域名判断，避免 `source_type=official` 自动获得 `high`
+  - CompletenessEvaluator 新增来源可信度门禁和 `failure_categories`
+  - QualityChecker 新增 source quality checks，弱来源或无来源会进入 `research_flow`
+  - Markdown Writer 根据 completeness 状态输出动态结论，并在证据表优先使用 source snippet
+  - 新增多 provider、来源相关性、完整性来源门禁、质量来源门禁、writer 状态文案和 ML Weblio 回归测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/wikipedia_fetcher.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/utils/ranking.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/utils/ranking.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/evaluation/completeness.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/quality/checker.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_multi_provider_search.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_source_relevance_filter.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_completeness_source_gate.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_quality_source_checks.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_writer_dynamic_status.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_ml_regression.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_browser_fallbacks.py
+- 验证结果：
+  - `python3 -m py_compile agent/QueryEngine/tools/crawler.py agent/MediaEngine/tools/crawler.py agent/QueryEngine/nodes/search_node.py agent/MediaEngine/nodes/search_node.py agent/QueryEngine/nodes/formatting_node.py knowledgeforge/models.py knowledgeforge/evaluation/completeness.py knowledgeforge/quality/checker.py knowledgeforge/storage/markdown_writer.py`：通过
+  - `uv run pytest tests/test_multi_provider_search.py tests/test_source_relevance_filter.py tests/test_completeness_source_gate.py tests/test_quality_source_checks.py tests/test_writer_dynamic_status.py tests/test_ml_regression.py -q`：45 个测试通过
+  - `uv run pytest tests/test_browser_fallbacks.py tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py -q`：13 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：75 个测试通过
+- 当前保守结论：
+  - Weblio / sewing machine 这类低相关噪声现在会在相关性、可信度、完整性和质量检查多个层级被拦截
+  - 未通过来源质量门禁的文档不会被标记为可进入治理 / 冻结 / 报告流程
+  - live 浏览器诊断测试本轮未运行，仍按既有策略与默认回归隔离
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-23 的 Query / Media 增强、intake 收口、crawler 降级策略和整体进度盘点已完成 |
+| 我在哪里？ | 阶段 26 已完成；质量流水线已经新增来源相关性、可信度、完整性和质检门禁 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，保证来源真实、失败可降级、过程可复盘 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

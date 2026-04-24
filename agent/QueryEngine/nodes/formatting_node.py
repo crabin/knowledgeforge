@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.QueryEngine.nodes.base_node import BaseQueryNode
 from agent.QueryEngine.state.state import QueryEngineState
-from agent.QueryEngine.utils.ranking import reliability_for_source_type
+from agent.QueryEngine.utils.ranking import reliability_for_source_type_and_url
 from knowledgeforge.models import EngineRunResult, SourceRecord
 
 
@@ -41,7 +41,11 @@ class QueryFormattingNode(BaseQueryNode):
                 url=doc.url,
                 publisher=doc.publisher,
                 retrieved_at=state.collected_at,
-                reliability=reliability_for_source_type(doc.source_type),
+                reliability=reliability_for_source_type_and_url(
+                    doc.source_type,
+                    doc.url,
+                    state.candidate_official_domains or (state.search_plan.official_domains if state.search_plan else []),
+                ),
                 agent="QueryEngine",
                 source_type=doc.source_type,
                 snippet=doc.snippet[:240],

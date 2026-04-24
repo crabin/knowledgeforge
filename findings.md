@@ -100,6 +100,13 @@
 - QualityChecker 只检查 front matter、证据章节、实体、图谱节点和“是否有来源”，不检查来源内容质量、publisher 是否为搜索引擎跳转域、证据是否支持结论，因此该文档还能被冻结为 verified/report_eligible。
 - Markdown Writer 生成的是“首版知识结构已经形成”等模板式结论，没有根据质量失败或弱证据降级表述，进一步放大了错误结果的可信外观。
 
+## 质量流水线优化结论
+- 仅靠 query normalization 或 browser-first 抓取不能保证来源质量；必须在 crawler、ranking、completeness、quality checker 和 writer 五个层级同时设门禁。
+- QueryEngine 的 `source_type=official` 只能表示“检索意图”，不能表示“结果已经是官方来源”；可信度必须结合 URL netloc、候选官方域名和高权威域名白名单判断。
+- MediaEngine 的平台分类不能把未知域名回退成 requested platform type；未知来源应保持 `unknown`，由后续质量门禁决定是否补检索。
+- CompletenessEvaluator 和 QualityChecker 现在都要求至少存在 `high` 或 `medium` 可信来源；只有 unknown/low 来源会触发 `no_authoritative_source` / `source_quality_failed` 并进入 research flow。
+- Markdown Writer 的结论应反映当前门禁状态：`pass` 才能表达可进入治理流程，`supplement_required` 必须明确是草稿并提示补检索。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

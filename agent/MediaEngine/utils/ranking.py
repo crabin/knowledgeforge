@@ -27,7 +27,7 @@ def is_technical_context(domain: str, subdomains: list[str], focus_points: list[
     return any(hint in haystack for hint in TECH_HINTS)
 
 
-def classify_platform_type(url: str, requested_type: str = "community") -> str:
+def classify_platform_type(url: str) -> str:
     netloc = urlparse(url).netloc.lower()
     if any(domain in netloc for domain in SOCIAL_DOMAINS):
         return "social"
@@ -35,7 +35,7 @@ def classify_platform_type(url: str, requested_type: str = "community") -> str:
         return "community"
     if any(hint in netloc for hint in BLOG_HINTS):
         return "blog"
-    return requested_type
+    return "unknown"
 
 
 def score_media_url(

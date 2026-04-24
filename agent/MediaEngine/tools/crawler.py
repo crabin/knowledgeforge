@@ -10,6 +10,13 @@ from bs4 import BeautifulSoup
 from agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
 from agent.MediaEngine.utils.ranking import classify_platform_type, score_media_url
 from agent.MediaEngine.utils.text_processing import extract_media_text
+from agent.QueryEngine.tools.crawler import (
+    SEARCH_PROVIDERS,
+    parse_brave_results,
+    parse_google_results,
+    resolve_bing_redirect_url,
+)
+from agent.QueryEngine.utils.ranking import is_result_relevant
 from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 
 
@@ -32,12 +39,14 @@ class MediaPerspectiveCrawler:
         platform_type: str,
         is_technical: bool,
         max_results: int = 5,
+        domain_phrases: list[str] | None = None,
     ) -> list[MediaSearchHit]:
         browser_hits = self._search_with_browser(
             query=query,
             platform_type=platform_type,
             is_technical=is_technical,
             max_results=max_results,
+            domain_phrases=domain_phrases,
         )
         if browser_hits:
             return browser_hits
@@ -47,6 +56,7 @@ class MediaPerspectiveCrawler:
             platform_type=platform_type,
             is_technical=is_technical,
             max_results=max_results,
+            domain_phrases=domain_phrases,
         )
         return http_hits
 
@@ -102,6 +112,7 @@ class MediaPerspectiveCrawler:
         platform_type: str,
         is_technical: bool,
         max_results: int,
+        domain_phrases: list[str] | None = None,
     ) -> list[MediaSearchHit]:
         browser_results = self._browser.search_bing(query, limit=max_results)
         if not browser_results:
@@ -112,10 +123,10 @@ class MediaPerspectiveCrawler:
                 title=result.title,
                 url=result.url,
                 snippet=result.snippet,
-                platform_type=classify_platform_type(result.url, requested_type=platform_type),
+                platform_type=classify_platform_type(result.url),
                 score=score_media_url(
                     result.url,
-                    platform_type=classify_platform_type(result.url, requested_type=platform_type),
+                    platform_type=classify_platform_type(result.url),
                     requested_type=platform_type,
                     is_technical=is_technical,
                     snippet=result.snippet,
@@ -123,6 +134,7 @@ class MediaPerspectiveCrawler:
             )
             for result in browser_results
         ]
+        hits = self._filter_relevant_hits(hits, domain_phrases or [])
         hits.sort(key=lambda item: item.score, reverse=True)
         self._log(f"[MEDIA-SEARCH][browser] hits={len(hits[:max_results])} query={query}")
         return hits[:max_results]
@@ -134,13 +146,10 @@ class MediaPerspectiveCrawler:
         platform_type: str,
         is_technical: bool,
         max_results: int,
+        domain_phrases: list[str] | None = None,
     ) -> list[MediaSearchHit]:
-        providers = (
-            ("duckduckgo", "https://html.duckduckgo.com/html/"),
-            ("bing", "https://www.bing.com/search"),
-        )
         with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
-            for provider_name, url in providers:
+            for provider_name, url in SEARCH_PROVIDERS:
                 hits = self._search_http_provider(
                     client=client,
                     provider_name=provider_name,
@@ -149,6 +158,7 @@ class MediaPerspectiveCrawler:
                     platform_type=platform_type,
                     is_technical=is_technical,
                     max_results=max_results,
+                    domain_phrases=domain_phrases,
                 )
                 if hits:
                     return hits
@@ -164,6 +174,7 @@ class MediaPerspectiveCrawler:
         platform_type: str,
         is_technical: bool,
         max_results: int,
+        domain_phrases: list[str] | None = None,
     ) -> list[MediaSearchHit]:
         try:
             self._log(f"[MEDIA-SEARCH][httpx:{provider_name}] GET {url} params.q={query} timeout={self._timeout}")
@@ -174,53 +185,39 @@ class MediaPerspectiveCrawler:
             self._log(f"[MEDIA-SEARCH][httpx:{provider_name}] failed {exc.__class__.__name__}: {exc}")
             return []
 
-        if provider_name == "duckduckgo":
-            selectors = (".result",)
-            anchor_selectors = (".result__title a", "a.result__a")
-            snippet_selectors = (".result__snippet",)
-        else:
-            selectors = ("li.b_algo",)
-            anchor_selectors = ("h2 a",)
-            snippet_selectors = (".b_caption p", "p")
-
         soup = BeautifulSoup(response.text, "html.parser")
-        hits: list[MediaSearchHit] = []
-        for selector in selectors:
-            for result in soup.select(selector):
-                anchor = None
-                for anchor_selector in anchor_selectors:
-                    anchor = result.select_one(anchor_selector)
-                    if anchor and anchor.get("href"):
-                        break
-                if not anchor or not anchor.get("href"):
-                    continue
-                snippet_node = None
-                for snippet_selector in snippet_selectors:
-                    snippet_node = result.select_one(snippet_selector)
-                    if snippet_node:
-                        break
-                result_url = anchor.get("href", "").strip()
-                title = " ".join(anchor.get_text(" ", strip=True).split())
-                snippet = " ".join((snippet_node.get_text(" ", strip=True) if snippet_node else "").split())
-                actual_platform_type = classify_platform_type(result_url, requested_type=platform_type)
-                hits.append(
-                    MediaSearchHit(
-                        title=title,
-                        url=result_url,
-                        snippet=snippet,
-                        platform_type=actual_platform_type,
-                        score=score_media_url(
-                            result_url,
-                            platform_type=actual_platform_type,
-                            requested_type=platform_type,
-                            is_technical=is_technical,
-                            snippet=snippet,
-                        ),
-                    )
-                )
-            if hits:
-                break
+        if provider_name == "duckduckgo":
+            raw_hits = self._parse_duckduckgo(soup)
+        elif provider_name == "bing":
+            raw_hits = self._parse_bing(soup)
+        elif provider_name == "google":
+            raw_hits = parse_google_results(soup)
+        elif provider_name == "brave":
+            raw_hits = parse_brave_results(soup)
+        else:
+            raw_hits = []
 
+        hits: list[MediaSearchHit] = []
+        for raw_hit in raw_hits:
+            result_url = resolve_bing_redirect_url(raw_hit["url"])
+            actual_platform_type = classify_platform_type(result_url)
+            hits.append(
+                MediaSearchHit(
+                    title=raw_hit["title"],
+                    url=result_url,
+                    snippet=raw_hit["snippet"],
+                    platform_type=actual_platform_type,
+                    score=score_media_url(
+                        result_url,
+                        platform_type=actual_platform_type,
+                        requested_type=platform_type,
+                        is_technical=is_technical,
+                        snippet=raw_hit["snippet"],
+                    ),
+                )
+            )
+
+        hits = self._filter_relevant_hits(hits, domain_phrases or [])
         hits.sort(key=lambda item: item.score, reverse=True)
         deduped: OrderedDict[str, MediaSearchHit] = OrderedDict()
         for hit in hits:
@@ -232,6 +229,36 @@ class MediaPerspectiveCrawler:
         else:
             self._log(f"[MEDIA-SEARCH][httpx:{provider_name}] no hits query={query}")
         return list(deduped.values())
+
+    @staticmethod
+    def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:
+        from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+
+        return DomainKnowledgeCrawler._parse_duckduckgo(soup)
+
+    @staticmethod
+    def _parse_bing(soup: BeautifulSoup) -> list[dict[str, str]]:
+        from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+
+        return DomainKnowledgeCrawler._parse_bing(soup)
+
+    def _filter_relevant_hits(
+        self,
+        hits: list,
+        domain_phrases: list[str],
+    ) -> list:
+        if not domain_phrases:
+            return hits
+        return [
+            hit
+            for hit in hits
+            if is_result_relevant(
+                getattr(hit, "title", ""),
+                getattr(hit, "snippet", ""),
+                getattr(hit, "url", ""),
+                domain_phrases,
+            )
+        ]
 
     def _log(self, message: str) -> None:
         if self._trace:

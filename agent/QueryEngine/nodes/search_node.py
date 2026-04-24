@@ -132,24 +132,28 @@ class QuerySearchNode(BaseQueryNode):
         embedding_client: OpenAICompatibleEmbeddingClient | None,
     ) -> None:
         all_hits = list(state.search_hits)
+        domain_phrases = self._domain_phrases(state)
         for query in official_queries:
-            hits = self._crawler.search(
+            hits = self._search(
                 query=query,
                 source_type="official",
-                official_domains=state.candidate_official_domains or (state.search_plan.official_domains if state.search_plan else []),
+                official_domains=state.candidate_official_domains
+                or (state.search_plan.official_domains if state.search_plan else []),
                 preferred_domains=[],
                 max_results=4,
+                domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "source_type": "official", "hits": len(hits)})
             all_hits.extend(hits)
         expanded_tutorial_queries = self._expand_preferred_queries(tutorial_queries)
         for query in expanded_tutorial_queries:
-            hits = self._crawler.search(
+            hits = self._search(
                 query=query,
                 source_type="tutorial",
                 official_domains=state.search_plan.official_domains if state.search_plan else [],
                 preferred_domains=self._preferred_domains(),
                 max_results=3,
+                domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "source_type": "tutorial", "hits": len(hits)})
             all_hits.extend(hits)
@@ -160,6 +164,13 @@ class QuerySearchNode(BaseQueryNode):
             detect_candidate_official_domains(state.request_context.domain, deduped_hits),
         )
         state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
+        wiki_doc = (
+            self._crawler.fetch_wikipedia_supplement(state.normalized_domain or state.request_context.domain)
+            if hasattr(self._crawler, "fetch_wikipedia_supplement") and hasattr(self._crawler, "_wiki")
+            else None
+        )
+        if wiki_doc and all(doc.url != wiki_doc.url for doc in state.crawled_documents):
+            state.crawled_documents.append(wiki_doc)
 
         if embedding_client is not None and state.crawled_documents:
             try:
@@ -231,3 +242,44 @@ class QuerySearchNode(BaseQueryNode):
             if domain not in merged:
                 merged.append(domain)
         return merged
+
+    @staticmethod
+    def _domain_phrases(state: QueryEngineState) -> list[str]:
+        return QuerySearchNode._dedupe_terms(
+            [
+                state.normalized_domain or state.request_context.domain,
+                state.request_context.domain,
+                *state.domain_aliases,
+                *state.search_terms,
+            ]
+        )
+
+    def _search(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None,
+        max_results: int,
+        domain_phrases: list[str],
+    ):
+        try:
+            return self._crawler.search(
+                query=query,
+                source_type=source_type,
+                official_domains=official_domains,
+                preferred_domains=preferred_domains,
+                max_results=max_results,
+                domain_phrases=domain_phrases,
+            )
+        except TypeError as exc:
+            if "domain_phrases" not in str(exc):
+                raise
+            return self._crawler.search(
+                query=query,
+                source_type=source_type,
+                official_domains=official_domains,
+                preferred_domains=preferred_domains,
+                max_results=max_results,
+            )

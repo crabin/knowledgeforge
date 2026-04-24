@@ -38,6 +38,16 @@ class QualityChecker:
             "conflict_check": not simulate_conflict,
             "citation_check": has_sources and not simulate_missing_citation,
         }
+        all_sources = [source for output in outputs.values() for source in output.sources]
+        authoritative_sources = [
+            source for source in all_sources if source.reliability in ("high", "medium")
+        ]
+        source_checks = {
+            "source_relevance_check": bool(authoritative_sources),
+            "authority_check": bool(all_sources) and bool(authoritative_sources),
+            "evidence_support_check": bool(all_sources),
+        }
+        checks.update(source_checks)
         issues: list[QualityIssue] = []
         if not checks["has_front_matter"]:
             issues.append(
@@ -76,6 +86,22 @@ class QualityChecker:
                 QualityIssue(
                     category="quality_check_failed",
                     detail="引用链不足或证据缺失，需补充检索。",
+                    flow="research_flow",
+                )
+            )
+        if not source_checks["evidence_support_check"]:
+            issues.append(
+                QualityIssue(
+                    category="source_quality_failed",
+                    detail="缺少任何可引用来源，需要重新检索权威证据。",
+                    flow="research_flow",
+                )
+            )
+        elif not source_checks["authority_check"]:
+            issues.append(
+                QualityIssue(
+                    category="source_quality_failed",
+                    detail="来源不相关或可信度不足，需要重新检索权威证据。",
                     flow="research_flow",
                 )
             )

@@ -101,11 +101,19 @@ class MarkdownKnowledgeWriter:
             "文档保留了来源信息、候选实体关系、冲突与后续动作，供后续结构化抽取与质量检测使用。",
         ]
 
-        key_conclusions = [
-            f"{context.domain} 的首版知识结构已经形成，可进入后续治理流程。",
-            "当前结果包含可引用来源，满足最小知识沉淀条件。",
-            "后续可在质量闭环阶段继续细化实体、关系与冲突裁决。",
-        ]
+        if completeness.status == "pass":
+            key_conclusions = [
+                f"{context.domain} 已覆盖核心子主题，可以进入治理流程。",
+                "来源包含可引用权威证据，满足知识沉淀最小条件。",
+                "后续可在质量闭环阶段继续细化实体、关系与冲突裁决。",
+            ]
+        else:
+            failure_hints = "、".join(completeness.failure_categories) if completeness.failure_categories else "来源不足"
+            key_conclusions = [
+                f"{context.domain} 当前结果为草稿状态，尚不满足入库条件（{failure_hints}）。",
+                "需要执行补检索任务，补充权威来源后重新评估。",
+                "在来源质量通过前，不允许冻结或进入报告流程。",
+            ]
 
         body_sections = []
         for agent_name, output in outputs.items():
@@ -130,8 +138,9 @@ class MarkdownKnowledgeWriter:
         source_counter = 1
         for output in outputs.values():
             for source in output.sources:
+                key_info = source.snippet if source.snippet.strip() else output.summary
                 evidence_rows.append(
-                    f"| S{source_counter} | {source.title} | {output.summary} | {source.reliability} | {source.agent} |"
+                    f"| S{source_counter} | {source.title} | {key_info} | {source.reliability} | {source.agent} |"
                 )
                 source_counter += 1
 

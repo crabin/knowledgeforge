@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 
@@ -17,6 +18,18 @@ PREFERRED_TECH_REFERENCE_DOMAINS = (
     "arxiv.org",
     "huggingface.co",
     "paperswithcode.com",
+)
+AUTHORITATIVE_REFERENCE_DOMAINS = (
+    "en.wikipedia.org",
+    "zh.wikipedia.org",
+)
+HIGH_AUTHORITY_DOMAINS = (
+    "arxiv.org",
+    "papers.nips.cc",
+    "proceedings.mlr.press",
+    "openreview.net",
+    "dl.acm.org",
+    "ieeexplore.ieee.org",
 )
 
 
@@ -49,6 +62,43 @@ def reliability_for_source_type(source_type: str) -> str:
     if source_type == "tutorial":
         return "medium"
     return "unknown"
+
+
+def reliability_for_source_type_and_url(
+    source_type: str,
+    url: str,
+    official_domains: list[str],
+) -> str:
+    netloc = urlparse(url).netloc.lower()
+    if any(domain in netloc for domain in HIGH_AUTHORITY_DOMAINS):
+        return "high"
+    if any(domain in netloc for domain in AUTHORITATIVE_REFERENCE_DOMAINS):
+        return "medium"
+    if source_type == "official":
+        if any(domain.lower() in netloc for domain in official_domains):
+            return "high"
+        return "medium"
+    if source_type == "tutorial":
+        return "medium"
+    return "unknown"
+
+
+def is_result_relevant(
+    title: str,
+    snippet: str,
+    url: str,
+    domain_phrases: list[str],
+) -> bool:
+    """Return True when a result mentions a whole domain phrase or alias."""
+    haystack = f"{title} {snippet} {url}".lower()
+    for phrase in domain_phrases:
+        cleaned = phrase.strip().lower()
+        if not cleaned:
+            continue
+        pattern = r"(?<!\w)" + re.escape(cleaned) + r"(?!\w)"
+        if re.search(pattern, haystack):
+            return True
+    return False
 
 
 def build_site_constrained_queries(query: str, preferred_domains: list[str], max_domains: int = 3) -> list[str]:
