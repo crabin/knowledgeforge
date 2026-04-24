@@ -666,10 +666,41 @@
   - 未通过来源质量门禁的文档不会被标记为可进入治理 / 冻结 / 报告流程
   - live 浏览器诊断测试本轮未运行，仍按既有策略与默认回归隔离
 
+### 阶段 27：QueryEngine 查询计划决策化
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 新增 `SearchQuestion` 结构，扩展 `SearchPlan.questions`
+  - 重写 QueryEngine 搜索规划 prompt，要求先输出查询决策表，再执行检索
+  - 调整 search node，使初始检索按计划问题逐项执行，并记录 question / expected_info / hits / status
+  - 调整 reflection node，使反思输入包含问题清单与检索轨迹，并在 fallback 中只针对 `insufficient` 问题补检索
+  - 调整 formatting node，在 `raw_material` 中输出查询计划、预期信息、满足标准、fallback 查询和逐项检索轨迹
+  - 将无真实网页结果的 query-plan fallback 来源降级为 `unknown`
+  - 扩展 QueryEngine 专项测试，覆盖结构化计划、执行顺序、fallback plan、insufficient 状态和补检索范围
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/__init__.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_query_engine.py`：6 个测试通过
+  - `uv run pytest tests/test_source_relevance_filter.py tests/test_completeness_source_gate.py tests/test_quality_source_checks.py`：23 个测试通过
+  - `uv run pytest tests/test_workflow.py`：15 个测试通过
+- 当前保守结论：
+  - QueryEngine 已具备“先决策、后检索”的可审计计划阶段
+  - 只有 query-plan 而无真实网页证据时不会再输出高可信来源
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 26 已完成；质量流水线已经新增来源相关性、可信度、完整性和质检门禁 |
+| 我在哪里？ | 阶段 27 已完成；QueryEngine 已新增结构化查询计划、逐项执行状态和不足项补检索 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

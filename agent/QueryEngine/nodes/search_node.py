@@ -4,7 +4,7 @@ import json
 
 from agent.QueryEngine.nodes.base_node import BaseQueryNode
 from agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
-from agent.QueryEngine.state.state import QueryEngineState, SearchPlan
+from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from agent.QueryEngine.utils.ranking import (
     PREFERRED_TECH_REFERENCE_DOMAINS,
@@ -39,8 +39,7 @@ class QuerySearchNode(BaseQueryNode):
         state.search_plan = plan
         self._append_search_results(
             state,
-            official_queries=plan.official_queries,
-            tutorial_queries=plan.tutorial_queries,
+            questions=plan.questions,
             embedding_client=embedding_client,
         )
         return state
@@ -55,6 +54,11 @@ class QuerySearchNode(BaseQueryNode):
     ) -> QueryEngineState:
         self._append_search_results(
             state,
+            questions=self._questions_from_supplemental_queries(
+                state,
+                official_queries=official_queries,
+                tutorial_queries=tutorial_queries,
+            ),
             official_queries=official_queries,
             tutorial_queries=tutorial_queries,
             embedding_client=embedding_client,
@@ -85,11 +89,33 @@ class QuerySearchNode(BaseQueryNode):
                 system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
+            questions = self._parse_questions(payload.get("questions", []))
+            official_queries = [
+                str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
+            ]
+            tutorial_queries = [
+                str(item).strip() for item in payload.get("tutorial_queries", []) if str(item).strip()
+            ]
+            if not questions:
+                questions = self._questions_from_query_lists(
+                    state,
+                    official_queries=official_queries,
+                    tutorial_queries=tutorial_queries,
+                )
             return SearchPlan(
-                official_queries=[str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()],
-                tutorial_queries=[str(item).strip() for item in payload.get("tutorial_queries", []) if str(item).strip()],
+                official_queries=official_queries or [
+                    question.google_query
+                    for question in questions
+                    if self._question_source_type(question) == "official"
+                ],
+                tutorial_queries=tutorial_queries or [
+                    question.google_query
+                    for question in questions
+                    if self._question_source_type(question) == "tutorial"
+                ],
                 official_domains=[str(item).strip() for item in payload.get("official_domains", []) if str(item).strip()],
                 reasoning=str(payload.get("reasoning", "")).strip() or "官方优先，教程补充。",
+                questions=questions,
             )
         except Exception:
             return self._fallback_plan(state)
@@ -105,11 +131,40 @@ class QuerySearchNode(BaseQueryNode):
             f"{subject} {topic} tutorial guide"
             for topic in context.subdomains[:2]
         ]
+        questions = [
+            SearchQuestion(
+                question=f"{subject} 在“{topic}”方面有哪些官方事实与权威说明？",
+                google_query=f"{subject} {topic} official documentation standard",
+                expected_info=["官方定义", "权威说明", "关键能力", "限制或适用范围"],
+                source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
+                success_criteria=["至少命中一个相关官方或权威来源", "结果能支持该子主题的事实描述"],
+                fallback_queries=[
+                    f"{subject} {topic} official guide",
+                    f"{subject} {topic} reference documentation",
+                ],
+            )
+            for topic in context.subdomains[:3]
+        ]
+        for topic in context.subdomains[:2]:
+            questions.append(
+                SearchQuestion(
+                    question=f"{subject} 在“{topic}”方面有哪些教程、案例或最佳实践可补充官方事实？",
+                    google_query=f"{subject} {topic} tutorial guide best practices",
+                    expected_info=["教程示例", "落地步骤", "最佳实践", "常见注意事项"],
+                    source_priority=["tutorial", "technical blog", "reference guide"],
+                    success_criteria=["至少命中一个相关教程或技术参考", "结果能补充官方事实的实践语境"],
+                    fallback_queries=[
+                        f"{subject} {topic} examples",
+                        f"{subject} {topic} best practices",
+                    ],
+                )
+            )
         return SearchPlan(
             official_queries=official_queries,
             tutorial_queries=tutorial_queries,
             official_domains=[],
             reasoning="未拿到 LLM 规划结果，按官方文档优先和教程补充的默认规则生成。",
+            questions=questions,
         )
 
     @staticmethod
@@ -127,36 +182,48 @@ class QuerySearchNode(BaseQueryNode):
         self,
         state: QueryEngineState,
         *,
-        official_queries: list[str],
-        tutorial_queries: list[str],
+        questions: list[SearchQuestion] | None = None,
+        official_queries: list[str] | None = None,
+        tutorial_queries: list[str] | None = None,
         embedding_client: OpenAICompatibleEmbeddingClient | None,
     ) -> None:
+        official_queries = official_queries or []
+        tutorial_queries = tutorial_queries or []
         all_hits = list(state.search_hits)
         domain_phrases = self._domain_phrases(state)
-        for query in official_queries:
-            hits = self._search(
-                query=query,
-                source_type="official",
-                official_domains=state.candidate_official_domains
-                or (state.search_plan.official_domains if state.search_plan else []),
-                preferred_domains=[],
-                max_results=4,
-                domain_phrases=domain_phrases,
-            )
-            state.search_history.append({"query": query, "source_type": "official", "hits": len(hits)})
-            all_hits.extend(hits)
-        expanded_tutorial_queries = self._expand_preferred_queries(tutorial_queries)
-        for query in expanded_tutorial_queries:
-            hits = self._search(
-                query=query,
-                source_type="tutorial",
-                official_domains=state.search_plan.official_domains if state.search_plan else [],
-                preferred_domains=self._preferred_domains(),
-                max_results=3,
-                domain_phrases=domain_phrases,
-            )
-            state.search_history.append({"query": query, "source_type": "tutorial", "hits": len(hits)})
-            all_hits.extend(hits)
+        plan_questions = questions or self._questions_from_query_lists(
+            state,
+            official_queries=official_queries,
+            tutorial_queries=tutorial_queries,
+        )
+        for question in plan_questions:
+            question.status = "searched"
+            source_type = self._question_source_type(question)
+            queries = [question.google_query, *question.fallback_queries]
+            question_hits = []
+            for index, query in enumerate(self._dedupe_terms(queries)):
+                if index > 0 and self._question_satisfied(question_hits):
+                    break
+                hits = self._search_for_question(
+                    state,
+                    question=question,
+                    query=query,
+                    source_type=source_type,
+                    domain_phrases=domain_phrases,
+                )
+                state.search_history.append(
+                    {
+                        "question": question.question,
+                        "query": query,
+                        "expected_info": question.expected_info,
+                        "source_type": source_type,
+                        "hits": len(hits),
+                        "status": "satisfied" if self._question_satisfied(hits) else "insufficient",
+                    }
+                )
+                question_hits.extend(hits)
+                all_hits.extend(hits)
+            question.status = "satisfied" if self._question_satisfied(question_hits) else "insufficient"
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
         state.candidate_official_domains = self._merge_candidate_domains(
@@ -181,6 +248,156 @@ class QuerySearchNode(BaseQueryNode):
                     doc.embedding_dimensions = len(vector)
             except Exception:
                 pass
+
+    @staticmethod
+    def _parse_questions(items: object) -> list[SearchQuestion]:
+        questions: list[SearchQuestion] = []
+        if not isinstance(items, list):
+            return questions
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            question = str(item.get("question", "")).strip()
+            google_query = str(item.get("google_query", "")).strip()
+            if not question or not google_query:
+                continue
+            questions.append(
+                SearchQuestion(
+                    question=question,
+                    google_query=google_query,
+                    expected_info=[
+                        str(value).strip()
+                        for value in item.get("expected_info", [])
+                        if str(value).strip()
+                    ],
+                    source_priority=[
+                        str(value).strip()
+                        for value in item.get("source_priority", [])
+                        if str(value).strip()
+                    ],
+                    success_criteria=[
+                        str(value).strip()
+                        for value in item.get("success_criteria", [])
+                        if str(value).strip()
+                    ],
+                    fallback_queries=[
+                        str(value).strip()
+                        for value in item.get("fallback_queries", [])
+                        if str(value).strip()
+                    ],
+                    status="planned",
+                )
+            )
+        return questions
+
+    def _questions_from_query_lists(
+        self,
+        state: QueryEngineState,
+        *,
+        official_queries: list[str],
+        tutorial_queries: list[str],
+    ) -> list[SearchQuestion]:
+        questions = [
+            SearchQuestion(
+                question=f"需要确认 {state.normalized_domain or state.request_context.domain} 的官方事实：{query}",
+                google_query=query,
+                expected_info=["官方定义", "权威说明", "关键事实"],
+                source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
+                success_criteria=["命中相关官方或权威来源"],
+                fallback_queries=[],
+            )
+            for query in official_queries
+        ]
+        questions.extend(
+            SearchQuestion(
+                question=f"需要补充 {state.normalized_domain or state.request_context.domain} 的实践资料：{query}",
+                google_query=query,
+                expected_info=["教程示例", "实践步骤", "注意事项"],
+                source_priority=["tutorial", "technical blog", "reference guide"],
+                success_criteria=["命中相关教程或技术参考"],
+                fallback_queries=self._expand_preferred_queries([query])[1:],
+            )
+            for query in tutorial_queries
+        )
+        return questions
+
+    @staticmethod
+    def _questions_from_supplemental_queries(
+        state: QueryEngineState,
+        *,
+        official_queries: list[str],
+        tutorial_queries: list[str],
+    ) -> list[SearchQuestion]:
+        questions: list[SearchQuestion] = []
+        insufficient_questions = [
+            question
+            for question in (state.search_plan.questions if state.search_plan else [])
+            if question.status == "insufficient"
+        ]
+        for query in official_queries:
+            base_question = insufficient_questions[0].question if insufficient_questions else query
+            questions.append(
+                SearchQuestion(
+                    question=f"补检索：{base_question}",
+                    google_query=query,
+                    expected_info=["补齐官方或权威证据"],
+                    source_priority=["official documentation", "standard", "vendor docs"],
+                    success_criteria=["补检索命中相关官方或权威来源"],
+                    fallback_queries=[],
+                )
+            )
+        for query in tutorial_queries:
+            base_question = insufficient_questions[0].question if insufficient_questions else query
+            questions.append(
+                SearchQuestion(
+                    question=f"补检索：{base_question}",
+                    google_query=query,
+                    expected_info=["补齐教程、案例或最佳实践证据"],
+                    source_priority=["tutorial", "technical blog", "reference guide"],
+                    success_criteria=["补检索命中相关实践资料"],
+                    fallback_queries=[],
+                )
+            )
+        return questions
+
+    @staticmethod
+    def _question_source_type(question: SearchQuestion) -> str:
+        priority_text = " ".join(question.source_priority).lower()
+        if any(token in priority_text for token in ["tutorial", "blog", "guide", "example", "practice"]):
+            return "tutorial"
+        return "official"
+
+    @staticmethod
+    def _question_satisfied(hits) -> bool:
+        return any(getattr(hit, "score", 0) > 0 for hit in hits)
+
+    def _search_for_question(
+        self,
+        state: QueryEngineState,
+        *,
+        question: SearchQuestion,
+        query: str,
+        source_type: str,
+        domain_phrases: list[str],
+    ):
+        if source_type == "official":
+            return self._search(
+                query=query,
+                source_type="official",
+                official_domains=state.candidate_official_domains
+                or (state.search_plan.official_domains if state.search_plan else []),
+                preferred_domains=[],
+                max_results=4,
+                domain_phrases=domain_phrases,
+            )
+        return self._search(
+            query=query,
+            source_type="tutorial",
+            official_domains=state.search_plan.official_domains if state.search_plan else [],
+            preferred_domains=self._preferred_domains(),
+            max_results=3,
+            domain_phrases=domain_phrases,
+        )
 
     def _normalize_domain(self, state: QueryEngineState) -> None:
         if state.normalized_domain:

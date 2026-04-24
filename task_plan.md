@@ -23,6 +23,9 @@
   - 按相同思路将 `MediaEngine` 升级为 `search -> summary -> formatting` 的节点化结构，专门补“社区观点 / 社交讨论 / 博客趋势”。
 - Query / Media ReAct 闭环
   - 在两个 Engine 内部增加“首轮检索 -> 反思 -> 补检索 -> 总结”的最小 ReAct 循环，避免一次检索后直接结束。
+- QueryEngine 查询计划决策化
+  - 已完成：QueryEngine 在联网查询前先生成结构化 `SearchQuestion` 决策表，逐项执行 Google 风格查询，记录每题预期信息、满足标准、fallback 查询、执行状态和检索轨迹。
+  - 已完成：fallback query-plan 来源降级为 `unknown`，避免把“计划”误判为高可信证据。
 - 技术领域社区优先策略
   - 技术领域默认采用中外技术社区混合来源，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补 `V2EX / 掘金 / 知乎`。
 - crawler 质量增强
@@ -230,5 +233,6 @@
 - QueryEngine 补充增强阶段需额外满足“官方文档优先、教程补充、来源可追溯、回归测试可稳定复现”。
 - MediaEngine 补充增强阶段需额外满足“社区/社交/博客职责清晰、趋势观点可追溯、技术社区优先策略可验证”。
 - ReAct 升级后需额外满足“反思结论可解释、补检索可追溯、单轮补检索后稳定收口”。
+- QueryEngine 查询计划优化后需额外满足“先生成结构化问题清单，再逐项检索；每项记录预期信息、满足标准、状态和不足原因；计划型 fallback 来源不能伪装成高可信来源”。
 - 单引擎真实联调日志需额外满足“记录每次 LLM / Embedding / browser / httpx 调用的 endpoint、耗时、状态或失败原因，并按时间保存到 `logs/`”。
 - Intake 收口阶段需额外满足“创建与追加都返回完整 intake session、confirm 返回 `{ intake_session, task }`、非知识采集 intent 不允许直接启动任务”。

@@ -6,12 +6,34 @@ import json
 SEARCH_PLAN_SCHEMA = {
     "type": "object",
     "properties": {
+        "questions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "google_query": {"type": "string"},
+                    "expected_info": {"type": "array", "items": {"type": "string"}},
+                    "source_priority": {"type": "array", "items": {"type": "string"}},
+                    "success_criteria": {"type": "array", "items": {"type": "string"}},
+                    "fallback_queries": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "question",
+                    "google_query",
+                    "expected_info",
+                    "source_priority",
+                    "success_criteria",
+                    "fallback_queries",
+                ],
+            },
+        },
         "official_queries": {"type": "array", "items": {"type": "string"}},
         "tutorial_queries": {"type": "array", "items": {"type": "string"}},
         "official_domains": {"type": "array", "items": {"type": "string"}},
         "reasoning": {"type": "string"},
     },
-    "required": ["official_queries", "tutorial_queries", "official_domains", "reasoning"],
+    "required": ["questions", "official_queries", "tutorial_queries", "official_domains", "reasoning"],
 }
 
 
@@ -49,13 +71,20 @@ SUMMARY_SCHEMA = {
 
 SEARCH_PLAN_SYSTEM_PROMPT = f"""
 你是 KnowledgeForge 的 QueryEngine 搜索规划器。
-任务目标：为“知识/技术主题检索”生成官方文档优先、教程补充的搜索计划。
+任务目标：在任何网络检索前，先生成“查询决策表”。系统会按你的 questions 顺序逐项搜索。
 
 强制规则：
 1. 官方文档、标准、规范、厂商文档、项目主页、官方 GitHub 文档是最权威来源，必须优先。
 2. 教程、博客、社区文章只作为补充，用于解释用法、案例和经验。
-3. 查询输出需要兼顾“概念定义、核心能力、安装/使用、最佳实践、版本变化”等主题。
-4. 只返回 JSON，不要附加解释。
+3. 每个子领域至少生成 1 个官方/权威事实问题，问题要能回答“需要确认什么事实”。
+4. 每个 question 必须写清楚：
+   - google_query：面向 Google 风格的查询语句，但不要使用只能由 Google API 执行的特殊能力。
+   - expected_info：需要从搜索结果中拿到哪些信息，例如定义、官方说明、版本/时间范围、关键能力、限制、案例证据。
+   - source_priority：优先来源类型，例如 official documentation、standard、vendor docs、official GitHub、tutorial。
+   - success_criteria：什么结果算满足该问题。
+   - fallback_queries：主查询不足时才执行的补查查询。
+5. official_queries / tutorial_queries 保持兼容输出，应从 questions 中提取代表性查询。
+6. 只返回 JSON，不要附加解释。
 
 输出 JSON Schema：
 {json.dumps(SEARCH_PLAN_SCHEMA, ensure_ascii=False, indent=2)}
@@ -67,11 +96,12 @@ REFLECTION_SYSTEM_PROMPT = f"""
 请根据首轮检索结果判断：当前结果还缺什么，是否需要继续补检索。
 
 强制规则：
-1. 优先检查是否缺官方文档、规范说明、核心主题覆盖。
-2. 如果官方资料已足够，但缺少落地示例或最佳实践，再补 tutorial 查询。
-3. 尽量从首轮结果中提取候选官方域名，写入 candidate_official_domains。
-4. 如果当前结果已经足够，也要返回空的 supplementary 查询数组。
-4. 只返回 JSON。
+1. 优先检查查询计划中的每个问题是否已被满足，特别是 status=insufficient 的问题。
+2. missing_aspects 必须绑定具体问题，并说明原因：没搜到、搜到但不权威、信息不完整、证据不支持问题。
+3. supplementary 查询只针对 insufficient 问题生成，避免泛化重复搜索。
+4. 尽量从首轮结果中提取候选官方域名，写入 candidate_official_domains。
+5. 如果当前结果已经足够，也要返回空的 supplementary 查询数组。
+6. 只返回 JSON。
 
 输出 JSON Schema：
 {json.dumps(REFLECTION_SCHEMA, ensure_ascii=False, indent=2)}

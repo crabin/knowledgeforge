@@ -1,11 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.time import now_iso
+
+
+QuestionStatus = Literal["planned", "searched", "insufficient", "satisfied"]
+
+
+@dataclass(slots=True)
+class SearchQuestion:
+    question: str
+    google_query: str
+    expected_info: list[str]
+    source_priority: list[str]
+    success_criteria: list[str]
+    fallback_queries: list[str]
+    status: QuestionStatus = "planned"
 
 
 @dataclass(slots=True)
@@ -14,6 +28,7 @@ class SearchPlan:
     tutorial_queries: list[str]
     official_domains: list[str]
     reasoning: str
+    questions: list[SearchQuestion] = field(default_factory=list)
 
 
 @dataclass(slots=True)

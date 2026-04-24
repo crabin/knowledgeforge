@@ -16,6 +16,9 @@ class QueryReflectionNode(BaseQueryNode):
         reflection = self._build_reflection(state)
         state.reflection_plan = reflection
         state.reflection_notes.append(reflection.reasoning)
+        for domain in reflection.candidate_official_domains:
+            if domain not in state.candidate_official_domains:
+                state.candidate_official_domains.append(domain)
         if reflection.missing_aspects:
             state.observation_notes.extend(reflection.missing_aspects)
         return state
@@ -41,7 +44,20 @@ class QueryReflectionNode(BaseQueryNode):
                 "search_plan": {
                     "official_queries": state.search_plan.official_queries if state.search_plan else [],
                     "tutorial_queries": state.search_plan.tutorial_queries if state.search_plan else [],
+                    "questions": [
+                        {
+                            "question": question.question,
+                            "google_query": question.google_query,
+                            "expected_info": question.expected_info,
+                            "source_priority": question.source_priority,
+                            "success_criteria": question.success_criteria,
+                            "fallback_queries": question.fallback_queries,
+                            "status": question.status,
+                        }
+                        for question in (state.search_plan.questions if state.search_plan else [])
+                    ],
                 },
+                "search_history": state.search_history,
                 "documents": documents_payload,
             },
             ensure_ascii=False,
@@ -75,22 +91,32 @@ class QueryReflectionNode(BaseQueryNode):
 
     @staticmethod
     def _fallback_reflection(state: QueryEngineState) -> ReflectionPlan:
-        official_docs = [doc for doc in state.crawled_documents if doc.source_type == "official"]
-        tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
         missing_aspects: list[str] = []
         supplementary_official_queries: list[str] = []
         supplementary_tutorial_queries: list[str] = []
 
-        if not official_docs:
-            missing_aspects.append("缺少官方资料")
-            supplementary_official_queries.append(f"{state.request_context.domain} official documentation")
-        if len(official_docs) < max(1, min(2, len(state.request_context.subdomains))):
-            missing_aspects.append("官方主题覆盖仍偏窄")
-            for topic in state.request_context.subdomains[:2]:
-                supplementary_official_queries.append(f"{state.request_context.domain} {topic} official documentation")
-        if not tutorial_docs:
-            missing_aspects.append("缺少教程与最佳实践补充")
-            supplementary_tutorial_queries.append(f"{state.request_context.domain} tutorial best practices")
+        insufficient_questions = [
+            question
+            for question in (state.search_plan.questions if state.search_plan else [])
+            if question.status == "insufficient"
+        ]
+        if insufficient_questions:
+            for question in insufficient_questions:
+                missing_aspects.append(f"{question.question}：检索结果不足或缺少权威支撑")
+                priority_text = " ".join(question.source_priority).lower()
+                if "tutorial" in priority_text or "blog" in priority_text or "guide" in priority_text:
+                    supplementary_tutorial_queries.extend(question.fallback_queries or [question.google_query])
+                else:
+                    supplementary_official_queries.extend(question.fallback_queries or [question.google_query])
+        elif not state.search_plan:
+            official_docs = [doc for doc in state.crawled_documents if doc.source_type == "official"]
+            tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
+            if not official_docs:
+                missing_aspects.append("缺少官方资料")
+                supplementary_official_queries.append(f"{state.request_context.domain} official documentation")
+            if not tutorial_docs:
+                missing_aspects.append("缺少教程与最佳实践补充")
+                supplementary_tutorial_queries.append(f"{state.request_context.domain} tutorial best practices")
 
         return ReflectionPlan(
             missing_aspects=missing_aspects,

@@ -107,6 +107,12 @@
 - CompletenessEvaluator 和 QualityChecker 现在都要求至少存在 `high` 或 `medium` 可信来源；只有 unknown/low 来源会触发 `no_authoritative_source` / `source_quality_failed` 并进入 research flow。
 - Markdown Writer 的结论应反映当前门禁状态：`pass` 才能表达可进入治理流程，`supplement_required` 必须明确是草稿并提示补检索。
 
+## QueryEngine 查询计划优化结论
+- QueryEngine 原先已有 `SearchPlan` 和一次反思补检索，但计划更像内部 query 列表；现在显式建模为 `SearchQuestion`，让“要问什么、用什么 Google 风格查询、要拿哪些信息、什么算满足、失败怎么补查”都可审计。
+- 初始检索按 `SearchPlan.questions` 顺序逐项执行，`search_history` 记录 question、query、expected_info、hits、status 和 source_type，后续反思能绑定到具体不足问题。
+- fallback reflection 只针对 `status=insufficient` 的问题生成补检索，避免泛化重复搜索；LLM reflection 也拿到完整问题清单和检索轨迹。
+- query-plan fallback 来源现在统一标记为 `publisher=query-plan`、`reliability=unknown`、`source_type=query_plan`，避免“只有计划没有网页证据”时误通过来源质量门禁。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

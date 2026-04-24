@@ -68,11 +68,11 @@ class QueryEngine(BaseEngine):
                 SourceRecord(
                     title=f"{context.domain} 官方资料检索建议",
                     url=f"https://example.com/{round_number}/{self.name.lower()}",
-                    publisher="Example Authority",
+                    publisher="query-plan",
                     retrieved_at=timestamp,
-                    reliability="high",
+                    reliability="unknown",
                     agent=self.name,
-                    source_type="official",
+                    source_type="query_plan",
                 )
             ],
             collected_at=timestamp,

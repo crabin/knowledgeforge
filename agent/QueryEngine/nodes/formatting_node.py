@@ -16,6 +16,8 @@ class QueryFormattingNode(BaseQueryNode):
             f"术语归一化：{state.request_context.domain} -> {state.normalized_domain or state.request_context.domain}",
             f"归一化说明：{state.normalization_reasoning or '无'}",
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
+            "查询计划：",
+            *self._format_search_plan(state),
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             f"候选官方域名：{', '.join(state.candidate_official_domains) if state.candidate_official_domains else '无'}",
             "官方文档优先：",
@@ -65,6 +67,10 @@ class QueryFormattingNode(BaseQueryNode):
             raw_material.extend(
                 [
                     f"检索轨迹：{len(state.search_history)} 次查询，补检索轮次 {state.iteration_count}。",
+                    *[
+                        f"- {item.get('status', 'unknown')} | {item.get('source_type', 'unknown')} | {item.get('query', '')}"
+                        for item in state.search_history[:8]
+                    ],
                 ]
             )
 
@@ -92,8 +98,27 @@ class QueryFormattingNode(BaseQueryNode):
         )
 
     @staticmethod
+    def _format_search_plan(state: QueryEngineState) -> list[str]:
+        if not state.search_plan or not state.search_plan.questions:
+            return ["- 无结构化查询问题。"]
+        formatted: list[str] = []
+        for index, question in enumerate(state.search_plan.questions, start=1):
+            formatted.append(
+                f"- Q{index} [{question.status}] {question.question} | Google 查询：{question.google_query}"
+            )
+            if question.expected_info:
+                formatted.append(f"  预期信息：{'; '.join(question.expected_info)}")
+            if question.success_criteria:
+                formatted.append(f"  满足标准：{'; '.join(question.success_criteria)}")
+            if question.fallback_queries:
+                formatted.append(f"  补查查询：{'; '.join(question.fallback_queries)}")
+        return formatted
+
+    @staticmethod
     def _fallback_sources(state: QueryEngineState) -> list[SourceRecord]:
-        if state.search_plan and state.search_plan.official_queries:
+        if state.search_plan and state.search_plan.questions:
+            official_query = state.search_plan.questions[0].google_query
+        elif state.search_plan and state.search_plan.official_queries:
             official_query = state.search_plan.official_queries[0]
         else:
             official_query = f"{state.request_context.domain} official documentation"
@@ -108,9 +133,9 @@ class QueryFormattingNode(BaseQueryNode):
                 url=f"https://example.com/search?q={official_query.replace(' ', '+')}",
                 publisher="query-plan",
                 retrieved_at=state.collected_at,
-                reliability="high",
+                reliability="unknown",
                 agent="QueryEngine",
-                source_type="official",
+                source_type="query_plan",
                 snippet=official_query,
             ),
             SourceRecord(
@@ -118,9 +143,9 @@ class QueryFormattingNode(BaseQueryNode):
                 url=f"https://example.com/search?q={tutorial_query.replace(' ', '+')}",
                 publisher="query-plan",
                 retrieved_at=state.collected_at,
-                reliability="medium",
+                reliability="unknown",
                 agent="QueryEngine",
-                source_type="tutorial",
+                source_type="query_plan",
                 snippet=tutorial_query,
             ),
         ]
