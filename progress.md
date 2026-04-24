@@ -527,6 +527,33 @@
   - browser 超时后的实例级短路已显著降低重复卡顿风险
   - Query / Media crawler 现在具备更明确的 HTTP 链式降级策略，不再只依赖单一 fallback provider
 
+### 阶段 23：整体构建进度盘点与未完成任务登记
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 复核当前 `task_plan.md`、`progress.md`、最近 git 提交和工作区状态
+  - 确认阶段 1-8 主链路已完成：Flask、LangGraph、三路采集、完整性评估、Markdown 落盘、后置治理、质量闭环、版本冻结和研报分支均已落地
+  - 确认阶段 9-22 增强链路已完成或 complete-with-followup：QueryEngine / MediaEngine 节点化、ReAct、术语归一化、intake 澄清入口、单引擎日志和 crawler 降级策略均已接入
+  - 记录当前最新实现提交为 `06a99d3 Harden crawler browser fallback`
+  - 确认本轮检查时仅 `AGENTS.md` 存在会话记忆类本地变更，不登记为项目未完成任务
+- 当前整体状态：
+  - 主链路已闭合，可从领域输入进入采集、评估、落盘、治理、冻结和研报消费边界
+  - 推荐入口已升级为 `intake session -> clarify -> append message -> confirm -> task`
+  - Query / Media 已具备节点化、最小 ReAct、术语归一化、来源类型标注和失败可追踪日志
+  - crawler 已具备 browser-first、browser 失败短路和 HTTP provider 链式降级
+- 未完成任务：
+  - 真实联网抓取命中质量仍需提升：browser-first 能运行并有降级，但真实 source 命中率还没有达到稳定可用标准
+  - `agent-browser` 会话稳定性仍需继续观察：当前通过预热 daemon、page 级 close、失败短路降低风险，但默认调用仍偏脆弱
+  - Query planning LLM 超时仍需治理：需要更长或可配置 timeout、重试策略，或更轻量的 fallback query planner
+  - 官方来源自动识别仍需验证：目前能提取候选官方域名，但还缺“候选域名是否真官方”的验证步骤
+  - MediaEngine 观点源质量仍需增强：需要更细的平台白名单、低质量帖子过滤，以及博客、社区、社交热度的区分
+  - workflow 全量稳定回归仍需最终确认：默认回归要继续避免真实网络扰动，live 测试单独保留
+  - 单引擎真实联调仍需再次跑 `ML` / `LangGraph` / `深度学习` 等场景，确认 fallback 不再产生 `example.com` 占位来源作为 live 成功结果
+- 当前保守结论：
+  - KnowledgeForge 已完成端到端骨架和主要后端能力闭环
+  - 下一轮构建应优先聚焦“真实查询质量”，而不是继续扩展新模块
+  - 未完成任务集中在联网质量、来源真实性验证和稳定回归隔离
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -560,6 +587,7 @@
 | logging-query-smoke | `uv run python scripts/test_single_engines.py --engine query --domain ML --mode smoke --allow-fallback --log-dir logs` | 输出并保存 LLM / Embedding / browser / httpx 的 endpoint 与失败原因 | 生成 `logs/single-engines-20260424-144323.log`，脚本通过 | 通过 |
 | intake-regression-pytest | `uv run pytest tests/test_workflow.py tests/test_query_engine.py tests/test_media_engine.py -q` | intake 会话、确认后上下文映射、已确认领域优先规则和既有主流程同时通过 | 21 个测试通过 | 通过 |
 | browser-fallback-pytest | `uv run pytest tests/test_browser_fallbacks.py tests/test_query_engine.py tests/test_media_engine.py tests/test_agent_browser_live.py -q` | browser 超时短路、HTTP 链式降级和 live agent-browser 诊断同时通过 | 13 个测试通过 | 通过 |
+| progress-audit | `git status --short` + `git log --oneline -8` + `progress.md` / `task_plan.md` 复核 | 整体进度和未完成任务可被明确登记 | 已登记阶段 23；本轮只更新进度文档，不改运行代码 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -569,9 +597,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-22 的 Query / Media 增强、intake 收口和 crawler 降级策略已落地 |
-| 我要去哪里？ | 继续收敛真实联网抓取稳定性，尤其是 `agent-browser` 的会话复用方式、搜索目标页选择与 query planning 超时稳定性 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，同时保持失败可快速降级、可追踪、可复盘 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-23 的 Query / Media 增强、intake 收口、crawler 降级策略和整体进度盘点已完成 |
+| 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，保证来源真实、失败可降级、过程可复盘 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 
