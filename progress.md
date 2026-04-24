@@ -504,6 +504,29 @@
   - 推荐路径已变为“模糊输入先走 intake，会话确认后再启动 task”，但 `/tasks` 直跑仍保留
   - 真实联网抓取与 `agent-browser` 排障继续保留到下一优先级，不纳入本轮主目标
 
+### 阶段 22：crawler 降级策略与 browser 短路
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 审计当前未提交改动，确认保留 `tests/test_agent_browser_live.py`，还原 `AGENTS.md`、`tests/test_workflow.py` 的临时试验改动以及 `tmp-fast*` 运行产物删改
+  - 为 `AgentBrowserCLI` 增加健康状态与失败原因记录；browser 搜索或抓取超时后，当前实例会标记为不健康并短路后续 browser 调用
+  - 将 Query / Media crawler 的 HTTP 兜底改为 provider 链，先尝试 DuckDuckGo HTML，再尝试 Bing HTML
+  - 新增 `tests/test_browser_fallbacks.py`，覆盖 browser 超时后短路、以及 Query / Media crawler 会落到第二条 HTTP provider 的路径
+  - 复跑 `tests/test_agent_browser_live.py`，确认当前“预热 daemon + page 级 close”的测试版本可通过
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/tools/agent_browser_cli.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_agent_browser_live.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_browser_fallbacks.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - `agent-browser` 不是完全不可用，但默认调用方式仍偏脆弱
+  - browser 超时后的实例级短路已显著降低重复卡顿风险
+  - Query / Media crawler 现在具备更明确的 HTTP 链式降级策略，不再只依赖单一 fallback provider
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -536,18 +559,19 @@
 | logging-insight-script | `uv run python scripts/test_single_engines.py --engine insight --domain ML --allow-fallback --log-dir logs` | 创建时间戳日志并保持脚本可运行 | 生成 `logs/single-engines-20260424-144313.log`，脚本通过 | 通过 |
 | logging-query-smoke | `uv run python scripts/test_single_engines.py --engine query --domain ML --mode smoke --allow-fallback --log-dir logs` | 输出并保存 LLM / Embedding / browser / httpx 的 endpoint 与失败原因 | 生成 `logs/single-engines-20260424-144323.log`，脚本通过 | 通过 |
 | intake-regression-pytest | `uv run pytest tests/test_workflow.py tests/test_query_engine.py tests/test_media_engine.py -q` | intake 会话、确认后上下文映射、已确认领域优先规则和既有主流程同时通过 | 21 个测试通过 | 通过 |
+| browser-fallback-pytest | `uv run pytest tests/test_browser_fallbacks.py tests/test_query_engine.py tests/test_media_engine.py tests/test_agent_browser_live.py -q` | browser 超时短路、HTTP 链式降级和 live agent-browser 诊断同时通过 | 13 个测试通过 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
 |--------|------|---------|---------|
-| 2026-04-24 | `agent-browser` 在真实 smoke 中仍有 wait/eval/get 超时 | 1 | 已通过日志记录 endpoint、命令、超时和 fallback 路径，后续单独排障 browser 底座 |
+| 2026-04-24 | `agent-browser` 在默认真实 smoke 中仍可能出现 wait/eval/get 超时 | 1 | 已增加实例级 browser 短路与 HTTP provider 链式降级；live 测试改为预热 daemon + page 级 close 后通过 |
 
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-21 的 Query / Media 增强与 intake 收口已落地，当前推荐入口是 intake 会话后再启动 task |
-| 我要去哪里？ | 下一步优先回到真实联网抓取稳定性，定位 `agent-browser` 超时根因，并继续增强 query planning 超时稳定性与 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，先稳定 intake 入口与上下文确认，再继续收敛真实查询质量和可观测性 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-22 的 Query / Media 增强、intake 收口和 crawler 降级策略已落地 |
+| 我要去哪里？ | 继续收敛真实联网抓取稳定性，尤其是 `agent-browser` 的会话复用方式、搜索目标页选择与 query planning 超时稳定性 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，同时保持失败可快速降级、可追踪、可复盘 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

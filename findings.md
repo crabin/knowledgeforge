@@ -85,6 +85,11 @@
 - 对 `confirmed=True` 的上下文保持“已确认输入优先”是必要的，否则前面澄清得到的 `Machine Learning` 之类结果会在引擎层再次被误归一化。
 - `concept_explanation` 和 `qa` 不能直接 confirm 成 task；它们必须通过追加消息切换到 `knowledge_collection`，这也是 intake 会话存在的主要价值。
 
+## 抓取稳定性补充结论
+- `agent-browser` 不是完全不可用；在“预热 daemon + page 级 close + 更稳定的目标页”条件下，live 测试可以通过。
+- 当前更现实的问题是默认 browser 调用太脆弱，一旦 `open` 或 `fetch` 超时，就会在同一次任务里重复付出高昂等待成本。
+- 因此 crawler 需要两层保护：浏览器失败后的实例级短路，以及 HTTP provider 链式降级，而不是简单地“一次 browser 失败后继续硬试”。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

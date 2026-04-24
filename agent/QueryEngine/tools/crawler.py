@@ -44,44 +44,14 @@ class DomainKnowledgeCrawler:
         if browser_hits:
             return browser_hits
 
-        url = "https://html.duckduckgo.com/html/"
-        try:
-            self._log(f"[QUERY-SEARCH][httpx] GET {url} params.q={query} timeout={self._timeout}")
-            with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
-                response = client.get(url, params={"q": query})
-                self._log(f"[QUERY-SEARCH][httpx] status={response.status_code} url={response.url}")
-                response.raise_for_status()
-        except Exception as exc:
-            self._log(f"[QUERY-SEARCH][httpx] failed {exc.__class__.__name__}: {exc}")
-            return []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        hits: list[SearchHit] = []
-        for result in soup.select(".result"):
-            anchor = result.select_one(".result__title a") or result.select_one("a.result__a")
-            snippet_node = result.select_one(".result__snippet")
-            if not anchor or not anchor.get("href"):
-                continue
-            result_url = anchor.get("href", "").strip()
-            title = " ".join(anchor.get_text(" ", strip=True).split())
-            snippet = " ".join((snippet_node.get_text(" ", strip=True) if snippet_node else "").split())
-            hits.append(
-                SearchHit(
-                    title=title,
-                    url=result_url,
-                    snippet=snippet,
-                    source_type=source_type,
-                    score=score_url(result_url, source_type, official_domains, preferred_domains),
-                )
-            )
-
-        hits.sort(key=lambda item: item.score, reverse=True)
-        deduped: OrderedDict[str, SearchHit] = OrderedDict()
-        for hit in hits:
-            deduped.setdefault(hit.url, hit)
-            if len(deduped) >= max_results:
-                break
-        return list(deduped.values())
+        http_hits = self._search_with_http_fallback(
+            query=query,
+            source_type=source_type,
+            official_domains=official_domains,
+            preferred_domains=preferred_domains,
+            max_results=max_results,
+        )
+        return http_hits
 
     def fetch_documents(
         self,
@@ -154,6 +124,108 @@ class DomainKnowledgeCrawler:
         hits.sort(key=lambda item: item.score, reverse=True)
         self._log(f"[QUERY-SEARCH][browser] hits={len(hits[:max_results])} query={query}")
         return hits[:max_results]
+
+    def _search_with_http_fallback(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None,
+        max_results: int,
+    ) -> list[SearchHit]:
+        providers = (
+            ("duckduckgo", "https://html.duckduckgo.com/html/"),
+            ("bing", "https://www.bing.com/search"),
+        )
+        with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
+            for provider_name, url in providers:
+                hits = self._search_http_provider(
+                    client=client,
+                    provider_name=provider_name,
+                    url=url,
+                    query=query,
+                    source_type=source_type,
+                    official_domains=official_domains,
+                    preferred_domains=preferred_domains,
+                    max_results=max_results,
+                )
+                if hits:
+                    return hits
+        return []
+
+    def _search_http_provider(
+        self,
+        *,
+        client: httpx.Client,
+        provider_name: str,
+        url: str,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None,
+        max_results: int,
+    ) -> list[SearchHit]:
+        try:
+            self._log(f"[QUERY-SEARCH][httpx:{provider_name}] GET {url} params.q={query} timeout={self._timeout}")
+            response = client.get(url, params={"q": query})
+            self._log(f"[QUERY-SEARCH][httpx:{provider_name}] status={response.status_code} url={response.url}")
+            response.raise_for_status()
+        except Exception as exc:
+            self._log(f"[QUERY-SEARCH][httpx:{provider_name}] failed {exc.__class__.__name__}: {exc}")
+            return []
+
+        if provider_name == "duckduckgo":
+            selectors = (".result",)
+            anchor_selectors = (".result__title a", "a.result__a")
+            snippet_selectors = (".result__snippet",)
+        else:
+            selectors = ("li.b_algo",)
+            anchor_selectors = ("h2 a",)
+            snippet_selectors = (".b_caption p", "p")
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        hits: list[SearchHit] = []
+        for selector in selectors:
+            for result in soup.select(selector):
+                anchor = None
+                for anchor_selector in anchor_selectors:
+                    anchor = result.select_one(anchor_selector)
+                    if anchor and anchor.get("href"):
+                        break
+                if not anchor or not anchor.get("href"):
+                    continue
+                snippet_node = None
+                for snippet_selector in snippet_selectors:
+                    snippet_node = result.select_one(snippet_selector)
+                    if snippet_node:
+                        break
+                result_url = anchor.get("href", "").strip()
+                title = " ".join(anchor.get_text(" ", strip=True).split())
+                snippet = " ".join((snippet_node.get_text(" ", strip=True) if snippet_node else "").split())
+                hits.append(
+                    SearchHit(
+                        title=title,
+                        url=result_url,
+                        snippet=snippet,
+                        source_type=source_type,
+                        score=score_url(result_url, source_type, official_domains, preferred_domains),
+                    )
+                )
+            if hits:
+                break
+
+        hits.sort(key=lambda item: item.score, reverse=True)
+        deduped: OrderedDict[str, SearchHit] = OrderedDict()
+        for hit in hits:
+            deduped.setdefault(hit.url, hit)
+            if len(deduped) >= max_results:
+                break
+        if deduped:
+            self._log(f"[QUERY-SEARCH][httpx:{provider_name}] hits={len(deduped)} query={query}")
+        else:
+            self._log(f"[QUERY-SEARCH][httpx:{provider_name}] no hits query={query}")
+        return list(deduped.values())
 
     def _log(self, message: str) -> None:
         if self._trace:

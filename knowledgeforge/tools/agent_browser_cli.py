@@ -20,12 +20,28 @@ class AgentBrowserCLI:
         self._timeout = timeout
         self._binary = shutil.which("agent-browser")
         self._trace = trace
+        self._healthy = self._binary is not None
+        self._last_failure_reason = ""
 
     @property
     def available(self) -> bool:
         return self._binary is not None
 
+    @property
+    def healthy(self) -> bool:
+        return self.available and self._healthy
+
+    @property
+    def last_failure_reason(self) -> str:
+        return self._last_failure_reason
+
     def search_bing(self, query: str, limit: int = 5) -> list[BrowserSearchResult]:
+        if not self.healthy:
+            if self.available and self._last_failure_reason:
+                self._log(f"[BROWSER][search] skipped: browser unhealthy reason={self._last_failure_reason}")
+            else:
+                self._log("[BROWSER][search] skipped: agent-browser binary not found")
+            return []
         if not self.available:
             self._log("[BROWSER][search] skipped: agent-browser binary not found")
             return []
@@ -70,11 +86,18 @@ class AgentBrowserCLI:
             return results
         except Exception as exc:
             self._log(f"[BROWSER][search] failed {exc.__class__.__name__}: {exc}")
+            self._mark_unhealthy(f"search:{exc.__class__.__name__}")
             return []
         finally:
             self._close()
 
     def fetch_text(self, url: str) -> str:
+        if not self.healthy:
+            if self.available and self._last_failure_reason:
+                self._log(f"[BROWSER][fetch] skipped: browser unhealthy reason={self._last_failure_reason} url={url}")
+            else:
+                self._log(f"[BROWSER][fetch] skipped: agent-browser binary not found url={url}")
+            return ""
         if not self.available:
             self._log(f"[BROWSER][fetch] skipped: agent-browser binary not found url={url}")
             return ""
@@ -98,6 +121,7 @@ class AgentBrowserCLI:
             return ""
         except Exception as exc:
             self._log(f"[BROWSER][fetch] failed url={url} {exc.__class__.__name__}: {exc}")
+            self._mark_unhealthy(f"fetch:{exc.__class__.__name__}")
             return ""
         finally:
             self._close()
@@ -133,6 +157,13 @@ class AgentBrowserCLI:
             )
         except Exception:
             pass
+
+    def _mark_unhealthy(self, reason: str) -> None:
+        if not self.available:
+            return
+        self._healthy = False
+        self._last_failure_reason = reason
+        self._log(f"[BROWSER][health] degraded reason={reason}")
 
     def _log(self, message: str) -> None:
         if self._trace:

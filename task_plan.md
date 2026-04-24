@@ -7,14 +7,12 @@
 阶段 8：版本冻结与研报分支已完成
 
 ## 下一轮增强 / 当前进行中的补充工作
-- Intake 澄清入口收口
-  - 以 `intake session -> clarify -> append message -> confirm -> task` 作为推荐入口，先把模糊输入收敛成稳定的候选上下文。
-- Clarifier / ContextBuilder 契约对齐
-  - 用 `ClarificationResult` 作为 intake 层唯一结构化输出，`ContextBuilder` 只负责将已确认结果映射为最终 `RequestContext`。
-- Intake API 与审计补全
-  - 完善 `POST /intake/sessions`、`POST /intake/sessions/<session_id>/messages`、`POST /intake/sessions/<session_id>/confirm` 的返回约定、错误码和审计事件。
-- Confirm 后引擎协同
-  - 对 `confirmed=True` 的上下文保持“已确认输入优先”，避免 Query / Media 再次做偏移性归一化。
+- Browser 抓取稳定性
+  - 继续收敛 `agent-browser` 的超时行为、会话复用方式和页面关闭策略，避免同一次任务里反复卡住。
+- crawler 降级策略
+  - 将 Query / Media crawler 固化为“browser-first，失败后快速降级到 HTTP fallback 链”，并在 browser 不健康时短路后续 browser 调用。
+- HTTP 搜索兜底质量
+  - 在 DuckDuckGo HTML 之外保留第二条 HTTP 搜索 provider，减少单一搜索源不可用时的整体失败率。
 - QueryEngine 结构化重构
   - 参考 BettaFish 的设计思路，将 `QueryEngine` 从占位实现升级为由 `search -> summary -> formatting` 组成的节点化结构。
 - 官方文档优先检索策略
