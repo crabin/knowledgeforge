@@ -373,6 +373,21 @@
   - 对 `python scripts/test_single_engines.py --domain ML` 的复测结果是 `query, media` 未拿到真实来源，脚本按预期以错误退出
   - 如果只想快速 smoke test，可显式使用 `--allow-fallback`
 
+### 阶段 16：单引擎脚本增加过程日志
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 为 `scripts/test_single_engines.py` 增加 LLM、Embedding、Query crawler、Media crawler 的跟踪包装
+  - 输出配置日志、Engine 启动日志、LLM 阶段日志、query 日志、命中站点日志、抓取 URL 日志
+  - 在 live 模式下复测 `ML`，确认日志能够直接暴露 `query.plan` 的 LLM 超时以及 DuckDuckGo HTML 查询无命中的事实
+  - 修正 LLM 阶段识别顺序，避免将反思阶段误标成规划阶段
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - 现在线路问题已经可以从脚本日志直接定位，而不需要只看最终 fallback 输出猜原因
+  - `ML` 这个例子暴露出的真实问题是 “LLM 首轮超时 + 搜索结果无命中”，不是“agent 没跑”
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -395,6 +410,7 @@
 | official-domain-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py tests/test_media_engine.py` | QueryEngine 官方来源自动识别接入后仍通过专项测试与集成层验证 | 6 个测试通过 | 通过 |
 | official-domain-script | `uv run python scripts/test_single_engines.py --engine query --domain LangGraph --subdomain 工作流编排 --focus-point 官方文档 --focus-point 最佳实践` | QueryEngine 单引擎脚本可展示候选官方域名识别结果 | 可运行 | 通过 |
 | live-script-ml | `uv run python scripts/test_single_engines.py --domain ML` | 脚本默认要求真实来源，未命中时应明确失败退出 | `query, media` 未拿到真实来源，脚本以 exit 2 退出 | 通过 |
+| live-script-ml-logs | `uv run python scripts/test_single_engines.py --domain ML --allow-fallback` | 脚本应输出 LLM、query、抓取站点等过程日志 | 已确认输出 `LLM timeout`、query 明细、站点命中/无命中和抓取日志 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -404,7 +420,7 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-15 的 Query / Media 增强已落地，单引擎脚本也已切换到真实联调优先 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-16 的 Query / Media 增强已落地，单引擎脚本也具备真实联调和过程日志能力 |
 | 我要去哪里？ | 继续增强官方来源自动识别精度、ReAct 反思策略、crawlers 的真实抓取质量，以及 workflow 回归稳定化 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛官方检索自动识别、社区趋势抓取和真实联调成功率 |
 | 我学到了什么？ | 见 findings.md |
