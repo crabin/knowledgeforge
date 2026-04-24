@@ -407,6 +407,34 @@
   - `ML` 场景下浏览器抓取并没有立刻解决无命中问题，说明 query 质量仍是关键瓶颈
   - 现阶段最稳的路径是“浏览器抓取增强 + query normalization”组合，而不是只切换抓取后端
 
+### 阶段 18：LLM 术语归一化接入 Query / Media
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 新增基于 LLM 的术语归一化模块，在搜索规划前先做缩写补全与搜索词扩展
+  - 为 QueryEngine / MediaEngine state 增加 `normalized_domain`、`aliases`、`search_terms`、`normalization_reasoning`
+  - 将 Query / Media 的 fallback 搜索规划改为优先使用归一化后的完整术语
+  - 在输出中增加 `术语归一化` 与 `归一化说明`
+  - 增加测试覆盖，验证 `ML` 会被扩展成 `machine learning`
+  - 用 live 脚本复测 `ML`，确认日志中已经出现 `normalize.domain -> query.plan` 的链路
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/utils/query_normalization.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_integration_layers.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - `ML` 这类缩写现在已经会先归一化成 `Machine Learning`
+  - 当前剩余问题已从“缩写 query 太差”收敛成“LLM 规划超时与搜索命中率”问题
+  - 归一化模块同时保留了本地缩写表回退，不会因为 LLM 不可用而完全失效
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -431,6 +459,8 @@
 | live-script-ml | `uv run python scripts/test_single_engines.py --domain ML` | 脚本默认要求真实来源，未命中时应明确失败退出 | `query, media` 未拿到真实来源，脚本以 exit 2 退出 | 通过 |
 | live-script-ml-logs | `uv run python scripts/test_single_engines.py --domain ML --allow-fallback` | 脚本应输出 LLM、query、抓取站点等过程日志 | 已确认输出 `LLM timeout`、query 明细、站点命中/无命中和抓取日志 | 通过 |
 | browser-crawler-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py tests/test_media_engine.py` | 接入 browser-first crawler 后既有测试仍通过 | 6 个测试通过 | 通过 |
+| normalization-pytest | `uv run pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py` | LLM 术语归一化接入后 Query / Media / 集成层仍通过 | 8 个测试通过 | 通过 |
+| normalization-script | `uv run python scripts/test_single_engines.py --engine query --domain ML --allow-fallback` | `ML` 应先归一化为 `Machine Learning` 再进入 query planning | 已确认日志出现 `normalize.domain`，后续 query 为 `Machine Learning ...` | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -440,8 +470,8 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-17 的 Query / Media 增强已落地，crawler 也已切到 browser-first |
-| 我要去哪里？ | 继续增强 query normalization、官方来源自动识别精度、ReAct 反思策略，以及 workflow 回归稳定化 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-18 的 Query / Media 增强已落地，包含 browser-first crawler 与 LLM 术语归一化 |
+| 我要去哪里？ | 继续增强 query planning 超时稳定性、官方来源自动识别精度、ReAct 反思策略，以及 workflow 回归稳定化 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量、官方检索自动识别和社区趋势抓取成功率 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |

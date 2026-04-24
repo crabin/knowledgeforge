@@ -14,6 +14,13 @@ class FakeMediaChatClient:
         self.calls += 1
         if self.calls == 1:
             return {
+                "normalized_domain": "machine learning",
+                "aliases": ["ML", "machine learning"],
+                "search_terms": ["machine learning", "ML"],
+                "reasoning": "ML 在技术语境下应扩展为 machine learning。",
+            }
+        if self.calls == 2:
+            return {
                 "social_queries": [
                     "LangGraph site:x.com OR site:twitter.com opinion trend",
                     "LangGraph site:reddit.com discussion adoption",
@@ -29,7 +36,7 @@ class FakeMediaChatClient:
                 "reasoning": "优先抓取技术社区和博客，再用社交媒体补充观点热度。",
                 "is_technical": True,
             }
-        if self.calls == 2:
+        if self.calls == 3:
             return {
                 "missing_aspects": ["缺少博客中的采用信号"],
                 "supplementary_social_queries": [],
@@ -45,6 +52,46 @@ class FakeMediaChatClient:
             "adoption_signals": ["工程博客开始记录真实接入经验。"],
             "future_directions": ["后续讨论将更聚焦生产化治理与最佳实践沉淀。"],
             "coverage_topics": ["工作流编排", "状态持久化"],
+        }
+
+
+class FakeMediaNormalizationChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "normalized_domain": "machine learning",
+                "aliases": ["ML", "machine learning"],
+                "search_terms": ["machine learning", "ML"],
+                "reasoning": "ML 在技术语境下应扩展为 machine learning。",
+            }
+        if self.calls == 2:
+            return {
+                "social_queries": ["machine learning social media discussion trend"],
+                "community_queries": ["machine learning community discussion outlook"],
+                "blog_queries": ["machine learning blog analysis future trend"],
+                "reasoning": "先做术语补全，再生成观点查询。",
+                "is_technical": True,
+            }
+        if self.calls == 3:
+            return {
+                "missing_aspects": [],
+                "supplementary_social_queries": [],
+                "supplementary_community_queries": [],
+                "supplementary_blog_queries": [],
+                "reasoning": "当前结果已足够。",
+            }
+        return {
+            "summary": "已基于完整术语完成趋势整理。",
+            "current_sentiment": "整体讨论稳定。",
+            "mainstream_views": [],
+            "debates": [],
+            "adoption_signals": [],
+            "future_directions": [],
+            "coverage_topics": ["基础概览"],
         }
 
 
@@ -113,6 +160,7 @@ def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> N
     assert "主流看法" in result.key_points[0]
     assert "落地边界" in result.summary
     assert {source.source_type for source in result.sources} == {"social", "community", "blog"}
+    assert any("术语归一化：" in item for item in result.raw_material)
     assert any(item == "社交媒体：" for item in result.raw_material)
     assert any(item == "技术社区：" for item in result.raw_material)
     assert any(item == "博客/长文：" for item in result.raw_material)
@@ -140,6 +188,26 @@ def test_media_engine_fallback_keeps_traceable_sources() -> None:
     assert result.sources
     assert {source.source_type for source in result.sources} == {"social", "community", "blog"}
     assert any("社交查询：" in item for item in result.raw_material)
+
+
+def test_media_engine_normalizes_abbreviation_for_search() -> None:
+    crawler = FakeMediaCrawler()
+    engine = MediaEngine(
+        chat_client=FakeMediaNormalizationChatClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="ML",
+        subdomains=["基础概览"],
+        time_window="近 12 个月",
+        focus_points=["社区观点"],
+        constraints=[],
+        initial_strategy=["ML community trend"],
+    )
+
+    engine.run(context, round_number=1)
+
+    assert any("machine learning" in query.lower() for _, query in crawler.queries)
 
 
 def test_media_ranking_prefers_technical_community_sources() -> None:

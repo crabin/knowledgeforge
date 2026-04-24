@@ -13,12 +13,19 @@ class FakeChatClient:
         self.calls += 1
         if self.calls == 1:
             return {
+                "normalized_domain": "machine learning",
+                "aliases": ["ML", "machine learning"],
+                "search_terms": ["machine learning", "ML"],
+                "reasoning": "ML 在技术语境下应扩展为 machine learning。",
+            }
+        if self.calls == 2:
+            return {
                 "official_queries": ["langgraph official documentation"],
                 "tutorial_queries": ["langgraph tutorial guide"],
                 "official_domains": ["langchain-ai.github.io", "python.langchain.com"],
                 "reasoning": "先查官方文档，再查教程。",
             }
-        if self.calls == 2:
+        if self.calls == 3:
             return {
                 "missing_aspects": ["缺少最佳实践案例"],
                 "supplementary_official_queries": [],
@@ -32,6 +39,43 @@ class FakeChatClient:
             "coverage_topics": ["工作流编排", "知识沉淀"],
             "official_findings": ["LangGraph 官方文档提供核心工作流模式。"],
             "tutorial_findings": ["教程文档提供示例代码。"],
+        }
+
+
+class FakeNormalizationChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "normalized_domain": "machine learning",
+                "aliases": ["ML", "machine learning"],
+                "search_terms": ["machine learning", "ML"],
+                "reasoning": "ML 在技术语境下应扩展为 machine learning。",
+            }
+        if self.calls == 2:
+            return {
+                "official_queries": ["machine learning basics official documentation"],
+                "tutorial_queries": ["machine learning basics tutorial guide"],
+                "official_domains": [],
+                "reasoning": "使用补全后的完整术语生成 query。",
+            }
+        if self.calls == 3:
+            return {
+                "missing_aspects": [],
+                "supplementary_official_queries": [],
+                "supplementary_tutorial_queries": [],
+                "candidate_official_domains": [],
+                "reasoning": "当前结果已足够。",
+            }
+        return {
+            "summary": "已基于完整术语完成检索整理。",
+            "key_points": ["已完成缩写补全"],
+            "coverage_topics": ["基础概览"],
+            "official_findings": [],
+            "tutorial_findings": [],
         }
 
 
@@ -114,6 +158,7 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert result.sources[0].source_type == "official"
     assert result.sources[0].reliability == "high"
     assert any("官方文档优先" in item for item in result.key_points)
+    assert any("术语归一化：" in item for item in result.raw_material)
     assert any("官方文档优先：" in item or item == "官方文档优先：" for item in result.raw_material)
     assert any("反思结论：" in item for item in result.raw_material)
     assert any("候选官方域名：" in item for item in result.raw_material)
@@ -121,3 +166,24 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any(query == "langgraph best practices tutorial" for _, query in crawler.queries)
     assert any("site:github.com" in query for _, query in crawler.queries if _ == "tutorial")
     assert any("langchain-ai.github.io" in item for item in result.raw_material)
+
+
+def test_query_engine_normalizes_abbreviation_for_search() -> None:
+    crawler = FakeCrawler()
+    engine = QueryEngine(
+        chat_client=FakeNormalizationChatClient(),
+        embedding_client=FakeEmbeddingClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="ML",
+        subdomains=["基础概览"],
+        time_window="近 12 个月",
+        focus_points=["官方文档"],
+        constraints=[],
+        initial_strategy=["ML official docs"],
+    )
+
+    engine.run(context, round_number=1)
+
+    assert any("machine learning" in query.lower() for _, query in crawler.queries)

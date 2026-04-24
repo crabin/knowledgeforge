@@ -25,6 +25,8 @@ def log(message: str) -> None:
 
 def infer_llm_stage(system_prompt: str) -> str:
     lowered = system_prompt.lower()
+    if "术语归一化助手" in system_prompt or "normalized_domain" in lowered:
+        return "normalize.domain"
     if "queryengine 反思器" in system_prompt or "candidate_official_domains" in lowered:
         return "query.reflect"
     if "queryengine 搜索规划器" in system_prompt or "official_queries" in lowered:

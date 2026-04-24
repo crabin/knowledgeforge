@@ -12,6 +12,7 @@ from agent.QueryEngine.utils.ranking import (
     build_site_constrained_queries,
     detect_candidate_official_domains,
 )
+from knowledgeforge.utils.query_normalization import normalize_query_term
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
@@ -63,11 +64,15 @@ class QuerySearchNode(BaseQueryNode):
 
     def _build_plan(self, state: QueryEngineState) -> SearchPlan:
         context = state.request_context
+        self._normalize_domain(state)
         if self._chat_client is None:
             return self._fallback_plan(state)
         user_prompt = json.dumps(
             {
-                "domain": context.domain,
+                "domain": state.normalized_domain or context.domain,
+                "original_domain": context.domain,
+                "aliases": state.domain_aliases,
+                "search_terms": state.search_terms,
                 "subdomains": context.subdomains,
                 "time_window": context.time_window,
                 "focus_points": context.focus_points,
@@ -91,12 +96,13 @@ class QuerySearchNode(BaseQueryNode):
 
     def _fallback_plan(self, state: QueryEngineState) -> SearchPlan:
         context = state.request_context
+        subject = state.normalized_domain or context.domain
         official_queries = [
-            f"{context.domain} {topic} official documentation"
+            f"{subject} {topic} official documentation"
             for topic in context.subdomains[:3]
         ]
         tutorial_queries = [
-            f"{context.domain} {topic} tutorial guide"
+            f"{subject} {topic} tutorial guide"
             for topic in context.subdomains[:2]
         ]
         return SearchPlan(
@@ -164,6 +170,18 @@ class QuerySearchNode(BaseQueryNode):
                     doc.embedding_dimensions = len(vector)
             except Exception:
                 pass
+
+    def _normalize_domain(self, state: QueryEngineState) -> None:
+        if state.normalized_domain:
+            return
+        normalized = normalize_query_term(
+            state.request_context.domain,
+            chat_client=self._chat_client,
+        )
+        state.normalized_domain = normalized.normalized_domain
+        state.domain_aliases = normalized.aliases
+        state.search_terms = normalized.search_terms
+        state.normalization_reasoning = normalized.reasoning
 
     @staticmethod
     def _preferred_domains() -> list[str]:

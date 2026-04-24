@@ -54,6 +54,10 @@ class CrawledDocument:
 class QueryEngineState:
     request_context: RequestContext
     round_number: int
+    normalized_domain: str = ""
+    domain_aliases: list[str] = field(default_factory=list)
+    search_terms: list[str] = field(default_factory=list)
+    normalization_reasoning: str = ""
     search_plan: SearchPlan | None = None
     reflection_plan: ReflectionPlan | None = None
     candidate_official_domains: list[str] = field(default_factory=list)

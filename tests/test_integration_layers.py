@@ -14,12 +14,19 @@ class FakeChatClient:
         self.calls += 1
         if self.calls == 1:
             return {
+                "normalized_domain": "知识工程",
+                "aliases": ["知识工程"],
+                "search_terms": ["知识工程", "knowledge engineering"],
+                "reasoning": "原词已足够明确，保留原词并补英文别名。",
+            }
+        if self.calls == 2:
+            return {
                 "official_queries": ["langgraph official documentation"],
                 "tutorial_queries": ["langgraph tutorial guide"],
                 "official_domains": ["langchain-ai.github.io"],
                 "reasoning": "优先查询官方文档，再补充教程。",
             }
-        if self.calls == 2:
+        if self.calls == 3:
             return {
                 "missing_aspects": [],
                 "supplementary_official_queries": [],

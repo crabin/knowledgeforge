@@ -13,6 +13,8 @@ class QueryFormattingNode(BaseQueryNode):
         tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
 
         raw_material = [
+            f"术语归一化：{state.request_context.domain} -> {state.normalized_domain or state.request_context.domain}",
+            f"归一化说明：{state.normalization_reasoning or '无'}",
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             f"候选官方域名：{', '.join(state.candidate_official_domains) if state.candidate_official_domains else '无'}",

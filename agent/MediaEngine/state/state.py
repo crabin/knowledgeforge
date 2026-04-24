@@ -53,6 +53,10 @@ class MediaCrawledDocument:
 class MediaEngineState:
     request_context: RequestContext
     round_number: int
+    normalized_domain: str = ""
+    domain_aliases: list[str] = field(default_factory=list)
+    search_terms: list[str] = field(default_factory=list)
+    normalization_reasoning: str = ""
     search_plan: MediaSearchPlan | None = None
     reflection_plan: MediaReflectionPlan | None = None
     search_hits: list[MediaSearchHit] = field(default_factory=list)

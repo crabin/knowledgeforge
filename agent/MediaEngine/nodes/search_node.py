@@ -8,6 +8,7 @@ from agent.MediaEngine.state.state import MediaEngineState, MediaSearchPlan
 from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.utils.query_normalization import normalize_query_term
 
 
 class MediaSearchNode(BaseMediaNode):
@@ -52,18 +53,22 @@ class MediaSearchNode(BaseMediaNode):
         return state
 
     def _build_plan(self, state: MediaEngineState) -> MediaSearchPlan:
+        self._normalize_domain(state)
         if self._chat_client is None:
             return self._fallback_plan(state)
 
         context = state.request_context
         is_technical = is_technical_context(
-            context.domain,
+            state.normalized_domain or context.domain,
             context.subdomains,
             context.focus_points,
         )
         user_prompt = json.dumps(
             {
-                "domain": context.domain,
+                "domain": state.normalized_domain or context.domain,
+                "original_domain": context.domain,
+                "aliases": state.domain_aliases,
+                "search_terms": state.search_terms,
                 "subdomains": context.subdomains,
                 "time_window": context.time_window,
                 "focus_points": context.focus_points,
@@ -93,25 +98,26 @@ class MediaSearchNode(BaseMediaNode):
     @staticmethod
     def _fallback_plan(state: MediaEngineState) -> MediaSearchPlan:
         context = state.request_context
-        technical = is_technical_context(context.domain, context.subdomains, context.focus_points)
-        main_topic = context.subdomains[0] if context.subdomains else context.domain
+        subject = state.normalized_domain or context.domain
+        technical = is_technical_context(subject, context.subdomains, context.focus_points)
+        main_topic = context.subdomains[0] if context.subdomains else subject
         if technical:
             social_queries = [
-                f"{context.domain} {main_topic} site:x.com OR site:twitter.com opinion trend",
-                f"{context.domain} {main_topic} site:reddit.com discussion adoption",
+                f"{subject} {main_topic} site:x.com OR site:twitter.com opinion trend",
+                f"{subject} {main_topic} site:reddit.com discussion adoption",
             ]
             community_queries = [
-                f"{context.domain} {main_topic} site:news.ycombinator.com discussion",
-                f"{context.domain} {main_topic} site:github.com discussions OR site:v2ex.com",
+                f"{subject} {main_topic} site:news.ycombinator.com discussion",
+                f"{subject} {main_topic} site:github.com discussions OR site:v2ex.com",
             ]
             blog_queries = [
-                f"{context.domain} {main_topic} engineering blog future trend",
-                f"{context.domain} {main_topic} site:juejin.cn OR site:zhihu.com blog analysis",
+                f"{subject} {main_topic} engineering blog future trend",
+                f"{subject} {main_topic} site:juejin.cn OR site:zhihu.com blog analysis",
             ]
         else:
-            social_queries = [f"{context.domain} {main_topic} social media discussion trend"]
-            community_queries = [f"{context.domain} {main_topic} community discussion outlook"]
-            blog_queries = [f"{context.domain} {main_topic} blog analysis future trend"]
+            social_queries = [f"{subject} {main_topic} social media discussion trend"]
+            community_queries = [f"{subject} {main_topic} community discussion outlook"]
+            blog_queries = [f"{subject} {main_topic} blog analysis future trend"]
         return MediaSearchPlan(
             social_queries=social_queries,
             community_queries=community_queries,
@@ -171,3 +177,15 @@ class MediaSearchNode(BaseMediaNode):
 
         state.search_hits = self._dedupe_hits(all_hits)
         state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=10)
+
+    def _normalize_domain(self, state: MediaEngineState) -> None:
+        if state.normalized_domain:
+            return
+        normalized = normalize_query_term(
+            state.request_context.domain,
+            chat_client=self._chat_client,
+        )
+        state.normalized_domain = normalized.normalized_domain
+        state.domain_aliases = normalized.aliases
+        state.search_terms = normalized.search_terms
+        state.normalization_reasoning = normalized.reasoning
