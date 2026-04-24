@@ -267,6 +267,49 @@ def test_task_response_and_logs_include_query_execution_trace(tmp_path: Path) ->
     assert "query_search_executed" in events
 
 
+def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["任务列表"]}).get_json()
+    listed = client.get("/tasks")
+
+    assert listed.status_code == 200
+    payload = listed.get_json()
+    assert payload["count"] >= 1
+    task = next(item for item in payload["tasks"] if item["task_id"] == created["task_id"])
+    assert task["domain"] == "知识工程"
+    assert task["task_status"] == created["task_status"]
+    assert task["document_path"].endswith(".md")
+    assert task["updated_at"]
+
+
+def test_task_list_persists_across_app_recreation(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["持久化"]}).get_json()
+
+    recreated_app = create_app(config)
+    recreated_client = recreated_app.test_client()
+    listed = recreated_client.get("/tasks")
+
+    assert listed.status_code == 200
+    task_ids = [item["task_id"] for item in listed.get_json()["tasks"]]
+    assert created["task_id"] in task_ids
+
+
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

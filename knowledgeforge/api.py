@@ -22,6 +22,10 @@ def create_app(config: AppConfig | None = None) -> Flask:
     def config_status():
         return jsonify(service.get_config_status()), 200
 
+    @app.get("/tasks")
+    def list_tasks():
+        return jsonify(service.list_tasks()), 200
+
     @app.post("/tasks")
     def run_task():
         payload = request.get_json(silent=True) or {}

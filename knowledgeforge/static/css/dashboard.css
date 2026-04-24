@@ -188,7 +188,7 @@ h3 {
 
 .trace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-top: 16px;
 }
@@ -234,6 +234,41 @@ h3 {
   margin-top: 8px;
   color: var(--blue);
   white-space: pre-wrap;
+}
+
+.task-list-item {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 10px;
+  border: 1px solid rgba(23, 33, 31, 0.1);
+  border-radius: 6px;
+  background: #fffdf8;
+  color: var(--ink);
+  text-align: left;
+}
+
+.task-list-item:hover {
+  background: #edf6ee;
+  color: var(--ink);
+}
+
+.task-list-item strong,
+.task-list-item span,
+.task-list-item small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.task-list-item span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.task-list-item small {
+  margin-top: 6px;
+  color: var(--blue);
 }
 
 .config-item,

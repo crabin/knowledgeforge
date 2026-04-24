@@ -123,6 +123,7 @@
             <label for="task-id">Task ID</label>
             <input id="task-id" name="task_id" type="text" placeholder="创建任务后自动填充">
             <div class="button-grid">
+              <button type="button" data-task-action="list">查看任务列表</button>
               <button type="button" data-task-action="get">查询任务</button>
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
@@ -152,6 +153,12 @@
             <h3>调用与执行日志</h3>
             <div id="execution-log-output" class="trace-list">
               <div class="empty-state">任务完成或查看日志后会显示执行事件。</div>
+            </div>
+          </section>
+          <section class="trace-panel">
+            <h3>任务列表</h3>
+            <div id="task-list-output" class="trace-list">
+              <div class="empty-state">点击“查看任务列表”后会显示已保存任务。</div>
             </div>
           </section>
         </div>

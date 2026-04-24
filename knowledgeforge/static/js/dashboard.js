@@ -11,6 +11,7 @@ const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
 const queryPlanOutput = document.querySelector("#query-plan-output");
 const executionLogOutput = document.querySelector("#execution-log-output");
+const taskListOutput = document.querySelector("#task-list-output");
 
 async function requestJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -54,6 +55,7 @@ function showPayload(payload) {
   renderSummary(payload);
   renderQueryPlan(payload);
   renderExecutionLog(payload);
+  renderTaskList(payload);
 }
 
 function showError(error) {
@@ -66,6 +68,7 @@ function showError(error) {
   renderSummary(payload);
   renderQueryPlan(payload);
   renderExecutionLog(payload);
+  renderTaskList(payload);
 }
 
 function syncKnownIds(payload) {
@@ -166,6 +169,33 @@ function renderExecutionLog(payload) {
       return `<div class="trace-item"><strong>${escapeHtml(event)}</strong><span>${escapeHtml([timestamp, agent].filter(Boolean).join(" · "))}</span><code>${escapeHtml(details)}</code></div>`;
     })
     .join("");
+}
+
+function renderTaskList(payload) {
+  const tasks = payload.tasks || payload.task_list || [];
+  if (!tasks.length) {
+    taskListOutput.innerHTML = '<div class="empty-state">暂无已保存任务。</div>';
+    return;
+  }
+
+  taskListOutput.innerHTML = tasks
+    .map((task) => {
+      const title = task.domain || task.normalized_domain || task.task_id;
+      const meta = [
+        task.task_status,
+        task.version,
+        task.updated_at,
+      ].filter(Boolean).join(" · ");
+      const subdomains = Array.isArray(task.subdomains) ? task.subdomains.join(", ") : "";
+      return `<button class="task-list-item" type="button" data-task-id="${escapeHtml(task.task_id)}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta)}</span><small>${escapeHtml(subdomains || task.document_path || task.task_id)}</small></button>`;
+    })
+    .join("");
+
+  taskListOutput.querySelectorAll("[data-task-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      taskIdInput.value = button.dataset.taskId || "";
+    });
+  });
 }
 
 function escapeHtml(value) {
@@ -270,6 +300,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
     const taskId = taskIdInput.value.trim();
     const action = button.dataset.taskAction;
     const route = {
+      list: ["/tasks", "GET"],
       get: [`/tasks/${encodeURIComponent(taskId)}`, "GET"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],

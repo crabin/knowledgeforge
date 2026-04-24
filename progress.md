@@ -735,10 +735,39 @@
   - 任务响应、前端和 audit jsonl 现在都能看到 QueryEngine 查询计划与中间执行事件
   - 浏览器中的 5000 不是当前 Flask 服务；本轮可用地址是 `http://127.0.0.1:5001/`
 
+### 阶段 29：任务列表保存与查看
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - `TaskStateStore` 增加持久化任务列表扫描能力
+  - `TaskService` 增加 `list_tasks()`，返回任务摘要列表
+  - 新增 `GET /tasks` API，与现有 `POST /tasks` 共用路径
+  - 前端任务操作区新增“查看任务列表”按钮
+  - 结果区新增“任务列表”面板，列表项点击后回填 Task ID
+  - 新增任务列表 API、跨 app 重建持久化列表和前端文案测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/state_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_workflow.py tests/test_dashboard.py`：20 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：81 个测试通过
+- 当前保守结论：
+  - 已保存任务可通过 `GET /tasks` 查看摘要列表
+  - 前端可查看任务列表，并从列表项回填 Task ID 继续操作
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 28 已完成；QueryEngine 查询计划与中间执行事件已进入任务响应、audit log 和前端面板 |
+| 我在哪里？ | 阶段 29 已完成；任务列表已可从落盘状态恢复并在前端查看 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

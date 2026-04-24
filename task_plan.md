@@ -29,6 +29,9 @@
 - QueryEngine 中间日志可见化
   - 已完成：任务响应新增 `execution_log` 聚合字段，QueryEngine 写出计划、检索、反思、总结 fallback 等结构化事件。
   - 已完成：新增 `/tasks/{task_id}/logs` 读取 audit jsonl，前端展示“QueryEngine 查询计划”和“调用与执行日志”。
+- 任务列表保存与查看
+  - 已完成：基于已落盘的 task state JSON 生成持久化任务列表，新增 `GET /tasks`。
+  - 已完成：前端新增“查看任务列表”和任务列表面板，点击列表项可回填 Task ID。
 - 技术领域社区优先策略
   - 技术领域默认采用中外技术社区混合来源，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补 `V2EX / 掘金 / 知乎`。
 - crawler 质量增强

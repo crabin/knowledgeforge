@@ -79,6 +79,16 @@ class TaskService:
         request_context = self._context_builder.build(payload)
         return self._run_workflow(request_context, audit_source="api")
 
+    def list_tasks(self) -> dict[str, Any]:
+        tasks = self._state_store.list()
+        in_memory_ids = {task["task_id"] for task in tasks}
+        for task_id, state in self._tasks.items():
+            if task_id in in_memory_ids:
+                continue
+            tasks.append(self._summarize_state(self._serialize_state(state)))
+        tasks = sorted(tasks, key=lambda item: item["updated_at"], reverse=True)
+        return {"count": len(tasks), "tasks": tasks}
+
     def create_intake_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = str(payload.get("message", payload.get("domain", ""))).strip()
         if not message:
@@ -371,6 +381,25 @@ class TaskService:
         if isinstance(value, dict):
             return {key: self._serialize_value(item) for key, item in value.items()}
         return value
+
+    @staticmethod
+    def _summarize_state(payload: dict[str, Any]) -> dict[str, Any]:
+        request_context = payload.get("request_context") or {}
+        post_storage = payload.get("post_storage_result") or {}
+        version_record = post_storage.get("version_record") or {}
+        document_artifact = payload.get("document_artifact") or {}
+        return {
+            "task_id": payload.get("task_id", ""),
+            "task_status": payload.get("task_status", "unknown"),
+            "domain": request_context.get("domain", ""),
+            "normalized_domain": request_context.get("normalized_domain", ""),
+            "subdomains": request_context.get("subdomains", []),
+            "round_number": payload.get("round_number", 1),
+            "document_path": document_artifact.get("path", ""),
+            "version": version_record.get("version", ""),
+            "report_eligible": version_record.get("report_eligible", False),
+            "updated_at": version_record.get("updated_at") or version_record.get("frozen_at") or now_iso(),
+        }
 
     @staticmethod
     def _deserialize_request_context(payload: dict[str, Any]) -> RequestContext:
