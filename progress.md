@@ -607,6 +607,22 @@
   - `uv run pytest -q`：32 个测试通过
   - 本地 Flask smoke：`http://127.0.0.1:5001/` 首页 200，CSS / JS 静态资源 200
 
+### 阶段 25：Machine Learning 输出质量诊断
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 检查 `save/Machine Learning/README.md` 与 `save/Machine Learning/基础概念/20260424-machine-learning-mixed.md`
+  - 复核 `.knowledgeforge/tasks/32bd2f1a6e484e24b40a17257742ae60.json`、audit 与 intake session
+  - 追查 QueryEngine / MediaEngine 的 search、crawler、ranking、summary、formatting 节点
+  - 追查 CompletenessEvaluator、MarkdownKnowledgeWriter、QualityChecker 和 VersionRecorder 的门禁逻辑
+- 诊断结论：
+  - intake 已正确将 `ML` 归一化为 `Machine Learning`，不是入口识别失败
+  - 搜索规划 LLM 超时后触发 fallback；browser 无结果、DuckDuckGo 超时后，Bing fallback 返回 Weblio 词典页
+  - crawler 与 ranking 没有进行完整领域短语相关性校验，且把请求类型 `official` 误当作结果可信度依据
+  - Media 平台分类没有硬过滤，非社区/社交/博客页面会被包装为 requested platform type
+  - 完整性评估和质量检测只检查“是否有来源/章节/实体”，没有检查来源是否相关、权威、可支撑结论
+  - 因此错误文档被写入、通过质检、冻结为 verified
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

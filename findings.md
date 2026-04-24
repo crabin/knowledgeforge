@@ -90,6 +90,16 @@
 - 当前更现实的问题是默认 browser 调用太脆弱，一旦 `open` 或 `fetch` 超时，就会在同一次任务里重复付出高昂等待成本。
 - 因此 crawler 需要两层保护：浏览器失败后的实例级短路，以及 HTTP provider 链式降级，而不是简单地“一次 browser 失败后继续硬试”。
 
+## Machine Learning 输出质量诊断
+- `save/Machine Learning` 的结果未达到知识沉淀要求，核心症状是 Query / Media 来源严重跑偏：Weblio 的 `machine`、`machinery`、`sewing machine` 词典页面被当成 Machine Learning 的官方文档、技术社区观点和高/中可信来源。
+- 当前任务上下文并没有把 `ML` 误识别为普通 machine；intake 已正确生成 `normalized_domain=Machine Learning`，问题发生在后续检索与质量门禁。
+- 真实运行链路显示：LLM 搜索规划超时后使用 fallback query；browser 搜索没有拿到结果；DuckDuckGo HTML 超时；Bing HTTP fallback 返回 Weblio 结果。crawler 未过滤 Bing 跳转链接，也没有检查标题、摘要、URL 是否与完整领域短语 `Machine Learning` 相关。
+- Query 打分逻辑把 `source_type="official"` 直接加 5 分，formatter 又按 source_type 把 reliability 固定为 `high`，导致“请求的是官方来源”被误写成“结果是高可信官方来源”。
+- Media crawler 同样缺少平台硬约束；当 requested_type 是 social/community/blog 时，非社区页面会被 classify 成 requested_type，从而把 Weblio 词典页包装成社交媒体或技术社区来源。
+- 完整性评估只检查 QueryEngine 是否存在来源、子主题是否覆盖，不检查来源相关性、权威域名、重复率、实际证据是否支撑子主题，因此错误来源可以通过入库前门。
+- QualityChecker 只检查 front matter、证据章节、实体、图谱节点和“是否有来源”，不检查来源内容质量、publisher 是否为搜索引擎跳转域、证据是否支持结论，因此该文档还能被冻结为 verified/report_eligible。
+- Markdown Writer 生成的是“首版知识结构已经形成”等模板式结论，没有根据质量失败或弱证据降级表述，进一步放大了错误结果的可信外观。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
