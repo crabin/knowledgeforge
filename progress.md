@@ -435,6 +435,22 @@
   - 当前剩余问题已从“缩写 query 太差”收敛成“LLM 规划超时与搜索命中率”问题
   - 归一化模块同时保留了本地缩写表回退，不会因为 LLM 不可用而完全失效
 
+### 阶段 19：agent-browser 独立联调诊断
+- **状态：** complete-with-followup
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 在 `tests/` 下新增 `tests/test_agent_browser_live.py`，专门绕过 Query / Media agent，直接调用 `agent-browser` 做独立联调
+  - 为测试封装带超时与进程组强制回收的 `run_agent_browser(...)`，避免 `agent-browser` 卡住时把整个 pytest 一起拖死
+  - 分别验证“打开 DuckDuckGo HTML 搜索页并抽取结果”和“打开 LangGraph 官网并抓取正文”两条最小真实路径
+  - 额外检查 `agent-browser session list`、帮助信息和后台 Chrome for Testing 进程，确认 daemon 能启动、问题集中在 `open/get/snapshot` 交互层
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_agent_browser_live.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - `agent-browser` 二进制和 daemon 本身可用，但当前环境中 `open` 在 30 秒内无法稳定返回
+  - 这说明 Query / Media 的真实联网失败，至少有一部分根因在浏览器抓取底座，而不只是 query 质量
+  - 在 `agent-browser` 稳定性未解决前，crawler 需要继续保留非浏览器兜底路径
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -461,6 +477,7 @@
 | browser-crawler-pytest | `uv run pytest tests/test_query_engine.py tests/test_integration_layers.py tests/test_media_engine.py` | 接入 browser-first crawler 后既有测试仍通过 | 6 个测试通过 | 通过 |
 | normalization-pytest | `uv run pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py` | LLM 术语归一化接入后 Query / Media / 集成层仍通过 | 8 个测试通过 | 通过 |
 | normalization-script | `uv run python scripts/test_single_engines.py --engine query --domain ML --allow-fallback` | `ML` 应先归一化为 `Machine Learning` 再进入 query planning | 已确认日志出现 `normalize.domain`，后续 query 为 `Machine Learning ...` | 通过 |
+| agent-browser-live-pytest | `uv run pytest tests/test_agent_browser_live.py -q` | 独立验证 `agent-browser` 能打开真实页面并提取结果 | 2 个测试失败；DuckDuckGo HTML 和 LangGraph 官网的 `open` 均在 30 秒超时 | 已记录 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -471,7 +488,7 @@
 | 问题 | 答案 |
 |------|------|
 | 我在哪里？ | 阶段 8 已完成；阶段 9-18 的 Query / Media 增强已落地，包含 browser-first crawler 与 LLM 术语归一化 |
-| 我要去哪里？ | 继续增强 query planning 超时稳定性、官方来源自动识别精度、ReAct 反思策略，以及 workflow 回归稳定化 |
+| 我要去哪里？ | 先定位 `agent-browser` 的 `open` 超时根因，再决定 browser-first crawler 是否继续作为主路径；同时继续增强 query planning 超时稳定性与 workflow 回归稳定化 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量、官方检索自动识别和社区趋势抓取成功率 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |

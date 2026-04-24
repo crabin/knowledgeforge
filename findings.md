@@ -68,6 +68,11 @@
 - `MediaCrawler` 这类项目的核心启发不是平台代码照搬，而是“浏览器优先、网络请求兜底、把抓取与正文提取分层”。
 - `ML` 这类缩写词案例说明：切换到浏览器抓取并不能单独解决问题，query normalization 仍然是关键。
 
+## agent-browser 独立诊断结论
+- 当前环境下，`agent-browser` 的 daemon 和 session 管理可以启动，但 `open` 对 DuckDuckGo HTML 与 LangGraph 官网都在 30 秒内超时，问题已经低于 Query / Media agent 这一层。
+- 因此“联网失败”不能只归因于 query planning；浏览器抓取底座本身也需要单独排障，否则 browser-first crawler 的收益会被底层阻塞抵消。
+- 在 `agent-browser` 稳定性没验证通过之前，保留 `httpx` 或其他非浏览器抓取兜底是必要的，不能把浏览器路径视为唯一真实抓取方案。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
