@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KnowledgeForge 功能工作台</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Knowledge Engineering Console</p>
+        <h1>KnowledgeForge 功能工作台</h1>
+        <p class="lead">从领域输入、交互澄清、并行采集到质量回流、版本冻结和研报生成的一站式演示面板。</p>
+      </div>
+      <div class="status-stack" aria-label="系统状态">
+        <div class="status-pill">
+          <span class="status-dot" id="health-dot"></span>
+          <span id="health-label">检测中</span>
+        </div>
+        <button class="ghost-button" type="button" id="refresh-status">刷新配置</button>
+      </div>
+    </header>
+
+    <main class="dashboard-shell">
+      <section class="panel hero-panel" aria-labelledby="flow-title">
+        <div class="section-heading">
+          <p class="eyebrow">Flow Map</p>
+          <h2 id="flow-title">主流程能力</h2>
+        </div>
+        <div class="flow-grid">
+          <article class="flow-step active">
+            <span>01</span>
+            <h3>输入澄清</h3>
+            <p>创建 intake session，补充边界、子方向、语言与关注点。</p>
+          </article>
+          <article class="flow-step">
+            <span>02</span>
+            <h3>并行采集</h3>
+            <p>Insight、Query、Media 三路能力并行补充内部线索、权威事实与媒体视角。</p>
+          </article>
+          <article class="flow-step">
+            <span>03</span>
+            <h3>完整性评估</h3>
+            <p>检查核心子主题、可信来源、信息空洞、冲突与时效性。</p>
+          </article>
+          <article class="flow-step">
+            <span>04</span>
+            <h3>Markdown 落盘</h3>
+            <p>按领域、子领域、文章路径保存可追溯知识文档。</p>
+          </article>
+          <article class="flow-step">
+            <span>05</span>
+            <h3>结构化抽取</h3>
+            <p>执行解析、清洗、Chunk、Metadata、Entity 与 Relation 抽取。</p>
+          </article>
+          <article class="flow-step">
+            <span>06</span>
+            <h3>Neo4j 关联</h3>
+            <p>把本地路径与 Domain、SubTopic、Article 和实体关系对齐。</p>
+          </article>
+          <article class="flow-step">
+            <span>07</span>
+            <h3>质量回流</h3>
+            <p>区分修复流与补检索流，不返回笼统失败。</p>
+          </article>
+          <article class="flow-step">
+            <span>08</span>
+            <h3>版本与研报</h3>
+            <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel config-panel" aria-labelledby="config-title">
+        <div class="section-heading compact">
+          <p class="eyebrow">Runtime</p>
+          <h2 id="config-title">配置状态</h2>
+        </div>
+        <div class="config-grid" id="config-grid">
+          <div class="empty-state">正在读取配置状态</div>
+        </div>
+      </section>
+
+      <section class="workbench">
+        <div class="panel" aria-labelledby="intake-title">
+          <div class="section-heading compact">
+            <p class="eyebrow">Intake</p>
+            <h2 id="intake-title">交互式输入</h2>
+          </div>
+          <form class="action-form" id="create-intake-form">
+            <label for="intake-message">初始描述</label>
+            <textarea id="intake-message" name="message" rows="4" placeholder="例如：用中文整理 ML 的最新论文方向"></textarea>
+            <button type="submit">创建澄清会话</button>
+          </form>
+          <form class="action-form split-form" id="append-intake-form">
+            <label for="intake-session-id">Session ID</label>
+            <input id="intake-session-id" name="session_id" type="text" placeholder="创建后自动填充">
+            <label for="intake-followup">补充消息</label>
+            <textarea id="intake-followup" name="message" rows="3" placeholder="补充范围、语言、时间窗口或重点"></textarea>
+            <div class="button-row">
+              <button type="submit">追加澄清</button>
+              <button class="secondary-button" type="button" id="confirm-intake">确认并启动任务</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="panel" aria-labelledby="task-title">
+          <div class="section-heading compact">
+            <p class="eyebrow">Task</p>
+            <h2 id="task-title">任务操作</h2>
+          </div>
+          <form class="action-form" id="direct-task-form">
+            <label for="task-payload">直接创建任务 JSON</label>
+            <textarea id="task-payload" name="payload" rows="8">{
+  "domain": "知识工程",
+  "subdomains": ["工作流编排", "知识沉淀"],
+  "focus_points": ["状态恢复", "来源追溯"]
+}</textarea>
+            <button type="submit">创建任务</button>
+          </form>
+          <form class="action-form split-form" id="task-actions-form">
+            <label for="task-id">Task ID</label>
+            <input id="task-id" name="task_id" type="text" placeholder="创建任务后自动填充">
+            <div class="button-grid">
+              <button type="button" data-task-action="get">查询任务</button>
+              <button type="button" data-task-action="resume">恢复任务</button>
+              <button type="button" data-task-action="frozen">查看冻结版本</button>
+              <button type="button" data-task-action="report">生成研报</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel result-panel" aria-labelledby="result-title">
+        <div class="section-heading compact">
+          <p class="eyebrow">Response</p>
+          <h2 id="result-title">响应与关键字段</h2>
+        </div>
+        <div class="summary-strip" id="summary-strip">
+          <div class="empty-state">执行操作后会显示 task_id、状态、文档路径、质量检查与版本信息。</div>
+        </div>
+        <pre id="response-output" aria-live="polite">{}</pre>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+  </body>
+</html>

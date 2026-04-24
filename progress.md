@@ -594,6 +594,19 @@
 |--------|------|---------|---------|
 | 2026-04-24 | `agent-browser` 在默认真实 smoke 中仍可能出现 wait/eval/get 超时 | 1 | 已增加实例级 browser 短路与 HTTP provider 链式降级；live 测试改为预热 daemon + page 级 close 后通过 |
 
+### 阶段 24：Flask 功能展示前端
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 新增 Flask 首页路由，渲染 KnowledgeForge 功能工作台
+  - 新增模板与本地 CSS / JavaScript 静态资源
+  - 页面覆盖配置状态、intake 会话、任务创建、查询、恢复、冻结版本和研报生成等现有 API
+  - 新增首页渲染与状态接口回归测试
+- 验证结果：
+  - `uv run pytest tests/test_dashboard.py tests/test_workflow.py -q`：17 个测试通过
+  - `uv run pytest -q`：32 个测试通过
+  - 本地 Flask smoke：`http://127.0.0.1:5001/` 首页 200，CSS / JS 静态资源 200
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

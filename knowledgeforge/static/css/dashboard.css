@@ -1,0 +1,371 @@
+:root {
+  --ink: #17211f;
+  --muted: #5d6a66;
+  --paper: #f4f1e8;
+  --panel: #fffdf6;
+  --line: #d8d1c2;
+  --green: #1e7b64;
+  --blue: #2f5f91;
+  --red: #a9483f;
+  --gold: #bb8b27;
+  --shadow: 0 18px 48px rgba(31, 38, 35, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  background:
+    linear-gradient(90deg, rgba(23, 33, 31, 0.04) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(23, 33, 31, 0.04) 1px, transparent 1px),
+    var(--paper);
+  background-size: 28px 28px;
+  font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  padding: 32px clamp(18px, 4vw, 56px) 18px;
+  border-bottom: 1px solid rgba(23, 33, 31, 0.14);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--green);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 10px;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: clamp(2rem, 5vw, 4.6rem);
+  line-height: 0.98;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: 1.35rem;
+}
+
+h3 {
+  margin-bottom: 8px;
+  font-size: 1rem;
+}
+
+.lead {
+  max-width: 760px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.status-stack {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.status-pill {
+  display: inline-flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 253, 246, 0.86);
+  font-weight: 700;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--gold);
+}
+
+.status-dot.ok {
+  background: var(--green);
+}
+
+.status-dot.fail {
+  background: var(--red);
+}
+
+.dashboard-shell {
+  display: grid;
+  gap: 18px;
+  padding: 18px clamp(18px, 4vw, 56px) 48px;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 246, 0.94);
+  box-shadow: var(--shadow);
+}
+
+.hero-panel,
+.config-panel,
+.result-panel {
+  padding: 22px;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.section-heading.compact {
+  margin-bottom: 14px;
+}
+
+.flow-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flow-step {
+  min-height: 154px;
+  padding: 15px;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-radius: 6px;
+  background: #fbf8ee;
+}
+
+.flow-step.active {
+  border-color: rgba(30, 123, 100, 0.4);
+  background: #edf6ee;
+}
+
+.flow-step span {
+  display: block;
+  margin-bottom: 18px;
+  color: var(--green);
+  font-weight: 900;
+}
+
+.flow-step p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.config-grid,
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.config-item,
+.summary-item {
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-radius: 6px;
+  background: #fbf8ee;
+}
+
+.config-item strong,
+.summary-item strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.config-item span,
+.summary-item span {
+  color: var(--ink);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.workbench .panel {
+  padding: 20px;
+}
+
+.action-form {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.action-form:last-child {
+  margin-bottom: 0;
+}
+
+label {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffdf8;
+  color: var(--ink);
+  outline: none;
+  padding: 11px 12px;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.55;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(30, 123, 100, 0.14);
+}
+
+button {
+  min-height: 42px;
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  background: var(--ink);
+  color: #fffdf6;
+  cursor: pointer;
+  font-weight: 800;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  background: var(--green);
+  border-color: var(--green);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+  transform: none;
+}
+
+.ghost-button,
+.secondary-button {
+  background: transparent;
+  color: var(--ink);
+}
+
+.button-row,
+.button-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.button-row {
+  grid-template-columns: 1fr 1fr;
+}
+
+.button-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.empty-state {
+  grid-column: 1 / -1;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 253, 246, 0.6);
+}
+
+#response-output {
+  min-height: 280px;
+  max-height: 520px;
+  margin: 16px 0 0;
+  overflow: auto;
+  border: 1px solid rgba(23, 33, 31, 0.18);
+  border-radius: 8px;
+  background: #141c1a;
+  color: #ecf6ee;
+  padding: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.tone-ok {
+  color: var(--green);
+}
+
+.tone-bad {
+  color: var(--red);
+}
+
+@media (max-width: 980px) {
+  .topbar,
+  .workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .status-stack {
+    justify-items: start;
+  }
+
+  .flow-grid,
+  .config-grid,
+  .summary-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .topbar {
+    padding-top: 24px;
+  }
+
+  .hero-panel,
+  .config-panel,
+  .result-panel,
+  .workbench .panel {
+    padding: 16px;
+  }
+
+  .flow-grid,
+  .config-grid,
+  .summary-strip,
+  .button-row,
+  .button-grid {
+    grid-template-columns: 1fr;
+  }
+}

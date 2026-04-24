@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 from knowledgeforge.config import AppConfig
 from knowledgeforge.services.task_service import TaskService
@@ -9,6 +9,10 @@ from knowledgeforge.services.task_service import TaskService
 def create_app(config: AppConfig | None = None) -> Flask:
     app = Flask(__name__)
     service = TaskService(config or AppConfig.from_env())
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
 
     @app.get("/health")
     def health() -> tuple[dict[str, str], int]:
