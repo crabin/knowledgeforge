@@ -474,6 +474,36 @@
   - `ML` smoke 复测确认日志能同时观察 LLM 超时、browser 搜索 URL、httpx URL、fetch URL、Embedding endpoint 和耗时
   - 真实网络命中质量仍未解决，本次只增强可观测性和运行记录保存
 
+### 阶段 21：Intake 澄清入口收口
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 将 intake 会话主线收口为 `create -> append message -> confirm -> task` 的后端入口
+  - 补齐 `ClarificationResult`、`IntakeSession`、`ContextBuilder`、`IntakeSessionStore`、`TaskService` 和 API 路由之间的契约
+  - 明确 `append_intake_message` 基于完整消息历史重新澄清，而不是只处理最后一句
+  - 固化 `concept_explanation` / `qa` 不能直接 confirm 成知识采集任务的规则
+  - 为 QueryEngine / MediaEngine 增加“已确认领域优先”的测试覆盖，避免确认后的领域再次被偏移性归一化
+  - 新增 intake API 回归测试，覆盖创建、追加、确认、空消息和缺失 session 的错误路径
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/intake/context_builder.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/intake/clarifier.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/intake_session_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - intake 入口现在已经从“可跑雏形”收口成了可稳定回归的后端会话层
+  - 推荐路径已变为“模糊输入先走 intake，会话确认后再启动 task”，但 `/tasks` 直跑仍保留
+  - 真实联网抓取与 `agent-browser` 排障继续保留到下一优先级，不纳入本轮主目标
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -505,6 +535,7 @@
 | logging-unit-pytest | `uv run pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py -q` | 日志 callback 不破坏 Query / Media / 集成测试 | 8 个测试通过 | 通过 |
 | logging-insight-script | `uv run python scripts/test_single_engines.py --engine insight --domain ML --allow-fallback --log-dir logs` | 创建时间戳日志并保持脚本可运行 | 生成 `logs/single-engines-20260424-144313.log`，脚本通过 | 通过 |
 | logging-query-smoke | `uv run python scripts/test_single_engines.py --engine query --domain ML --mode smoke --allow-fallback --log-dir logs` | 输出并保存 LLM / Embedding / browser / httpx 的 endpoint 与失败原因 | 生成 `logs/single-engines-20260424-144323.log`，脚本通过 | 通过 |
+| intake-regression-pytest | `uv run pytest tests/test_workflow.py tests/test_query_engine.py tests/test_media_engine.py -q` | intake 会话、确认后上下文映射、已确认领域优先规则和既有主流程同时通过 | 21 个测试通过 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
@@ -514,9 +545,9 @@
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-20 的 Query / Media 增强已落地，包含 browser-first crawler、LLM 术语归一化和时间戳运行日志 |
-| 我要去哪里？ | 先定位 `agent-browser` 的超时根因，再继续增强 query planning 超时稳定性、搜索命中质量与 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量，同时保证每次外部调用可追踪、可复盘 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-21 的 Query / Media 增强与 intake 收口已落地，当前推荐入口是 intake 会话后再启动 task |
+| 我要去哪里？ | 下一步优先回到真实联网抓取稳定性，定位 `agent-browser` 超时根因，并继续增强 query planning 超时稳定性与 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，先稳定 intake 入口与上下文确认，再继续收敛真实查询质量和可观测性 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 

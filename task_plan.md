@@ -7,6 +7,14 @@
 阶段 8：版本冻结与研报分支已完成
 
 ## 下一轮增强 / 当前进行中的补充工作
+- Intake 澄清入口收口
+  - 以 `intake session -> clarify -> append message -> confirm -> task` 作为推荐入口，先把模糊输入收敛成稳定的候选上下文。
+- Clarifier / ContextBuilder 契约对齐
+  - 用 `ClarificationResult` 作为 intake 层唯一结构化输出，`ContextBuilder` 只负责将已确认结果映射为最终 `RequestContext`。
+- Intake API 与审计补全
+  - 完善 `POST /intake/sessions`、`POST /intake/sessions/<session_id>/messages`、`POST /intake/sessions/<session_id>/confirm` 的返回约定、错误码和审计事件。
+- Confirm 后引擎协同
+  - 对 `confirmed=True` 的上下文保持“已确认输入优先”，避免 Query / Media 再次做偏移性归一化。
 - QueryEngine 结构化重构
   - 参考 BettaFish 的设计思路，将 `QueryEngine` 从占位实现升级为由 `search -> summary -> formatting` 组成的节点化结构。
 - 官方文档优先检索策略
@@ -20,7 +28,7 @@
 - crawler 质量增强
   - 在首版 crawler 已落地的基础上，继续收敛 browser-first 抓取、官方域名识别、社区平台识别、正文提取质量和低质量页面降权策略。
 - workflow 回归稳定化
-  - 继续隔离真实网络检索对主流程测试的影响，并补一次稳定、可重复的 workflow 最终回归确认。
+  - 继续隔离真实网络检索对主流程测试的影响，并把 intake 新入口纳入稳定、可重复的 workflow 回归确认。
 
 ## 总体策略
 - 先打通主链路，再补深治理能力。
@@ -223,3 +231,4 @@
 - MediaEngine 补充增强阶段需额外满足“社区/社交/博客职责清晰、趋势观点可追溯、技术社区优先策略可验证”。
 - ReAct 升级后需额外满足“反思结论可解释、补检索可追溯、单轮补检索后稳定收口”。
 - 单引擎真实联调日志需额外满足“记录每次 LLM / Embedding / browser / httpx 调用的 endpoint、耗时、状态或失败原因，并按时间保存到 `logs/`”。
+- Intake 收口阶段需额外满足“创建与追加都返回完整 intake session、confirm 返回 `{ intake_session, task }`、非知识采集 intent 不允许直接启动任务”。

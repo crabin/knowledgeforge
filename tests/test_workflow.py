@@ -5,6 +5,7 @@ from pathlib import Path
 
 from knowledgeforge.api import create_app
 from knowledgeforge.config import AppConfig
+from knowledgeforge.services.task_service import TaskService
 
 
 def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
@@ -43,6 +44,179 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     content = document_path.read_text(encoding="utf-8")
     assert "## 证据与来源" in content
     assert "source_type: mixed" in content
+
+
+def test_intake_session_clarifies_ml_without_starting_task(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/intake/sessions", json={"message": "ML"})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    candidate = payload["candidate_context"]
+    assert payload["status"] == "draft"
+    assert payload["task_id"] is None
+    assert candidate["normalized_domain"] == "Machine Learning"
+    assert candidate["intent"] == "knowledge_collection"
+    assert candidate["output_language"] == "zh-CN"
+    assert candidate["subdomains"] == ["基础概念", "核心方法", "应用场景"]
+
+
+def test_intake_confirm_starts_task_with_normalized_domain(tmp_path: Path, monkeypatch) -> None:
+    def fake_run_workflow(self, request_context, *, audit_source: str):
+        return {
+            "task_id": "task-from-intake",
+            "task_status": "created",
+            "request_context": request_context.to_dict(),
+            "audit_source": audit_source,
+        }
+
+    monkeypatch.setattr(TaskService, "_run_workflow", fake_run_workflow)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/intake/sessions", json={"message": "ML"}).get_json()
+
+    confirmed = client.post(f"/intake/sessions/{created['session_id']}/confirm")
+
+    assert confirmed.status_code == 201
+    payload = confirmed.get_json()
+    context = payload["task"]["request_context"]
+    assert payload["intake_session"]["status"] == "confirmed"
+    assert context["domain"] == "Machine Learning"
+    assert context["normalized_domain"] == "Machine Learning"
+    assert context["original_input"] == "ML"
+    assert context["output_language"] == "zh-CN"
+    assert context["confirmed"] is True
+
+
+def test_intake_detects_english_language_preference(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/intake/sessions", json={"message": "用英文整理 ML 的最新论文方向"})
+
+    assert response.status_code == 201
+    candidate = response.get_json()["candidate_context"]
+    assert candidate["normalized_domain"] == "Machine Learning"
+    assert candidate["output_language"] == "en"
+    assert "最新论文方向" in candidate["subdomains"]
+
+
+def test_intake_append_message_reclarifies_from_full_history(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    created = client.post("/intake/sessions", json={"message": "解释一下 ML 是什么"}).get_json()
+    session_id = created["session_id"]
+
+    appended = client.post(
+        f"/intake/sessions/{session_id}/messages",
+        json={"message": "我想整理成知识库，并且用英文输出最新论文方向"},
+    )
+
+    assert appended.status_code == 200
+    payload = appended.get_json()
+    candidate = payload["candidate_context"]
+    assert len(payload["messages"]) == 2
+    assert candidate["normalized_domain"] == "Machine Learning"
+    assert candidate["intent"] == "knowledge_collection"
+    assert candidate["output_language"] == "en"
+    assert "最新论文方向" in candidate["subdomains"]
+
+
+def test_intake_concept_explanation_does_not_start_collection(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/intake/sessions", json={"message": "解释一下 ML 是什么"}).get_json()
+
+    assert created["candidate_context"]["intent"] == "concept_explanation"
+    assert created["candidate_context"]["needs_clarification"] is True
+
+    confirmed = client.post(f"/intake/sessions/{created['session_id']}/confirm")
+    assert confirmed.status_code == 400
+
+
+def test_intake_empty_message_returns_400(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/intake/sessions", json={"message": "ML"}).get_json()
+
+    append_response = client.post(
+        f"/intake/sessions/{created['session_id']}/messages",
+        json={"message": ""},
+    )
+    create_response = client.post("/intake/sessions", json={"message": ""})
+
+    assert append_response.status_code == 400
+    assert create_response.status_code == 400
+
+
+def test_intake_message_and_confirm_missing_session_return_404(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    appended = client.post("/intake/sessions/missing/messages", json={"message": "补充说明"})
+    confirmed = client.post("/intake/sessions/missing/confirm")
+
+    assert appended.status_code == 404
+    assert confirmed.status_code == 404
 
 
 def test_post_storage_result_contains_graph_and_extraction(tmp_path: Path) -> None:

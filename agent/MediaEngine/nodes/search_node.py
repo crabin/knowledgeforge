@@ -181,6 +181,13 @@ class MediaSearchNode(BaseMediaNode):
     def _normalize_domain(self, state: MediaEngineState) -> None:
         if state.normalized_domain:
             return
+        context = state.request_context
+        if context.normalized_domain:
+            state.normalized_domain = context.normalized_domain
+            state.domain_aliases = self._dedupe_terms([context.domain, context.normalized_domain])
+            state.search_terms = self._dedupe_terms([context.normalized_domain, *context.search_terms, context.domain])
+            state.normalization_reasoning = context.clarification_summary or "已使用 Intake 阶段确认的领域归一化结果。"
+            return
         normalized = normalize_query_term(
             state.request_context.domain,
             chat_client=self._chat_client,
@@ -189,3 +196,16 @@ class MediaSearchNode(BaseMediaNode):
         state.domain_aliases = normalized.aliases
         state.search_terms = normalized.search_terms
         state.normalization_reasoning = normalized.reasoning
+
+    @staticmethod
+    def _dedupe_terms(items: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen = set()
+        for item in items:
+            cleaned = item.strip()
+            key = cleaned.lower()
+            if not cleaned or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(cleaned)
+        return deduped

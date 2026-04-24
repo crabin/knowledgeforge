@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 
 Role = Literal["user", "assistant", "system"]
+TaskIntent = Literal["knowledge_collection", "concept_explanation", "qa"]
 CompletenessStatus = Literal["pass", "supplement_required"]
 GovernanceStatus = Literal["passed", "failed"]
 RemediationFlow = Literal["repair_flow", "research_flow"]
@@ -49,9 +50,52 @@ class RequestContext:
     focus_points: list[str]
     constraints: list[str]
     initial_strategy: list[str]
+    original_input: str = ""
+    normalized_domain: str = ""
+    intent: TaskIntent = "knowledge_collection"
+    output_language: str = "zh-CN"
+    search_language: str = "en"
+    search_terms: list[str] = field(default_factory=list)
+    clarification_summary: str = ""
+    confirmed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(slots=True)
+class ClarificationResult:
+    original_input: str
+    normalized_domain: str
+    intent: TaskIntent
+    output_language: str
+    search_language: str
+    subdomains: list[str]
+    focus_points: list[str]
+    search_terms: list[str]
+    needs_clarification: bool
+    clarification_questions: list[str]
+    clarification_summary: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class IntakeSession:
+    session_id: str
+    status: Literal["draft", "confirmed"]
+    messages: list[AgentMessage]
+    candidate_context: ClarificationResult
+    created_at: str
+    updated_at: str
+    task_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["messages"] = [message.to_dict() for message in self.messages]
+        payload["candidate_context"] = self.candidate_context.to_dict()
+        return payload
 
 
 @dataclass(slots=True)

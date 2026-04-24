@@ -187,3 +187,30 @@ def test_query_engine_normalizes_abbreviation_for_search() -> None:
     engine.run(context, round_number=1)
 
     assert any("machine learning" in query.lower() for _, query in crawler.queries)
+
+
+def test_query_engine_uses_confirmed_normalized_domain_without_extra_normalization() -> None:
+    crawler = FakeCrawler()
+    engine = QueryEngine(
+        chat_client=None,
+        embedding_client=FakeEmbeddingClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="Machine Learning",
+        normalized_domain="Machine Learning",
+        original_input="ML",
+        subdomains=["基础概念"],
+        time_window="近 12 个月",
+        focus_points=["官方文档"],
+        constraints=[],
+        initial_strategy=["Machine Learning official docs"],
+        search_terms=["Machine Learning", "ML"],
+        confirmed=True,
+    )
+
+    engine.run(context, round_number=1)
+
+    assert crawler.queries
+    assert any("machine learning" in query.lower() for _, query in crawler.queries)
+    assert not any("machinery" in query.lower() or "vending machine" in query.lower() for _, query in crawler.queries)

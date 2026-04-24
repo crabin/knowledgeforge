@@ -210,6 +210,31 @@ def test_media_engine_normalizes_abbreviation_for_search() -> None:
     assert any("machine learning" in query.lower() for _, query in crawler.queries)
 
 
+def test_media_engine_uses_confirmed_normalized_domain_without_extra_normalization() -> None:
+    crawler = FakeMediaCrawler()
+    engine = MediaEngine(
+        chat_client=None,
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="Machine Learning",
+        normalized_domain="Machine Learning",
+        original_input="ML",
+        subdomains=["基础概念"],
+        time_window="近 12 个月",
+        focus_points=["社区观点"],
+        constraints=[],
+        initial_strategy=["Machine Learning community trend"],
+        search_terms=["Machine Learning", "ML"],
+        confirmed=True,
+    )
+
+    engine.run(context, round_number=1)
+
+    assert crawler.queries
+    assert any("machine learning" in query.lower() for _, query in crawler.queries)
+
+
 def test_media_ranking_prefers_technical_community_sources() -> None:
     assert is_technical_context("深度学习", ["模型训练"], ["社区观点"]) is True
     community_score = score_media_url(

@@ -6,17 +6,20 @@ from typing import Any
 
 from agent.InsightEngine.agent import InsightEngine
 from agent.MediaEngine.agent import MediaEngine
+from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.QueryEngine.agent import QueryEngine
+from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.config import AppConfig
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
 from knowledgeforge.graph.client import Neo4jGraphClient
 from knowledgeforge.graph.neo4j_adapter import Neo4jPathMapper
+from knowledgeforge.intake.clarifier import IntakeClarifier
 from knowledgeforge.intake.context_builder import ContextBuilder
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
-from knowledgeforge.models import AgentMessage, FrozenVersionRecord, RequestContext
+from knowledgeforge.models import AgentMessage, ClarificationResult, FrozenVersionRecord, IntakeSession, RequestContext
 from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.orchestrator.state import WorkflowState
 from knowledgeforge.postprocess.extractor import StructuredExtractor
@@ -24,9 +27,11 @@ from knowledgeforge.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.quality.checker import QualityChecker
 from knowledgeforge.runtime.audit import AuditLogger
 from knowledgeforge.runtime.frozen_store import FrozenVersionStore
+from knowledgeforge.runtime.intake_session_store import IntakeSessionStore
 from knowledgeforge.runtime.state_store import TaskStateStore
 from knowledgeforge.reporting.report_service import ReportService
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
 
@@ -35,21 +40,25 @@ class TaskService:
         self._config = config
         self._context_builder = ContextBuilder()
         self._state_store = TaskStateStore(config.task_state_root)
+        self._intake_store = IntakeSessionStore(config.intake_session_root)
         self._audit_logger = AuditLogger(config.audit_root)
         self._frozen_store = FrozenVersionStore(config.frozen_root)
         self._report_service = ReportService()
         query_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
         query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
         media_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
+        self._intake_clarifier = IntakeClarifier(OpenAICompatibleChatClient(config.openai, timeout=1.0))
         graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
             insight_engine=InsightEngine(),
             query_engine=QueryEngine(
                 chat_client=query_chat_client,
                 embedding_client=query_embedding_client,
+                crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
             ),
             media_engine=MediaEngine(
                 chat_client=media_chat_client,
+                crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
             ),
             evaluator=CompletenessEvaluator(),
             writer=MarkdownKnowledgeWriter(config),
@@ -68,6 +77,105 @@ class TaskService:
 
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
+        return self._run_workflow(request_context, audit_source="api")
+
+    def create_intake_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        message = str(payload.get("message", payload.get("domain", ""))).strip()
+        if not message:
+            raise ValueError("`message` is required.")
+        session_id = uuid.uuid4().hex
+        clarification = self._intake_clarifier.clarify([message])
+        now = now_iso()
+        session = IntakeSession(
+            session_id=session_id,
+            status="draft",
+            messages=[AgentMessage(role="user", content=message, metadata={"source": "api"})],
+            candidate_context=clarification,
+            created_at=now,
+            updated_at=now,
+        )
+        payload_dict = session.to_dict()
+        self._intake_store.save(session_id, payload_dict)
+        self._audit_logger.log(
+            session_id,
+            "intake_session_created",
+            {"intent": clarification.intent, "normalized_domain": clarification.normalized_domain},
+        )
+        self._audit_logger.log(
+            session_id,
+            "intake_clarified",
+            {
+                "needs_clarification": clarification.needs_clarification,
+                "output_language": clarification.output_language,
+            },
+        )
+        return payload_dict
+
+    def append_intake_message(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self._intake_store.load(session_id)
+        if stored is None:
+            return None
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            raise ValueError("`message` is required.")
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(AgentMessage(role="user", content=message, metadata={"source": "api"}))
+        clarification = self._intake_clarifier.clarify([item.content for item in messages])
+        stored["messages"] = [item.to_dict() for item in messages]
+        stored["candidate_context"] = clarification.to_dict()
+        stored["updated_at"] = now_iso()
+        self._intake_store.save(session_id, stored)
+        self._audit_logger.log(
+            session_id,
+            "intake_clarified",
+            {
+                "intent": clarification.intent,
+                "needs_clarification": clarification.needs_clarification,
+                "output_language": clarification.output_language,
+            },
+        )
+        return stored
+
+    def confirm_intake_session(self, session_id: str) -> dict[str, Any] | None:
+        stored = self._intake_store.load(session_id)
+        if stored is None:
+            return None
+        clarification = ClarificationResult(**stored["candidate_context"])
+        if clarification.intent != "knowledge_collection":
+            raise ValueError("intake session is not confirmed for knowledge collection.")
+        request_context = self._context_builder.build(
+            {
+                "domain": clarification.normalized_domain,
+                "original_input": clarification.original_input,
+                "normalized_domain": clarification.normalized_domain,
+                "intent": clarification.intent,
+                "output_language": clarification.output_language,
+                "search_language": clarification.search_language,
+                "search_terms": clarification.search_terms,
+                "subdomains": clarification.subdomains,
+                "focus_points": clarification.focus_points,
+                "clarification_summary": clarification.clarification_summary,
+                "confirmed": True,
+            }
+        )
+        self._audit_logger.log(
+            session_id,
+            "intake_confirmed",
+            {"domain": request_context.domain, "output_language": request_context.output_language},
+        )
+        task_payload = self._run_workflow(request_context, audit_source="intake")
+        stored["status"] = "confirmed"
+        stored["task_id"] = task_payload["task_id"]
+        stored["updated_at"] = now_iso()
+        self._intake_store.save(session_id, stored)
+        self._audit_logger.log(
+            task_payload["task_id"],
+            "task_created_from_intake",
+            {"session_id": session_id, "domain": request_context.domain},
+        )
+        return {"intake_session": stored, "task": task_payload}
+
+    def _run_workflow(self, request_context: RequestContext, *, audit_source: str) -> dict[str, Any]:
         task_id = uuid.uuid4().hex
         initial_state: WorkflowState = {
             "task_id": task_id,
@@ -76,14 +184,23 @@ class TaskService:
                 AgentMessage(
                     role="user",
                     content=f"为领域 {request_context.domain} 启动知识沉淀任务。",
-                    metadata={"source": "api"},
+                    metadata={"source": audit_source},
                 )
             ],
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
             "task_status": "created",
         }
-        self._audit_logger.log(task_id, "task_created", {"domain": request_context.domain, "round": 1})
+        self._audit_logger.log(
+            task_id,
+            "task_created",
+            {
+                "domain": request_context.domain,
+                "normalized_domain": request_context.normalized_domain,
+                "round": 1,
+                "source": audit_source,
+            },
+        )
         final_state = self._workflow.run(initial_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
@@ -227,3 +344,19 @@ class TaskService:
     @staticmethod
     def _deserialize_messages(payload: list[dict[str, Any]]) -> list[AgentMessage]:
         return [AgentMessage(**item) for item in payload]
+
+
+class _NoopQueryCrawler:
+    def search(self, **kwargs):
+        return []
+
+    def fetch_documents(self, hits, *, max_documents: int = 6):
+        return []
+
+
+class _NoopMediaCrawler:
+    def search(self, **kwargs):
+        return []
+
+    def fetch_documents(self, hits, *, max_documents: int = 8):
+        return []

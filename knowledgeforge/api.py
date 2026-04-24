@@ -27,6 +27,36 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify(result), 201
 
+    @app.post("/intake/sessions")
+    def create_intake_session():
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.create_intake_session(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(result), 201
+
+    @app.post("/intake/sessions/<session_id>/messages")
+    def append_intake_message(session_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.append_intake_message(session_id, payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "intake session not found"}), 404
+        return jsonify(result), 200
+
+    @app.post("/intake/sessions/<session_id>/confirm")
+    def confirm_intake_session(session_id: str):
+        try:
+            result = service.confirm_intake_session(session_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "intake session not found"}), 404
+        return jsonify(result), 201
+
     @app.get("/tasks/<task_id>")
     def get_task(task_id: str):
         task = service.get_task(task_id)

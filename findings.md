@@ -79,6 +79,12 @@
 - Query / Media crawler 通过 trace callback 记录 browser-first 与 httpx fallback 的真实 URL、状态码、命中数和异常；`agent-browser eval` 日志只保留脚本长度，避免完整 JS 污染日志。
 - `ML` smoke 复测显示链路能完整暴露问题：LLM 规划超时、Bing browser 命中质量偏差、DuckDuckGo HTML 连接超时、Embedding 成功、summary LLM 超时。
 
+## Intake 收口结论
+- 当前更值得优先收口的是 intake 入口层，而不是继续把主精力投到 crawler，因为仓库已经出现成型的 `intake session -> clarify -> confirm -> task` 主线实现。
+- `ClarificationResult` 应作为 intake 层唯一结构化输出，`ContextBuilder` 只负责把已确认的澄清结果映射成 `RequestContext`，这样 Query / Media 才能稳定消费确认后的领域语义。
+- 对 `confirmed=True` 的上下文保持“已确认输入优先”是必要的，否则前面澄清得到的 `Machine Learning` 之类结果会在引擎层再次被误归一化。
+- `concept_explanation` 和 `qa` 不能直接 confirm 成 task；它们必须通过追加消息切换到 `knowledge_collection`，这也是 intake 会话存在的主要价值。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
