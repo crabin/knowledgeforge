@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -13,10 +14,16 @@ from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 
 
 class MediaPerspectiveCrawler:
-    def __init__(self, timeout: float = 3.0, user_agent: str = "KnowledgeForgeMediaBot/0.1") -> None:
+    def __init__(
+        self,
+        timeout: float = 3.0,
+        user_agent: str = "KnowledgeForgeMediaBot/0.1",
+        trace: Callable[[str], None] | None = None,
+    ) -> None:
         self._timeout = timeout
         self._headers = {"User-Agent": user_agent}
-        self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0))
+        self._trace = trace
+        self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0), trace=trace)
 
     def search(
         self,
@@ -37,10 +44,13 @@ class MediaPerspectiveCrawler:
 
         url = "https://html.duckduckgo.com/html/"
         try:
+            self._log(f"[MEDIA-SEARCH][httpx] GET {url} params.q={query} timeout={self._timeout}")
             with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
                 response = client.get(url, params={"q": query})
+                self._log(f"[MEDIA-SEARCH][httpx] status={response.status_code} url={response.url}")
                 response.raise_for_status()
-        except Exception:
+        except Exception as exc:
+            self._log(f"[MEDIA-SEARCH][httpx] failed {exc.__class__.__name__}: {exc}")
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -102,10 +112,13 @@ class MediaPerspectiveCrawler:
                     )
                     continue
                 try:
+                    self._log(f"[MEDIA-FETCH][httpx] GET {hit.url} timeout={self._timeout}")
                     response = client.get(hit.url)
+                    self._log(f"[MEDIA-FETCH][httpx] status={response.status_code} url={response.url}")
                     response.raise_for_status()
                     content = extract_media_text(response.text)
-                except Exception:
+                except Exception as exc:
+                    self._log(f"[MEDIA-FETCH][httpx] failed url={hit.url} {exc.__class__.__name__}: {exc}")
                     content = hit.snippet
                 documents.append(
                     MediaCrawledDocument(
@@ -128,8 +141,9 @@ class MediaPerspectiveCrawler:
         is_technical: bool,
         max_results: int,
     ) -> list[MediaSearchHit]:
-        browser_results = self._browser.search_duckduckgo(query, limit=max_results)
+        browser_results = self._browser.search_bing(query, limit=max_results)
         if not browser_results:
+            self._log(f"[MEDIA-SEARCH][browser] no hits query={query}")
             return []
         hits = [
             MediaSearchHit(
@@ -148,4 +162,9 @@ class MediaPerspectiveCrawler:
             for result in browser_results
         ]
         hits.sort(key=lambda item: item.score, reverse=True)
+        self._log(f"[MEDIA-SEARCH][browser] hits={len(hits[:max_results])} query={query}")
         return hits[:max_results]
+
+    def _log(self, message: str) -> None:
+        if self._trace:
+            self._trace(message)

@@ -73,6 +73,12 @@
 - 因此“联网失败”不能只归因于 query planning；浏览器抓取底座本身也需要单独排障，否则 browser-first crawler 的收益会被底层阻塞抵消。
 - 在 `agent-browser` 稳定性没验证通过之前，保留 `httpx` 或其他非浏览器抓取兜底是必要的，不能把浏览器路径视为唯一真实抓取方案。
 
+## 单引擎日志增强结论
+- `scripts/test_single_engines.py` 现在会为每次运行创建 `logs/single-engines-YYYYMMDD-HHMMSS.log`，stderr 与文件内容一致，便于现场观察和事后复盘。
+- LLM 与 Embedding 日志已经记录 `POST` endpoint、模型、timeout、payload 尺寸、耗时、返回 keys 或异常类型，可直接定位 `ReadTimeout` 与配置地址问题。
+- Query / Media crawler 通过 trace callback 记录 browser-first 与 httpx fallback 的真实 URL、状态码、命中数和异常；`agent-browser eval` 日志只保留脚本长度，避免完整 JS 污染日志。
+- `ML` smoke 复测显示链路能完整暴露问题：LLM 规划超时、Bing browser 命中质量偏差、DuckDuckGo HTML 连接超时、Embedding 成功、summary LLM 超时。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

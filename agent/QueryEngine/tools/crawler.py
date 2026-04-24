@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from typing import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -13,10 +14,16 @@ from agent.QueryEngine.utils.text_processing import extract_main_text
 
 
 class DomainKnowledgeCrawler:
-    def __init__(self, timeout: float = 3.0, user_agent: str = "KnowledgeForgeBot/0.1") -> None:
+    def __init__(
+        self,
+        timeout: float = 3.0,
+        user_agent: str = "KnowledgeForgeBot/0.1",
+        trace: Callable[[str], None] | None = None,
+    ) -> None:
         self._timeout = timeout
         self._headers = {"User-Agent": user_agent}
-        self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0))
+        self._trace = trace
+        self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0), trace=trace)
 
     def search(
         self,
@@ -39,10 +46,13 @@ class DomainKnowledgeCrawler:
 
         url = "https://html.duckduckgo.com/html/"
         try:
+            self._log(f"[QUERY-SEARCH][httpx] GET {url} params.q={query} timeout={self._timeout}")
             with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
                 response = client.get(url, params={"q": query})
+                self._log(f"[QUERY-SEARCH][httpx] status={response.status_code} url={response.url}")
                 response.raise_for_status()
-        except Exception:
+        except Exception as exc:
+            self._log(f"[QUERY-SEARCH][httpx] failed {exc.__class__.__name__}: {exc}")
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
@@ -97,10 +107,13 @@ class DomainKnowledgeCrawler:
                     )
                     continue
                 try:
+                    self._log(f"[QUERY-FETCH][httpx] GET {hit.url} timeout={self._timeout}")
                     response = client.get(hit.url)
+                    self._log(f"[QUERY-FETCH][httpx] status={response.status_code} url={response.url}")
                     response.raise_for_status()
                     content = extract_main_text(response.text)
-                except Exception:
+                except Exception as exc:
+                    self._log(f"[QUERY-FETCH][httpx] failed url={hit.url} {exc.__class__.__name__}: {exc}")
                     content = hit.snippet
                 documents.append(
                     CrawledDocument(
@@ -124,8 +137,9 @@ class DomainKnowledgeCrawler:
         preferred_domains: list[str] | None,
         max_results: int,
     ) -> list[SearchHit]:
-        browser_results = self._browser.search_duckduckgo(query, limit=max_results)
+        browser_results = self._browser.search_bing(query, limit=max_results)
         if not browser_results:
+            self._log(f"[QUERY-SEARCH][browser] no hits query={query}")
             return []
         hits = [
             SearchHit(
@@ -138,4 +152,9 @@ class DomainKnowledgeCrawler:
             for result in browser_results
         ]
         hits.sort(key=lambda item: item.score, reverse=True)
+        self._log(f"[QUERY-SEARCH][browser] hits={len(hits[:max_results])} query={query}")
         return hits[:max_results]
+
+    def _log(self, message: str) -> None:
+        if self._trace:
+            self._trace(message)

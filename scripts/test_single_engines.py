@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
+from datetime import datetime
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +22,40 @@ from knowledgeforge.llms.openai_compatible import (
 )
 
 
+class RunLogger:
+    def __init__(self, log_dir: Path) -> None:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.path = log_dir / f"single-engines-{timestamp}.log"
+        self._file = self.path.open("a", encoding="utf-8")
+
+    def log(self, message: str) -> None:
+        timestamp = datetime.now().isoformat(timespec="milliseconds")
+        line = f"{timestamp} {message}"
+        print(line, file=sys.stderr)
+        self._file.write(f"{line}\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        self._file.close()
+
+
+_RUN_LOGGER: RunLogger | None = None
+
+
+def configure_logging(log_dir: Path) -> RunLogger:
+    global _RUN_LOGGER
+    _RUN_LOGGER = RunLogger(log_dir)
+    atexit.register(_RUN_LOGGER.close)
+    log(f"[LOG] file={_RUN_LOGGER.path}")
+    return _RUN_LOGGER
+
+
 def log(message: str) -> None:
-    print(message, file=sys.stderr)
+    if _RUN_LOGGER:
+        _RUN_LOGGER.log(message)
+    else:
+        print(message, file=sys.stderr)
 
 
 def infer_llm_stage(system_prompt: str) -> str:
@@ -45,35 +80,60 @@ def infer_llm_stage(system_prompt: str) -> str:
 class TracedChatClient:
     def __init__(self, inner: OpenAICompatibleChatClient) -> None:
         self._inner = inner
+        self._call_count = 0
 
     def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        self._call_count += 1
+        call_id = self._call_count
         stage = infer_llm_stage(system_prompt)
+        endpoint = f"{self._inner._config.base_url.rstrip('/')}/chat/completions"
         preview = " ".join(user_prompt.split())[:220]
-        log(f"[LLM][{stage}] request")
-        log(f"[LLM][{stage}] prompt-preview: {preview}")
+        started = time.perf_counter()
+        log(
+            f"[LLM][{stage}][call={call_id}] request method=POST endpoint={endpoint} "
+            f"model={self._inner._config.model} timeout={self._inner._timeout}"
+        )
+        log(
+            f"[LLM][{stage}][call={call_id}] payload system_chars={len(system_prompt)} "
+            f"user_chars={len(user_prompt)} response_format=json_object"
+        )
+        log(f"[LLM][{stage}][call={call_id}] prompt-preview: {preview}")
         try:
             payload = self._inner.complete_json(system_prompt=system_prompt, user_prompt=user_prompt)
             keys = ", ".join(sorted(payload.keys()))
-            log(f"[LLM][{stage}] response keys: {keys}")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            log(f"[LLM][{stage}][call={call_id}] response keys: {keys} elapsed_ms={elapsed_ms:.0f}")
             return payload
         except Exception as exc:
-            log(f"[LLM][{stage}] failed: {exc.__class__.__name__}: {exc}")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            log(f"[LLM][{stage}][call={call_id}] failed elapsed_ms={elapsed_ms:.0f}: {exc.__class__.__name__}: {exc}")
             raise
 
 
 class TracedEmbeddingClient:
     def __init__(self, inner: OpenAICompatibleEmbeddingClient) -> None:
         self._inner = inner
+        self._call_count = 0
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        log(f"[EMBED] request count={len(texts)}")
+        self._call_count += 1
+        call_id = self._call_count
+        endpoint = f"{self._inner._config.embedding_base_url.rstrip('/')}/embeddings"
+        started = time.perf_counter()
+        log(
+            f"[EMBED][call={call_id}] request method=POST endpoint={endpoint} "
+            f"model={self._inner._config.embedding_model} timeout={self._inner._timeout} count={len(texts)}"
+        )
+        log(f"[EMBED][call={call_id}] payload input_chars={sum(len(text) for text in texts)}")
         try:
             vectors = self._inner.embed_texts(texts)
             dimensions = len(vectors[0]) if vectors else 0
-            log(f"[EMBED] response count={len(vectors)} dims={dimensions}")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            log(f"[EMBED][call={call_id}] response count={len(vectors)} dims={dimensions} elapsed_ms={elapsed_ms:.0f}")
             return vectors
         except Exception as exc:
-            log(f"[EMBED] failed: {exc.__class__.__name__}: {exc}")
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            log(f"[EMBED][call={call_id}] failed elapsed_ms={elapsed_ms:.0f}: {exc.__class__.__name__}: {exc}")
             raise
 
 
@@ -166,14 +226,14 @@ def build_engines(config: AppConfig, *, mode: str) -> dict[str, object]:
     query_engine = QueryEngine(
         chat_client=shared_chat_client,
         embedding_client=TracedEmbeddingClient(OpenAICompatibleEmbeddingClient(config.openai)),
-        crawler=TracedQueryCrawler(DomainKnowledgeCrawler(timeout=query_crawler_timeout)),
+        crawler=TracedQueryCrawler(DomainKnowledgeCrawler(timeout=query_crawler_timeout, trace=log)),
     )
     return {
         "query": query_engine,
         "insight": InsightEngine(),
         "media": MediaEngine(
             chat_client=shared_chat_client,
-            crawler=TracedMediaCrawler(MediaPerspectiveCrawler(timeout=media_crawler_timeout)),
+            crawler=TracedMediaCrawler(MediaPerspectiveCrawler(timeout=media_crawler_timeout, trace=log)),
         ),
     }
 
@@ -208,9 +268,17 @@ def main() -> None:
         help="Allow query/media engines to return fallback planning output without exiting non-zero.",
     )
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=Path("logs"),
+        help="Directory for timestamped run logs.",
+    )
     args = parser.parse_args()
 
+    run_logger = configure_logging(args.log_dir)
     config = AppConfig.from_env(".env")
+    log(f"[LOG] run_record={run_logger.path}")
     log(f"[CONFIG] mode={args.mode} engine={args.engine} allow_fallback={args.allow_fallback}")
     log(f"[CONFIG] domain={args.domain} subdomains={args.subdomains or []} focus_points={args.focus_points or []}")
     builder = ContextBuilder()

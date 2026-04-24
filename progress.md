@@ -451,6 +451,29 @@
   - 这说明 Query / Media 的真实联网失败，至少有一部分根因在浏览器抓取底座，而不只是 query 质量
   - 在 `agent-browser` 稳定性未解决前，crawler 需要继续保留非浏览器兜底路径
 
+### 阶段 20：单引擎调用日志持久化与 API 地址追踪
+- **状态：** complete
+- **开始时间：** 2026-04-24
+- 执行的操作：
+  - 为 `scripts/test_single_engines.py` 增加按时间命名的运行日志文件，默认保存到 `logs/single-engines-YYYYMMDD-HHMMSS.log`
+  - 将 LLM / Embedding 日志扩展为包含 method、endpoint、model、timeout、payload 尺寸、耗时、返回 keys 或异常
+  - 为 Query / Media crawler 增加 trace callback，记录 browser-first 搜索、httpx fallback 搜索、正文抓取 URL、状态码、命中数和失败原因
+  - 为 `AgentBrowserCLI` 增加命令级 trace，并压缩 `eval` 日志为脚本长度，避免整段 JS 污染输出
+  - 将 `logs/` 加入 `.gitignore`，避免运行记录进入版本库
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/tools/agent_browser_cli.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/tools/crawler.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/.gitignore
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 当前保守结论：
+  - 单引擎脚本现在能输出并持久化每次关键外部调用的 API 地址和失败原因
+  - `ML` smoke 复测确认日志能同时观察 LLM 超时、browser 搜索 URL、httpx URL、fetch URL、Embedding endpoint 和耗时
+  - 真实网络命中质量仍未解决，本次只增强可观测性和运行记录保存
+
 ## 测试结果
 | 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
 |------|------|---------|---------|------|
@@ -478,18 +501,22 @@
 | normalization-pytest | `uv run pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py` | LLM 术语归一化接入后 Query / Media / 集成层仍通过 | 8 个测试通过 | 通过 |
 | normalization-script | `uv run python scripts/test_single_engines.py --engine query --domain ML --allow-fallback` | `ML` 应先归一化为 `Machine Learning` 再进入 query planning | 已确认日志出现 `normalize.domain`，后续 query 为 `Machine Learning ...` | 通过 |
 | agent-browser-live-pytest | `uv run pytest tests/test_agent_browser_live.py -q` | 独立验证 `agent-browser` 能打开真实页面并提取结果 | 2 个测试失败；DuckDuckGo HTML 和 LangGraph 官网的 `open` 均在 30 秒超时 | 已记录 |
+| logging-pycompile | `python3 -m py_compile scripts/test_single_engines.py knowledgeforge/tools/agent_browser_cli.py agent/QueryEngine/tools/crawler.py agent/MediaEngine/tools/crawler.py` | 日志增强代码语法正确 | 通过 | 通过 |
+| logging-unit-pytest | `uv run pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py -q` | 日志 callback 不破坏 Query / Media / 集成测试 | 8 个测试通过 | 通过 |
+| logging-insight-script | `uv run python scripts/test_single_engines.py --engine insight --domain ML --allow-fallback --log-dir logs` | 创建时间戳日志并保持脚本可运行 | 生成 `logs/single-engines-20260424-144313.log`，脚本通过 | 通过 |
+| logging-query-smoke | `uv run python scripts/test_single_engines.py --engine query --domain ML --mode smoke --allow-fallback --log-dir logs` | 输出并保存 LLM / Embedding / browser / httpx 的 endpoint 与失败原因 | 生成 `logs/single-engines-20260424-144323.log`，脚本通过 | 通过 |
 
 ## 错误日志
 | 时间戳 | 错误 | 尝试次数 | 解决方案 |
 |--------|------|---------|---------|
-| 2026-04-24 | 暂无 | 1 | 无 |
+| 2026-04-24 | `agent-browser` 在真实 smoke 中仍有 wait/eval/get 超时 | 1 | 已通过日志记录 endpoint、命令、超时和 fallback 路径，后续单独排障 browser 底座 |
 
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 8 已完成；阶段 9-18 的 Query / Media 增强已落地，包含 browser-first crawler 与 LLM 术语归一化 |
-| 我要去哪里？ | 先定位 `agent-browser` 的 `open` 超时根因，再决定 browser-first crawler 是否继续作为主路径；同时继续增强 query planning 超时稳定性与 workflow 回归稳定化 |
-| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量、官方检索自动识别和社区趋势抓取成功率 |
+| 我在哪里？ | 阶段 8 已完成；阶段 9-20 的 Query / Media 增强已落地，包含 browser-first crawler、LLM 术语归一化和时间戳运行日志 |
+| 我要去哪里？ | 先定位 `agent-browser` 的超时根因，再继续增强 query planning 超时稳定性、搜索命中质量与 workflow 回归稳定化 |
+| 目标是什么？ | 在不改写阶段 1-8 基线的前提下，继续收敛真实查询质量，同时保证每次外部调用可追踪、可复盘 |
 | 我学到了什么？ | 见 findings.md |
 | 我做了什么？ | 见上方记录 |
 
