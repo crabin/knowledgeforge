@@ -12,6 +12,11 @@
   - 已完成：QueryEngine 实时事件写入 audit log 的同时刷新任务快照，让前端轮询任务详情时能看到当前动作、更新时间和中间日志。
   - 已完成：补充回归测试覆盖 intake 确认后的实时轮询、任务详情中间状态和最终任务状态。
   - 已完成：`/tasks/{task_id}/logs` 读取时从任务快照补写缺失 execution_log，确保新日志保存到 audit jsonl。
+- 三路 Agent 计划确认与流程可视化
+  - 已完成：Insight / Query / Media 三路 Engine 均支持先生成 `EnginePlan`，再按确认后的计划执行。
+  - 已完成：`/tasks/async` 与 intake confirm 默认进入 `awaiting_plan_confirmation`，新增计划查看与确认接口。
+  - 已完成：前端展示三路 Agent 执行计划，用户确认后再启动并行采集。
+  - 已完成：Flow Map 改为 workflow step 事件驱动，可聚焦当前 planning / collecting / evaluating / writing / governing / versioning 步骤。
 - 质量流水线来源门禁
   - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。
 - Browser 抓取稳定性

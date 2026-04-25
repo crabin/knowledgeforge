@@ -5,14 +5,14 @@ from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
 from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
 from agent.QueryEngine.nodes.search_node import QuerySearchNode
 from agent.QueryEngine.nodes.summary_node import QuerySummaryNode
-from agent.QueryEngine.state.state import QueryEngineState
+from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
-from knowledgeforge.models import EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.utils.time import now_iso
 
 
@@ -44,10 +44,28 @@ class QueryEngine(BaseEngine):
         )
         self._formatting_node = QueryFormattingNode()
 
-    def run(self, context: RequestContext, round_number: int) -> EngineRunResult:
+    def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
+        state = QueryEngineState.from_context(context=context, round_number=round_number)
+        search_plan = self._search_node._build_plan(state)
+        self._search_node._prepare_plan_questions(search_plan.questions)
+        return self._engine_plan_from_search_plan(search_plan)
+
+    def run(
+        self,
+        context: RequestContext,
+        round_number: int,
+        approved_plan: EnginePlan | None = None,
+    ) -> EngineRunResult:
         state = QueryEngineState.from_context(context=context, round_number=round_number)
         try:
-            state = self._search_node.run(state, embedding_client=self._embedding_client)
+            if approved_plan is not None:
+                state = self._search_node.execute_plan(
+                    state,
+                    plan=self._search_plan_from_engine_plan(approved_plan),
+                    embedding_client=self._embedding_client,
+                )
+            else:
+                state = self._search_node.run(state, embedding_client=self._embedding_client)
             state = self._reflection_node.run(state)
             if state.reflection_plan and (
                 state.reflection_plan.supplementary_official_queries
@@ -63,6 +81,62 @@ class QueryEngine(BaseEngine):
             return self._formatting_node.run(state)
         except Exception:
             return self._fallback_result(context, round_number)
+
+    def _engine_plan_from_search_plan(self, plan: SearchPlan) -> EnginePlan:
+        timestamp = now_iso()
+        return EnginePlan(
+            agent_name=self.name,
+            plan_items=[
+                EnginePlanItem(
+                    plan_item_id=question.plan_item_id,
+                    title=question.question,
+                    query_or_action=question.google_query,
+                    targets=question.search_targets or question.expected_info,
+                    success_criteria=question.success_criteria,
+                    fallbacks=question.fallback_queries,
+                    source_priority=question.source_priority,
+                    status="planned",
+                )
+                for question in plan.questions
+            ],
+            reasoning=plan.reasoning,
+            status="awaiting_confirmation",
+            created_at=timestamp,
+        )
+
+    @staticmethod
+    def _search_plan_from_engine_plan(plan: EnginePlan) -> SearchPlan:
+        questions = [
+            SearchQuestion(
+                question=item.title,
+                google_query=item.query_or_action,
+                search_targets=item.targets,
+                expected_info=item.targets,
+                source_priority=item.source_priority,
+                success_criteria=item.success_criteria,
+                fallback_queries=item.fallbacks,
+                status="planned",
+                plan_item_id=item.plan_item_id,
+            )
+            for item in plan.plan_items
+        ]
+        official_queries = [
+            item.query_or_action
+            for item in plan.plan_items
+            if not any(token in " ".join(item.source_priority).lower() for token in ["tutorial", "blog", "guide"])
+        ]
+        tutorial_queries = [
+            item.query_or_action
+            for item in plan.plan_items
+            if any(token in " ".join(item.source_priority).lower() for token in ["tutorial", "blog", "guide"])
+        ]
+        return SearchPlan(
+            official_queries=official_queries,
+            tutorial_queries=tutorial_queries,
+            official_domains=[],
+            reasoning=plan.reasoning,
+            questions=questions,
+        )
 
     def _fallback_result(self, context: RequestContext, round_number: int) -> EngineRunResult:
         timestamp = now_iso()

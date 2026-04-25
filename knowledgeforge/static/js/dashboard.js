@@ -13,9 +13,10 @@ const healthLabel = document.querySelector("#health-label");
 const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
 const taskUpdateInput = document.querySelector("#task-update-payload");
-const queryPlanOutput = document.querySelector("#query-plan-output");
+const agentPlanOutput = document.querySelector("#agent-plan-output");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
+const workflowMap = document.querySelector("#workflow-map");
 
 async function requestJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -57,7 +58,8 @@ function showPayload(payload) {
   output.textContent = JSON.stringify(payload, null, 2);
   syncKnownIds(payload);
   renderSummary(payload);
-  renderQueryPlan(payload);
+  renderWorkflowMap(payload);
+  renderAgentPlans(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
 }
@@ -82,7 +84,8 @@ function showError(error) {
   };
   output.textContent = JSON.stringify(payload, null, 2);
   renderSummary(payload);
-  renderQueryPlan(payload);
+  renderWorkflowMap(payload);
+  renderAgentPlans(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
 }
@@ -109,18 +112,19 @@ function getNested(payload, path) {
 }
 
 function renderSummary(payload) {
-  const progress = summarizeQueryProgress(payload);
+  const progress = summarizePlanProgress(payload);
   const items = [
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
     ["当前动作", payload.current_action || payload.task?.current_action],
+    ["当前步骤", payload.current_step || payload.task?.current_step],
     ["文档路径", getNested(payload, "document_artifact.path")],
     ["质量检查", getNested(payload, "post_storage_result.quality_check.status")],
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
     ["错误", payload.error],
-    ["查询进度", progress],
+    ["计划进度", progress],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   if (!items.length) {
@@ -208,33 +212,55 @@ function formatConfigLabel(key) {
   return labels[key] || String(key).replaceAll("_", " ").replaceAll(".", " / ");
 }
 
-function renderQueryPlan(payload) {
-  const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
-  const logs = queryOutput?.execution_log || payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const planItems = buildQueryPlanItems(logs);
+function renderWorkflowMap(payload) {
+  if (!workflowMap) return;
+  const events = normalizeWorkflowEvents(payload);
+  const byStep = new Map(events.map((event) => [event.step_id, event]));
+  const current = payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "planning";
+  workflowMap.querySelectorAll("[data-step-id]").forEach((step) => {
+    const stepId = step.dataset.stepId;
+    const event = byStep.get(stepId);
+    step.classList.toggle("active", stepId === current);
+    step.classList.toggle("focused", stepId === current);
+    step.classList.toggle("done", event?.status === "completed");
+    step.classList.toggle("blocked", event?.status === "blocked");
+  });
+}
+
+function normalizeWorkflowEvents(payload) {
+  const taskEvents = payload.workflow_events || payload.task?.workflow_events || [];
+  const logEvents = (payload.logs || payload.execution_log || payload.task?.execution_log || [])
+    .filter((entry) => entry.event === "workflow_step")
+    .map((entry) => entry.details || {});
+  return [...taskEvents, ...logEvents].filter((event) => event.step_id);
+}
+
+function renderAgentPlans(payload) {
+  const plans = payload.agent_plans || payload.task?.agent_plans || {};
+  const planItems = buildAgentPlanItems(plans, payload);
 
   if (!planItems.length) {
-    queryPlanOutput.innerHTML = '<div class="empty-state">暂无结构化查询计划。</div>';
+    agentPlanOutput.innerHTML = '<div class="empty-state">暂无结构化执行计划。</div>';
     return;
   }
 
-  queryPlanOutput.innerHTML = planItems
+  agentPlanOutput.innerHTML = planItems
     .map((item) => {
       const done = item.status === "completed";
-      const active = item.status === "in_progress";
-      const statusLabel = done ? "已完成" : active ? "查询中" : item.status === "insufficient" ? "需补检索" : "待查询";
-      const targets = (item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
+      const active = item.status === "in_progress" || item.status === "approved";
+      const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补检索" : "待确认";
+      const targets = (item.targets || item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
       const criteria = (item.success_criteria || []).map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("");
       const attempts = (item.attempts || []).map((attempt) => `<li>${escapeHtml(attempt.query)}：${escapeHtml(attempt.hits)} 条命中</li>`).join("");
       return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
         <div class="plan-card-head">
           <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
           <div>
-            <strong>${escapeHtml(item.plan_item_id || "Q")}. ${escapeHtml(item.question)}</strong>
+            <strong>${escapeHtml(item.agent_name)} · ${escapeHtml(item.plan_item_id || "P")}. ${escapeHtml(item.title || item.question)}</strong>
             <span>${escapeHtml(statusLabel)}</span>
           </div>
         </div>
-        <div class="plan-query">${escapeHtml(item.google_query || "")}</div>
+        <div class="plan-query">${escapeHtml(item.query_or_action || item.google_query || "")}</div>
         <div class="plan-lists">
           <div><b>查询内容</b><ul>${targets || "<li>未提供</li>"}</ul></div>
           <div><b>满足标准</b><ul>${criteria || "<li>未提供</li>"}</ul></div>
@@ -243,6 +269,24 @@ function renderQueryPlan(payload) {
       </article>`;
     })
     .join("");
+}
+
+function buildAgentPlanItems(plans, payload) {
+  const items = [];
+  Object.entries(plans || {}).forEach(([agentName, plan]) => {
+    (plan.plan_items || []).forEach((item) => {
+      items.push({ ...item, agent_name: agentName });
+    });
+  });
+  const queryLogs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const queryItems = buildQueryPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "QueryEngine" }));
+  queryItems.forEach((queryItem) => {
+    const index = items.findIndex((item) => item.agent_name === "QueryEngine" && item.plan_item_id === queryItem.plan_item_id);
+    if (index >= 0) {
+      items[index] = { ...items[index], ...queryItem, title: items[index].title || queryItem.question };
+    }
+  });
+  return items;
 }
 
 function buildQueryPlanItems(logs) {
@@ -286,10 +330,8 @@ function buildQueryPlanItems(logs) {
   return Array.from(items.values());
 }
 
-function summarizeQueryProgress(payload) {
-  const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
-  const logs = queryOutput?.execution_log || payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const items = buildQueryPlanItems(logs);
+function summarizePlanProgress(payload) {
+  const items = buildAgentPlanItems(payload.agent_plans || payload.task?.agent_plans || {}, payload);
   if (!items.length) return "";
   const completed = items.filter((item) => item.status === "completed").length;
   const insufficient = items.filter((item) => item.status === "insufficient").length;
@@ -475,7 +517,7 @@ document.querySelector("#confirm-intake").addEventListener("click", async (event
     showPayload(payload);
     const taskId = payload.task?.task_id || payload.task_id || payload.intake_session?.task_id;
     if (taskId) {
-      startTaskPolling(taskId);
+      stopTaskPolling();
     }
   } catch (error) {
     showError(error);
@@ -496,7 +538,7 @@ document.querySelector("#direct-task-form").addEventListener("submit", async (ev
       body: JSON.stringify(payload),
     });
     showPayload(task);
-    startTaskPolling(task.task_id);
+    stopTaskPolling();
   } catch (error) {
     showError(error);
     stopTaskPolling();
@@ -512,6 +554,8 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
     const route = {
       list: ["/tasks", "GET"],
       get: [`/tasks/${encodeURIComponent(taskId)}`, "GET"],
+      plan: [`/tasks/${encodeURIComponent(taskId)}/plan`, "GET"],
+      confirmPlan: [`/tasks/${encodeURIComponent(taskId)}/plan/confirm`, "POST"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
@@ -523,7 +567,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if (action === "resume" && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
+      if ((action === "resume" || action === "confirmPlan") && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
         startTaskPolling(activeTaskId);
       }
     } catch (error) {

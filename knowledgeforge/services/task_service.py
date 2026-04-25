@@ -20,7 +20,16 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
-from knowledgeforge.models import AgentMessage, ClarificationResult, FrozenVersionRecord, IntakeSession, RequestContext
+from knowledgeforge.models import (
+    AgentMessage,
+    ClarificationResult,
+    EnginePlan,
+    EnginePlanItem,
+    FrozenVersionRecord,
+    IntakeSession,
+    RequestContext,
+    WorkflowStepEvent,
+)
 from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.orchestrator.state import WorkflowState
 from knowledgeforge.postprocess.extractor import StructuredExtractor
@@ -71,6 +80,7 @@ class TaskService:
                 version_recorder=VersionRecorder(),
                 strict_graph_sync=config.strict_graph_sync,
             ),
+            workflow_event_callback=self._log_workflow_step_event,
         )
         self._tasks: dict[str, WorkflowState] = {}
         self._task_lock = Lock()
@@ -80,7 +90,11 @@ class TaskService:
 
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
-        return self._run_workflow(request_context, audit_source="api")
+        initial_state = self._create_initial_state(request_context, audit_source="api")
+        planned_state = self._workflow.generate_plans(initial_state)
+        approved_state = self._approve_plans_in_state(planned_state)
+        final_state = self._workflow.run(approved_state)
+        return self._persist_and_serialize(final_state, "task_completed")
 
     def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
@@ -88,17 +102,59 @@ class TaskService:
 
     def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
+        planned_state = self._workflow.generate_plans(initial_state)
         task_id = initial_state["task_id"]
         with self._task_lock:
-            self._tasks[task_id] = initial_state
-        payload_dict = self._serialize_state(initial_state)
+            self._tasks[task_id] = planned_state
+        payload_dict = self._serialize_state(planned_state)
         self._state_store.save(task_id, payload_dict)
         self._audit_logger.log(
             task_id,
-            "task_started",
-            {"status": "running", "source": "api_async", "round": initial_state.get("round_number", 1)},
+            "agent_plans_created",
+            {"status": "awaiting_plan_confirmation", "source": "api_async", "round": planned_state.get("round_number", 1)},
         )
-        Thread(target=self._run_started_task, args=(initial_state,), daemon=True).start()
+        return self._attach_execution_log(payload_dict)
+
+    def get_task_plan(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        return {
+            "task_id": task_id,
+            "task_status": task.get("task_status", "unknown"),
+            "agent_plans": task.get("agent_plans", {}),
+            "plan_approved_at": task.get("plan_approved_at", ""),
+        }
+
+    def confirm_task_plan(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") != "awaiting_plan_confirmation":
+            raise ValueError("task is not awaiting plan confirmation.")
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": self._deserialize_messages(stored.get("messages", [])),
+            "round_number": int(stored.get("round_number", 1)),
+            "max_rounds": int(stored.get("max_rounds", self._config.max_rounds)),
+            "task_status": "running",
+            "agent_plans": self._deserialize_engine_plans(stored.get("agent_plans", {})),
+            "workflow_events": [
+                WorkflowStepEvent(**event)
+                for event in stored.get("workflow_events", [])
+                if isinstance(event, dict)
+            ],
+        }
+        state = self._approve_plans_in_state(state)
+        with self._task_lock:
+            self._tasks[task_id] = state
+        payload_dict = self._serialize_state(state)
+        self._state_store.save(task_id, payload_dict)
+        self._audit_logger.log(task_id, "agent_plans_confirmed", {"approved_at": state["plan_approved_at"]})
+        Thread(target=self._run_started_task, args=(state,), daemon=True).start()
         return self._attach_execution_log(payload_dict)
 
     def list_tasks(self) -> dict[str, Any]:
@@ -300,6 +356,27 @@ class TaskService:
         final_state = self._workflow.run(initial_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
+    def _approve_plans_in_state(self, state: WorkflowState) -> WorkflowState:
+        approved_at = now_iso()
+        for plan in state.get("agent_plans", {}).values():
+            plan.status = "approved"
+            plan.approved_at = approved_at
+            for item in plan.plan_items:
+                item.status = "approved"
+        state["plan_approved_at"] = approved_at
+        state["task_status"] = "running"
+        state["current_step"] = "collecting"
+        state["current_action"] = "用户已确认三路计划，开始并行执行。"
+        state.setdefault("workflow_events", []).append(
+            WorkflowStepEvent(
+                step_id="awaiting_confirmation",
+                label="等待用户确认计划",
+                status="completed",
+                timestamp=approved_at,
+            )
+        )
+        return state
+
     def _create_initial_state(self, request_context: RequestContext, *, audit_source: str) -> WorkflowState:
         task_id = uuid.uuid4().hex
         request_context.task_id = task_id
@@ -382,6 +459,8 @@ class TaskService:
             return None
 
         round_number = int(stored.get("round_number", 1))
+        if stored.get("task_status") == "awaiting_plan_confirmation":
+            raise ValueError("task plan must be confirmed before resume.")
         if round_number >= self._config.max_rounds:
             stored["task_status"] = "max_rounds_reached"
             self._state_store.save(task_id, stored)
@@ -482,6 +561,31 @@ class TaskService:
                 "details": entry.get("details", {}),
             },
         )
+
+    def _log_workflow_step_event(self, task_id: str, event: WorkflowStepEvent) -> None:
+        payload = event.to_dict()
+        self._audit_logger.log(task_id, "workflow_step", payload)
+        with self._task_lock:
+            state = self._tasks.get(task_id)
+            if state is None:
+                stored = self._state_store.load(task_id)
+                if stored is None:
+                    return
+                events = stored.setdefault("workflow_events", [])
+                if payload not in events:
+                    events.append(payload)
+                stored["current_step"] = event.step_id
+                stored["current_action"] = event.label
+                stored["updated_at"] = now_iso()
+                self._state_store.save(task_id, stored)
+                return
+            events = state.setdefault("workflow_events", [])
+            if event not in events:
+                events.append(event)
+            state["current_step"] = event.step_id
+            state["current_action"] = event.label
+            state["updated_at"] = now_iso()
+            self._state_store.save(task_id, self._serialize_state(state))
 
     def _backfill_audit_logs_from_task(
         self,
@@ -638,6 +742,25 @@ class TaskService:
     @staticmethod
     def _deserialize_messages(payload: list[dict[str, Any]]) -> list[AgentMessage]:
         return [AgentMessage(**item) for item in payload]
+
+    @staticmethod
+    def _deserialize_engine_plans(payload: dict[str, Any]) -> dict[str, EnginePlan]:
+        plans: dict[str, EnginePlan] = {}
+        for agent_name, plan_payload in payload.items():
+            if isinstance(plan_payload, EnginePlan):
+                plans[agent_name] = plan_payload
+                continue
+            if not isinstance(plan_payload, dict):
+                continue
+            items = [
+                EnginePlanItem(**item)
+                for item in plan_payload.get("plan_items", [])
+                if isinstance(item, dict)
+            ]
+            plan_data = dict(plan_payload)
+            plan_data["plan_items"] = items
+            plans[agent_name] = EnginePlan(**plan_data)
+        return plans
 
     @staticmethod
     def _is_running_status(status: object) -> bool:

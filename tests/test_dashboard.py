@@ -25,7 +25,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "KnowledgeForge 功能工作台" in body
     assert "交互式输入" in body
     assert "任务操作" in body
-    assert "QueryEngine 查询计划" in body
+    assert "三路 Agent 执行计划" in body
+    assert "确认计划" in body
     assert "调用与执行日志" in body
     assert "任务列表" in body
     assert "查看任务列表" in body

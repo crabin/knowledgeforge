@@ -31,44 +31,39 @@
           </span>
           <span class="summary-state">展开</span>
         </summary>
-        <div class="flow-grid">
-          <article class="flow-step active">
+        <div class="flow-grid" id="workflow-map">
+          <article class="flow-step active" data-step-id="planning">
             <span>01</span>
-            <h3>输入澄清</h3>
-            <p>创建 intake session，补充边界、子方向、语言与关注点。</p>
+            <h3>计划生成</h3>
+            <p>三路 Agent 基于输入上下文先生成执行计划。</p>
           </article>
-          <article class="flow-step">
+          <article class="flow-step" data-step-id="awaiting_confirmation">
             <span>02</span>
-            <h3>并行采集</h3>
-            <p>Insight、Query、Media 三路能力并行补充内部线索、权威事实与媒体视角。</p>
+            <h3>用户确认</h3>
+            <p>前端展示 Insight、Query、Media 计划，确认后再执行。</p>
           </article>
-          <article class="flow-step">
+          <article class="flow-step" data-step-id="collecting">
             <span>03</span>
+            <h3>并行采集</h3>
+            <p>三路能力并行补充内部线索、权威事实与媒体视角。</p>
+          </article>
+          <article class="flow-step" data-step-id="evaluating">
+            <span>04</span>
             <h3>完整性评估</h3>
             <p>检查核心子主题、可信来源、信息空洞、冲突与时效性。</p>
           </article>
-          <article class="flow-step">
-            <span>04</span>
+          <article class="flow-step" data-step-id="writing">
+            <span>05</span>
             <h3>Markdown 落盘</h3>
             <p>按领域、子领域、文章路径保存可追溯知识文档。</p>
           </article>
-          <article class="flow-step">
-            <span>05</span>
-            <h3>结构化抽取</h3>
-            <p>执行解析、清洗、Chunk、Metadata、Entity 与 Relation 抽取。</p>
-          </article>
-          <article class="flow-step">
+          <article class="flow-step" data-step-id="governing">
             <span>06</span>
-            <h3>Neo4j 关联</h3>
-            <p>把本地路径与 Domain、SubTopic、Article 和实体关系对齐。</p>
+            <h3>治理质检</h3>
+            <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
           </article>
-          <article class="flow-step">
+          <article class="flow-step" data-step-id="versioning">
             <span>07</span>
-            <h3>质量回流</h3>
-            <p>区分修复流与补检索流，不返回笼统失败。</p>
-          </article>
-          <article class="flow-step">
-            <span>08</span>
             <h3>版本与研报</h3>
             <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
           </article>
@@ -131,6 +126,8 @@
             <div class="button-grid">
               <button type="button" data-task-action="list">查看任务列表</button>
               <button type="button" data-task-action="get">查询任务</button>
+              <button type="button" data-task-action="plan">查看计划</button>
+              <button type="button" data-task-action="confirmPlan">确认计划</button>
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
               <button type="button" data-task-action="report">生成研报</button>
@@ -165,9 +162,9 @@
         </div>
         <div class="trace-grid" aria-label="查询计划与执行日志">
           <section class="trace-panel">
-            <h3>QueryEngine 查询计划</h3>
-            <div id="query-plan-output" class="trace-list">
-              <div class="empty-state">任务启动后会实时显示查询计划、当前查询项和完成状态。</div>
+            <h3>三路 Agent 执行计划</h3>
+            <div id="agent-plan-output" class="trace-list">
+              <div class="empty-state">任务启动后会显示三路计划，确认后实时更新执行状态。</div>
             </div>
           </section>
           <section class="trace-panel">

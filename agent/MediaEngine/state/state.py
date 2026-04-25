@@ -63,6 +63,7 @@ class MediaEngineState:
     crawled_documents: list[MediaCrawledDocument] = field(default_factory=list)
     summary_payload: dict[str, object] = field(default_factory=dict)
     search_history: list[dict[str, object]] = field(default_factory=list)
+    execution_log: list[dict[str, object]] = field(default_factory=list)
     observation_notes: list[str] = field(default_factory=list)
     reflection_notes: list[str] = field(default_factory=list)
     iteration_count: int = 0

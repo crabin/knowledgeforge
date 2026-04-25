@@ -9,6 +9,7 @@ from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.utils.query_normalization import normalize_query_term
+from knowledgeforge.utils.time import now_iso
 
 
 class MediaSearchNode(BaseMediaNode):
@@ -23,6 +24,18 @@ class MediaSearchNode(BaseMediaNode):
 
     def run(self, state: MediaEngineState, **kwargs) -> MediaEngineState:
         plan = self._build_plan(state)
+        state.search_plan = plan
+        self._append_search_results(
+            state,
+            social_queries=plan.social_queries,
+            community_queries=plan.community_queries,
+            blog_queries=plan.blog_queries,
+            is_technical=plan.is_technical,
+        )
+        return state
+
+    def execute_plan(self, state: MediaEngineState, *, plan: MediaSearchPlan) -> MediaEngineState:
+        self._normalize_domain(state)
         state.search_plan = plan
         self._append_search_results(
             state,
@@ -149,6 +162,7 @@ class MediaSearchNode(BaseMediaNode):
         all_hits = list(state.search_hits)
         domain_phrases = self._domain_phrases(state)
         for query in social_queries:
+            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "social"})
             hits = self._search(
                 query=query,
                 platform_type="social",
@@ -157,8 +171,14 @@ class MediaSearchNode(BaseMediaNode):
                 domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "social", "hits": len(hits)})
+            self._record_event(
+                state,
+                "media_search_executed",
+                {"query": query, "platform_type": "social", "hits": len(hits)},
+            )
             all_hits.extend(hits)
         for query in community_queries:
+            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "community"})
             hits = self._search(
                 query=query,
                 platform_type="community",
@@ -167,8 +187,14 @@ class MediaSearchNode(BaseMediaNode):
                 domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "community", "hits": len(hits)})
+            self._record_event(
+                state,
+                "media_search_executed",
+                {"query": query, "platform_type": "community", "hits": len(hits)},
+            )
             all_hits.extend(hits)
         for query in blog_queries:
+            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "blog"})
             hits = self._search(
                 query=query,
                 platform_type="blog",
@@ -177,10 +203,31 @@ class MediaSearchNode(BaseMediaNode):
                 domain_phrases=domain_phrases,
             )
             state.search_history.append({"query": query, "platform_type": "blog", "hits": len(hits)})
+            self._record_event(
+                state,
+                "media_search_executed",
+                {"query": query, "platform_type": "blog", "hits": len(hits)},
+            )
             all_hits.extend(hits)
 
         state.search_hits = self._dedupe_hits(all_hits)
         state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=10)
+        self._record_event(
+            state,
+            "media_documents_fetched",
+            {"hit_count": len(state.search_hits), "document_count": len(state.crawled_documents)},
+        )
+
+    @staticmethod
+    def _record_event(state: MediaEngineState, event: str, details: dict[str, object]) -> None:
+        state.execution_log.append(
+            {
+                "event": event,
+                "timestamp": now_iso(),
+                "node": "MediaSearchNode",
+                "details": details,
+            }
+        )
 
     def _normalize_domain(self, state: MediaEngineState) -> None:
         if state.normalized_domain:

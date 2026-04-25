@@ -47,6 +47,22 @@ class QuerySearchNode(BaseQueryNode):
         )
         return state
 
+    def execute_plan(
+        self,
+        state: QueryEngineState,
+        *,
+        plan: SearchPlan,
+        embedding_client: OpenAICompatibleEmbeddingClient | None = None,
+    ) -> QueryEngineState:
+        self._normalize_domain(state)
+        state.search_plan = plan
+        self._append_search_results(
+            state,
+            questions=plan.questions,
+            embedding_client=embedding_client,
+        )
+        return state
+
     def supplement(
         self,
         state: QueryEngineState,

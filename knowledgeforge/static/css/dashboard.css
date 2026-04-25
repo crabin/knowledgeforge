@@ -237,6 +237,21 @@ h3 {
   background: #edf6ee;
 }
 
+.flow-step.focused {
+  outline: 3px solid rgba(47, 95, 145, 0.18);
+  box-shadow: 0 10px 24px rgba(47, 95, 145, 0.12);
+}
+
+.flow-step.done {
+  border-color: rgba(30, 123, 100, 0.34);
+  background: #f1f8f2;
+}
+
+.flow-step.blocked {
+  border-color: rgba(169, 72, 63, 0.38);
+  background: #fff3ef;
+}
+
 .flow-step span {
   display: block;
   margin-bottom: 18px;

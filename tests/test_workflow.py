@@ -284,12 +284,22 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     assert response.status_code == 202
     started = response.get_json()
     task_id = started["task_id"]
-    assert started["task_status"] == "running"
+    assert started["task_status"] == "awaiting_plan_confirmation"
+    assert set(started["agent_plans"]) == {"InsightEngine", "QueryEngine", "MediaEngine"}
+    assert "agent_outputs" not in started
 
     immediate_logs = client.get(f"/tasks/{task_id}/logs")
     assert immediate_logs.status_code == 200
     immediate_events = [entry["event"] for entry in immediate_logs.get_json()["logs"]]
-    assert "task_started" in immediate_events
+    assert "agent_plans_created" in immediate_events
+
+    plan_response = client.get(f"/tasks/{task_id}/plan")
+    assert plan_response.status_code == 200
+    assert plan_response.get_json()["task_status"] == "awaiting_plan_confirmation"
+
+    confirmed = client.post(f"/tasks/{task_id}/plan/confirm")
+    assert confirmed.status_code == 202
+    assert confirmed.get_json()["task_status"] == "running"
 
     events: list[str] = []
     final_payload = {}
@@ -463,7 +473,7 @@ def test_task_management_updates_and_deletes_saved_task(tmp_path: Path) -> None:
     assert task_id not in [item["task_id"] for item in listed["tasks"]]
 
 
-def test_running_task_cannot_be_managed(tmp_path: Path) -> None:
+def test_awaiting_plan_task_can_be_managed_but_not_resumed(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",
         task_state_root=tmp_path / "runtime" / "tasks",
@@ -475,11 +485,13 @@ def test_running_task_cannot_be_managed(tmp_path: Path) -> None:
     started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["运行中"]}).get_json()
     task_id = started["task_id"]
 
+    resume_before_confirmation = client.post(f"/tasks/{task_id}/resume")
     updated = client.patch(f"/tasks/{task_id}", json={"management_note": "不应允许"})
     deleted = client.delete(f"/tasks/{task_id}")
 
-    assert updated.status_code == 400
-    assert deleted.status_code == 400
+    assert resume_before_confirmation.status_code == 400
+    assert updated.status_code == 200
+    assert deleted.status_code == 200
 
 
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ from agent.MediaEngine.state.state import MediaEngineState
 from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.models import EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.utils.time import now_iso
 
 
@@ -27,10 +27,26 @@ class MediaEngine(BaseEngine):
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)
         self._formatting_node = MediaFormattingNode()
 
-    def run(self, context: RequestContext, round_number: int) -> EngineRunResult:
+    def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
+        state = MediaEngineState.from_context(context=context, round_number=round_number)
+        search_plan = self._search_node._build_plan(state)
+        return self._engine_plan_from_search_plan(search_plan)
+
+    def run(
+        self,
+        context: RequestContext,
+        round_number: int,
+        approved_plan: EnginePlan | None = None,
+    ) -> EngineRunResult:
         state = MediaEngineState.from_context(context=context, round_number=round_number)
         try:
-            state = self._search_node.run(state)
+            if approved_plan is not None:
+                state = self._search_node.execute_plan(
+                    state,
+                    plan=self._search_plan_from_engine_plan(approved_plan),
+                )
+            else:
+                state = self._search_node.run(state)
             state = self._reflection_node.run(state)
             if state.reflection_plan and (
                 state.reflection_plan.supplementary_social_queries
@@ -48,6 +64,50 @@ class MediaEngine(BaseEngine):
             return self._formatting_node.run(state)
         except Exception:
             return self._fallback_result(context, round_number)
+
+    def _engine_plan_from_search_plan(self, plan) -> EnginePlan:
+        timestamp = now_iso()
+        items: list[EnginePlanItem] = []
+        groups = [
+            ("M-S", "社交媒体观点检索", plan.social_queries, "social", ["社交讨论", "实时观点", "采用信号"]),
+            ("M-C", "技术社区讨论检索", plan.community_queries, "community", ["社区共识", "争议点", "实践反馈"]),
+            ("M-B", "博客与长文趋势检索", plan.blog_queries, "blog", ["趋势分析", "落地案例", "未来方向"]),
+        ]
+        for prefix, title, queries, platform_type, targets in groups:
+            for index, query in enumerate(queries, start=1):
+                items.append(
+                    EnginePlanItem(
+                        plan_item_id=f"{prefix}{index}",
+                        title=title,
+                        query_or_action=query,
+                        targets=targets,
+                        success_criteria=[f"命中相关 {platform_type} 来源", "结果能补充观点或趋势语境"],
+                        fallbacks=[],
+                        source_priority=[platform_type],
+                    )
+                )
+        return EnginePlan(
+            agent_name=self.name,
+            plan_items=items,
+            reasoning=plan.reasoning,
+            status="awaiting_confirmation",
+            created_at=timestamp,
+        )
+
+    @staticmethod
+    def _search_plan_from_engine_plan(plan: EnginePlan):
+        from agent.MediaEngine.state.state import MediaSearchPlan
+
+        social_queries = [item.query_or_action for item in plan.plan_items if "social" in item.source_priority]
+        community_queries = [item.query_or_action for item in plan.plan_items if "community" in item.source_priority]
+        blog_queries = [item.query_or_action for item in plan.plan_items if "blog" in item.source_priority]
+        return MediaSearchPlan(
+            social_queries=social_queries,
+            community_queries=community_queries,
+            blog_queries=blog_queries,
+            reasoning=plan.reasoning,
+            is_technical=True,
+        )
 
     def _fallback_result(self, context: RequestContext, round_number: int) -> EngineRunResult:
         timestamp = now_iso()

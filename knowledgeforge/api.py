@@ -104,10 +104,30 @@ def create_app(config: AppConfig | None = None) -> Flask:
 
     @app.post("/tasks/<task_id>/resume")
     def resume_task(task_id: str):
-        task = service.resume_task(task_id)
+        try:
+            task = service.resume_task(task_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         if task is None:
             return jsonify({"error": "task not found"}), 404
         return jsonify(task), 200
+
+    @app.get("/tasks/<task_id>/plan")
+    def get_task_plan(task_id: str):
+        plan = service.get_task_plan(task_id)
+        if plan is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(plan), 200
+
+    @app.post("/tasks/<task_id>/plan/confirm")
+    def confirm_task_plan(task_id: str):
+        try:
+            task = service.confirm_task_plan(task_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if task is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(task), 202
 
     @app.get("/tasks/<task_id>/frozen")
     def get_frozen(task_id: str):

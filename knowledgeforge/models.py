@@ -118,6 +118,54 @@ class EngineRunResult:
         return payload
 
 
+PlanItemStatus = Literal["planned", "approved", "in_progress", "completed", "insufficient"]
+PlanStatus = Literal["draft", "awaiting_confirmation", "approved"]
+WorkflowStepStatus = Literal["pending", "active", "completed", "blocked"]
+
+
+@dataclass(slots=True)
+class EnginePlanItem:
+    plan_item_id: str
+    title: str
+    query_or_action: str
+    targets: list[str]
+    success_criteria: list[str]
+    fallbacks: list[str] = field(default_factory=list)
+    source_priority: list[str] = field(default_factory=list)
+    status: PlanItemStatus = "planned"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class EnginePlan:
+    agent_name: str
+    plan_items: list[EnginePlanItem]
+    reasoning: str
+    status: PlanStatus
+    created_at: str
+    approved_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["plan_items"] = [item.to_dict() for item in self.plan_items]
+        return payload
+
+
+@dataclass(slots=True)
+class WorkflowStepEvent:
+    step_id: str
+    label: str
+    status: WorkflowStepStatus
+    timestamp: str
+    agent: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass(slots=True)
 class CompletenessResult:
     status: CompletenessStatus

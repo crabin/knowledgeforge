@@ -155,6 +155,13 @@
 - 修复后，QueryEngine 每条实时事件会同时写入 audit log 和运行中任务快照，并生成 `current_action`，用于前端摘要区实时展示。
 - 追加修复：`/tasks/{task_id}/logs` 不能只读 audit jsonl；当运行中任务快照已经有新的 `execution_log` 而 audit 文件缺项时，需要在读取 logs 时补写缺失事件，保证日志接口和落盘 jsonl 一致。
 
+## 三路 Agent 计划确认结论
+- QueryEngine 原有计划能力可以复用为 `EnginePlan`，关键是把“生成计划”和“执行搜索”拆开，避免 `/tasks/async` 一创建就触发真实采集。
+- MediaEngine 需要把 social / community / blog 三类查询统一映射为计划项，否则前端无法用同一个组件展示三路计划。
+- InsightEngine 虽然当前仍是轻量本地上下文实现，也需要显式计划项，才能让三路采集在用户确认阶段保持一致体验。
+- `awaiting_plan_confirmation` 应允许修改或删除任务，但不能 resume；真正后台执行只从 `POST /tasks/{task_id}/plan/confirm` 启动。
+- Flow Map 使用 `WorkflowStepEvent` 比直接推断 `task_status` 更稳定，因为一个任务状态无法表达 planning、collecting、writing、governing 等细粒度前端焦点。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

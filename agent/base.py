@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from knowledgeforge.models import EngineRunResult, RequestContext
+from knowledgeforge.models import EnginePlan, EngineRunResult, RequestContext
 
 
 class BaseEngine(ABC):
     name: str
 
     @abstractmethod
-    def run(self, context: RequestContext, round_number: int) -> EngineRunResult:
+    def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
+        raise NotImplementedError
+
+    @abstractmethod
+    def run(
+        self,
+        context: RequestContext,
+        round_number: int,
+        approved_plan: EnginePlan | None = None,
+    ) -> EngineRunResult:
         raise NotImplementedError

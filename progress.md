@@ -964,6 +964,39 @@
 - 当前保守结论：
   - 即使新的执行事件只先进入任务快照，访问 logs 时也会被补写进 audit jsonl，后续刷新和重启后仍能看到。
 
+### 阶段 38：三路 Agent 计划确认与流程可视化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 新增统一 `EnginePlan`、`EnginePlanItem`、`WorkflowStepEvent` 模型
+  - 为 Insight / Query / Media 三路 Engine 增加 `plan(...)` 入口
+  - 将 `/tasks/async` 与 intake confirm 改为先生成三路计划并停在 `awaiting_plan_confirmation`
+  - 新增 `GET /tasks/<task_id>/plan` 与 `POST /tasks/<task_id>/plan/confirm`
+  - 确认计划后再异步启动 LangGraph 三路并行采集
+  - 扩展 workflow step 事件，前端 Flow Map 可按 planning / awaiting_confirmation / collecting / evaluating / writing / governing / versioning 聚焦
+  - 前端将 QueryEngine 单计划面板升级为“三路 Agent 执行计划”，并增加确认计划按钮
+  - 补充三路计划生成、已确认计划执行、API 确认闸门和 dashboard 回归测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/base.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/InsightEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+- 验证结果：
+  - `uv run pytest tests/test_engine_plans.py tests/test_query_engine.py tests/test_media_engine.py tests/test_dashboard.py tests/test_workflow.py -q`：39 passed
+- 当前保守结论：
+  - 默认异步任务现在必须经过用户确认计划后才会执行采集；旧同步 `/tasks` 仍可完成端到端回归。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
