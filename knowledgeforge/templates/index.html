@@ -23,14 +23,23 @@
     </header>
 
     <main class="dashboard-shell">
-      <details class="panel hero-panel collapsible-panel">
+      <details class="panel hero-panel collapsible-panel" open>
         <summary class="section-heading collapsible-summary">
           <span>
             <span class="eyebrow">Flow Map</span>
-            <span class="summary-title" id="flow-title">主流程能力</span>
+            <span class="summary-title" id="flow-title">实时流程图</span>
           </span>
           <span class="summary-state">展开</span>
         </summary>
+        <div class="x6-flow-shell">
+          <div class="x6-flow-toolbar" aria-label="流程图状态图例">
+            <span class="flow-legend pending">待处理</span>
+            <span class="flow-legend active">当前执行</span>
+            <span class="flow-legend done">已完成</span>
+            <span class="flow-legend blocked">需处理</span>
+          </div>
+          <div id="workflow-x6" class="workflow-x6" aria-label="实时流程图"></div>
+        </div>
         <div class="flow-grid" id="workflow-map">
           <article class="flow-step active" data-step-id="planning">
             <span>01</span>
@@ -184,6 +193,7 @@
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" defer></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
   </body>
 </html>

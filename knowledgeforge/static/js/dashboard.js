@@ -3,6 +3,8 @@ const state = {
   pollTimer: null,
   pollTaskId: null,
   pollCount: 0,
+  workflowGraph: null,
+  workflowGraphReady: false,
 };
 
 const output = document.querySelector("#response-output");
@@ -17,6 +19,17 @@ const agentPlanOutput = document.querySelector("#agent-plan-output");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
+const workflowX6Container = document.querySelector("#workflow-x6");
+
+const workflowSteps = [
+  { id: "planning", order: "01", title: "计划生成", description: "三路 Agent 基于输入上下文先生成执行计划。" },
+  { id: "awaiting_confirmation", order: "02", title: "用户确认", description: "展示 Insight、Query、Media 计划，确认后再执行。" },
+  { id: "collecting", order: "03", title: "并行采集", description: "三路能力并行补充内部线索、权威事实与媒体视角。" },
+  { id: "evaluating", order: "04", title: "完整性评估", description: "检查核心子主题、可信来源、信息空洞、冲突与时效性。" },
+  { id: "writing", order: "05", title: "Markdown 落盘", description: "按领域、子领域、文章路径保存可追溯知识文档。" },
+  { id: "governing", order: "06", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "versioning", order: "07", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+];
 
 async function requestJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -213,18 +226,186 @@ function formatConfigLabel(key) {
 }
 
 function renderWorkflowMap(payload) {
-  if (!workflowMap) return;
   const events = normalizeWorkflowEvents(payload);
   const byStep = new Map(events.map((event) => [event.step_id, event]));
   const current = payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "planning";
+  renderWorkflowFallback(byStep, current);
+  renderWorkflowX6(byStep, current);
+}
+
+function initializeWorkflowMap() {
+  renderWorkflowMap(state.lastPayload || {});
+}
+
+function renderWorkflowFallback(byStep, current) {
+  if (!workflowMap) return;
   workflowMap.querySelectorAll("[data-step-id]").forEach((step) => {
     const stepId = step.dataset.stepId;
     const event = byStep.get(stepId);
-    step.classList.toggle("active", stepId === current);
-    step.classList.toggle("focused", stepId === current);
-    step.classList.toggle("done", event?.status === "completed");
+    const status = getWorkflowStepStatus(stepId, byStep, current);
+    step.classList.toggle("active", status === "active");
+    step.classList.toggle("focused", status === "active");
+    step.classList.toggle("done", status === "completed");
     step.classList.toggle("blocked", event?.status === "blocked");
   });
+}
+
+function renderWorkflowX6(byStep, current) {
+  const graph = ensureWorkflowGraph();
+  if (!graph) return;
+  graph.resize(workflowX6Container.clientWidth || 960, workflowX6Container.clientHeight || 360);
+  const data = buildWorkflowGraphData(byStep, current);
+  graph.fromJSON(data);
+  graph.centerContent();
+}
+
+function ensureWorkflowGraph() {
+  if (!workflowX6Container || !window.X6?.Graph) return null;
+  if (state.workflowGraph) return state.workflowGraph;
+
+  const { Graph } = window.X6;
+  state.workflowGraph = new Graph({
+    container: workflowX6Container,
+    width: workflowX6Container.clientWidth || 960,
+    height: workflowX6Container.clientHeight || 360,
+    panning: true,
+    mousewheel: {
+      enabled: true,
+      modifiers: ["ctrl", "meta"],
+    },
+    interacting: {
+      nodeMovable: false,
+      edgeMovable: false,
+      arrowheadMovable: false,
+      vertexMovable: false,
+    },
+    background: {
+      color: "#fffdf8",
+    },
+    grid: {
+      size: 12,
+      visible: true,
+      type: "dot",
+      args: {
+        color: "rgba(23, 33, 31, 0.12)",
+      },
+    },
+  });
+  state.workflowGraphReady = true;
+  document.body.classList.add("x6-flow-ready");
+  return state.workflowGraph;
+}
+
+function buildWorkflowGraphData(byStep, current) {
+  const width = workflowX6Container?.clientWidth || 960;
+  const compact = width < 760;
+  const nodeWidth = compact ? Math.min(220, width - 48) : 184;
+  const nodeHeight = compact ? 78 : 92;
+  const gapX = compact ? 0 : Math.max(32, Math.floor((width - 48 - nodeWidth * 4) / 3));
+  const startX = 24;
+  const startY = 24;
+  const rowGap = compact ? 24 : 58;
+  const columnGap = compact ? 0 : nodeWidth + gapX;
+  const nodes = workflowSteps.map((step, index) => {
+    const position = getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap);
+    const status = getWorkflowStepStatus(step.id, byStep, current);
+    return {
+      id: step.id,
+      shape: "rect",
+      x: position.x,
+      y: position.y,
+      width: nodeWidth,
+      height: nodeHeight,
+      data: { status },
+      attrs: getWorkflowNodeAttrs(step, status),
+    };
+  });
+  const edges = workflowSteps.slice(0, -1).map((step, index) => {
+    const next = workflowSteps[index + 1];
+    const sourceStatus = getWorkflowStepStatus(step.id, byStep, current);
+    const targetStatus = getWorkflowStepStatus(next.id, byStep, current);
+    const edgeStatus = targetStatus === "blocked" ? "blocked" : sourceStatus === "completed" ? "completed" : targetStatus === "active" ? "active" : "pending";
+    return {
+      id: `${step.id}-${next.id}`,
+      shape: "edge",
+      source: step.id,
+      target: next.id,
+      router: compact ? { name: "manhattan" } : { name: "orth" },
+      connector: { name: "rounded" },
+      attrs: getWorkflowEdgeAttrs(edgeStatus),
+    };
+  });
+  return { nodes, edges };
+}
+
+function getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap) {
+  if (compact) {
+    return { x: startX, y: startY + index * (nodeHeight + rowGap) };
+  }
+  const row = index < 4 ? 0 : 1;
+  const column = index < 4 ? index : 6 - index;
+  return {
+    x: startX + column * columnGap,
+    y: startY + row * (nodeHeight + rowGap),
+  };
+}
+
+function getWorkflowStepStatus(stepId, byStep, current) {
+  const event = byStep.get(stepId);
+  if (event?.status === "blocked") return "blocked";
+  if (stepId === current) return "active";
+  if (event?.status === "completed") return "completed";
+  return "pending";
+}
+
+function getWorkflowNodeAttrs(step, status) {
+  const palette = {
+    pending: { fill: "#fbf8ee", stroke: "#d8d1c2", title: "#17211f", meta: "#5d6a66" },
+    active: { fill: "#edf6ee", stroke: "#1e7b64", title: "#17211f", meta: "#1e7b64" },
+    completed: { fill: "#f1f8f2", stroke: "#1e7b64", title: "#17211f", meta: "#1e7b64" },
+    blocked: { fill: "#fff3ef", stroke: "#a9483f", title: "#17211f", meta: "#a9483f" },
+  }[status] || {};
+  return {
+    body: {
+      rx: 8,
+      ry: 8,
+      fill: palette.fill,
+      stroke: palette.stroke,
+      strokeWidth: status === "active" ? 3 : 1.5,
+      filter: status === "active" ? "drop-shadow(0 8px 14px rgba(30, 123, 100, 0.18))" : "none",
+    },
+    label: {
+      text: `${step.order}  ${step.title}\n${step.description}`,
+      fill: palette.title,
+      fontSize: 13,
+      fontWeight: 800,
+      lineHeight: 18,
+      refX: 14,
+      refY: 15,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+    },
+  };
+}
+
+function getWorkflowEdgeAttrs(status) {
+  const color = {
+    pending: "#d8d1c2",
+    active: "#2f5f91",
+    completed: "#1e7b64",
+    blocked: "#a9483f",
+  }[status] || "#d8d1c2";
+  return {
+    line: {
+      stroke: color,
+      strokeWidth: status === "active" ? 3 : 2,
+      targetMarker: {
+        name: "classic",
+        size: 8,
+      },
+      strokeDasharray: status === "pending" ? "6 5" : "",
+    },
+  };
 }
 
 function normalizeWorkflowEvents(payload) {
@@ -632,3 +813,10 @@ document.querySelector("#delete-task").addEventListener("click", async (event) =
 });
 
 refreshStatus();
+initializeWorkflowMap();
+
+window.addEventListener("resize", () => {
+  if (state.workflowGraphReady) {
+    renderWorkflowMap(state.lastPayload || {});
+  }
+});

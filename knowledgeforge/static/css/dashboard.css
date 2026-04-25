@@ -214,8 +214,78 @@ h3 {
 }
 
 .collapsible-panel[open] .flow-grid,
+.collapsible-panel[open] .x6-flow-shell,
 .collapsible-panel[open] .config-grid {
   padding: 0 22px 22px;
+}
+
+.x6-flow-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.x6-flow-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+}
+
+.flow-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fffdf8;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.flow-legend::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.flow-legend.active::before {
+  background: var(--blue);
+}
+
+.flow-legend.done::before {
+  background: var(--green);
+}
+
+.flow-legend.blocked::before {
+  background: var(--red);
+}
+
+.workflow-x6 {
+  width: 100%;
+  height: 340px;
+  overflow: hidden;
+  border: 1px solid rgba(23, 33, 31, 0.14);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.workflow-x6:empty::before {
+  content: "正在加载 X6 实时流程图";
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.x6-flow-ready .flow-grid {
+  display: none;
 }
 
 .flow-grid {
@@ -686,6 +756,10 @@ button:disabled {
   .plan-lists {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .workflow-x6 {
+    height: 760px;
+  }
 }
 
 @media (max-width: 620px) {
@@ -708,5 +782,9 @@ button:disabled {
   .button-row,
   .button-grid {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-x6 {
+    height: 760px;
   }
 }

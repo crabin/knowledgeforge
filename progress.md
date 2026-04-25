@@ -1040,6 +1040,34 @@
 - 当前保守结论：
   - 后续如果 Q4/Q5 仍为 insufficient，任务会停在补检索状态；不会再产出“看似完成但无有效信息”的 verified 文档。
 
+### 阶段 41：前端实时流程图 X6 优化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 参考 AntV X6 官方快速上手，用 UMD 脚本引入 `@antv/x6`
+  - 将首页 Flow Map 默认展开，并增加 X6 画布、状态图例和实时流程节点/边渲染
+  - 前端继续复用 `WorkflowStepEvent`，由 `planning -> awaiting_confirmation -> collecting -> evaluating -> writing -> governing -> versioning` 生成 X6 JSON 数据
+  - 保留原 HTML 流程卡片作为 X6 未加载时的回退展示
+  - 补充 dashboard 页面回归断言，确认 X6 容器和脚本已输出
+  - 本地 Playwright 检查发现 unpkg 被 ORB 拦截，已切换到 X6 官方文档同样列出的 jsDelivr CDN
+  - 去掉 X6 `autoResize`，改为手动按容器宽高 resize，避免画布把首页撑高
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_dashboard.py -q`：2 passed
+  - `uv run pytest tests/test_dashboard.py tests/test_workflow.py -q`：26 passed
+  - Playwright 桌面检查：`hasX6=true`，7 个节点、6 条边，回退卡片隐藏，画布高度 336px
+  - Playwright 移动检查：7 个节点、6 条边，画布宽 272px、高 756px，无横向溢出
+- 当前保守结论：
+  - 首页实时流程图已由 X6 负责主展示，状态仍来自现有 workflow events，不改变后端执行链路。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

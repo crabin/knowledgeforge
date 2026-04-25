@@ -162,6 +162,7 @@
 - `awaiting_plan_confirmation` 应允许修改或删除任务，但不能 resume；真正后台执行只从 `POST /tasks/{task_id}/plan/confirm` 启动。
 - Flow Map 使用 `WorkflowStepEvent` 比直接推断 `task_status` 更稳定，因为一个任务状态无法表达 planning、collecting、writing、governing 等细粒度前端焦点。
 - 计划进度展示应以最终任务状态为准：`verified` 表示三路计划已经完成执行，不能再让 QueryEngine 过程日志里的 `insufficient` 覆盖最终进度。
+- AntV X6 更适合作为实时流程图主展示层：节点和边可直接由同一批 `WorkflowStepEvent` JSON 生成；原 HTML 卡片应继续保留为 X6 CDN 未加载或禁用脚本时的回退。
 
 ## 查询计划不足门禁结论
 - 仅看“有中高可信来源”不够；如果 QueryEngine 的结构化计划项仍有 `insufficient`，说明用户确认的检索目标没有完成，不能进入 verified。
