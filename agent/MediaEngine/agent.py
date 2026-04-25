@@ -18,11 +18,13 @@ class MediaEngine(BaseEngine):
     def __init__(
         self,
         chat_client: OpenAICompatibleChatClient | None = None,
+        planning_chat_client: OpenAICompatibleChatClient | None = None,
         crawler: MediaPerspectiveCrawler | None = None,
     ) -> None:
         self._chat_client = chat_client
+        self._planning_chat_client = planning_chat_client or chat_client
         self._crawler = crawler or MediaPerspectiveCrawler()
-        self._search_node = MediaSearchNode(chat_client=self._chat_client, crawler=self._crawler)
+        self._search_node = MediaSearchNode(chat_client=self._planning_chat_client, crawler=self._crawler)
         self._reflection_node = MediaReflectionNode(chat_client=self._chat_client)
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)
         self._formatting_node = MediaFormattingNode()

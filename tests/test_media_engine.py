@@ -128,6 +128,33 @@ class FakeMediaPlanFirstChatClient:
         }
 
 
+class FakeMediaPlanningOnlyChatClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls.append(system_prompt)
+        if "术语归一化助手" in system_prompt:
+            return {
+                "normalized_domain": "machine learning",
+                "aliases": ["ML", "machine learning"],
+                "search_terms": ["machine learning", "ML"],
+                "reasoning": "规划阶段完成术语归一化。",
+            }
+        return {
+            "social_queries": ["machine learning social discussion"],
+            "community_queries": ["machine learning community discussion"],
+            "blog_queries": ["machine learning engineering blog"],
+            "reasoning": "规划阶段生成 Media 查询。",
+            "is_technical": True,
+        }
+
+
+class FailingExecutionChatClient:
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        raise AssertionError("MediaEngine.plan() must not use the execution chat client")
+
+
 class FakeMediaCrawler:
     def __init__(self) -> None:
         self.queries: list[tuple[str, str]] = []
@@ -222,6 +249,29 @@ def test_media_engine_run_without_llm_plan_fails_early() -> None:
         assert "requires an LLM chat client" in str(exc)
     else:
         raise AssertionError("MediaEngine must not fallback to a rule plan when LLM is missing")
+
+
+def test_media_engine_plan_uses_planning_chat_client() -> None:
+    planning_client = FakeMediaPlanningOnlyChatClient()
+    engine = MediaEngine(
+        chat_client=FailingExecutionChatClient(),
+        planning_chat_client=planning_client,
+        crawler=EmptyMediaCrawler(),
+    )
+    context = RequestContext(
+        domain="ML",
+        subdomains=["基础概览"],
+        time_window="近 12 个月",
+        focus_points=["社区观点"],
+        constraints=[],
+        initial_strategy=["ML community trend"],
+    )
+
+    plan = engine.plan(context, round_number=1)
+
+    assert plan.agent_name == "MediaEngine"
+    assert len(plan.plan_items) == 3
+    assert len(planning_client.calls) == 2
 
 
 def test_media_engine_normalizes_abbreviation_for_search() -> None:

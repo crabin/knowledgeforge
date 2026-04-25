@@ -69,6 +69,7 @@ class TaskService:
             ),
             media_engine=MediaEngine(
                 chat_client=execution_chat_client,
+                planning_chat_client=planning_chat_client,
                 crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
             ),
             evaluator=CompletenessEvaluator(),

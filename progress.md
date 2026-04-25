@@ -1104,6 +1104,25 @@
 - 当前保守结论：
   - LLM-only 行为不变；修复点是避免三路同时压同一个 LLM 服务导致排队超时。
 
+### 阶段 44：MediaEngine 计划超时客户端修复
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 排查前端 `MediaEngine plan generation failed: timed out`，确认 MediaEngine 计划阶段仍误用 `execution_chat_client`
+  - 为 `MediaEngine` 增加 `planning_chat_client` 注入，计划与领域归一化使用计划阶段 timeout
+  - `TaskService` 注入 MediaEngine 时同时传入 execution client 与 planning client，保持执行阶段短超时策略不变
+  - 增加回归测试，确保 `MediaEngine.plan()` 不会误用 execution chat client
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_media_engine.py::test_media_engine_plan_uses_planning_chat_client tests/test_workflow.py::test_async_task_stops_when_llm_plan_generation_fails -q`：2 passed
+  - `uv run pytest -q`：99 passed
+- 当前保守结论：
+  - MediaEngine 计划失败不应再由 5 秒 execution timeout 触发；如果 LLM 在 `PLAN_LLM_TIMEOUT` 内仍失败，仍按 LLM-only 规则进入 `plan_failed`。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25
