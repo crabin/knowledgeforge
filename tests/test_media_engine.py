@@ -95,6 +95,39 @@ class FakeMediaNormalizationChatClient:
         }
 
 
+class FakeMediaPlanFirstChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "social_queries": ["Machine Learning social media discussion trend"],
+                "community_queries": ["Machine Learning community discussion outlook"],
+                "blog_queries": ["Machine Learning blog analysis future trend"],
+                "reasoning": "使用已确认领域生成观点查询。",
+                "is_technical": True,
+            }
+        if self.calls == 2:
+            return {
+                "missing_aspects": [],
+                "supplementary_social_queries": [],
+                "supplementary_community_queries": [],
+                "supplementary_blog_queries": [],
+                "reasoning": "当前结果已足够。",
+            }
+        return {
+            "summary": "已基于确认术语完成趋势整理。",
+            "current_sentiment": "整体讨论稳定。",
+            "mainstream_views": [],
+            "debates": [],
+            "adoption_signals": [],
+            "future_directions": [],
+            "coverage_topics": ["基础概念"],
+        }
+
+
 class FakeMediaCrawler:
     def __init__(self) -> None:
         self.queries: list[tuple[str, str]] = []
@@ -169,7 +202,7 @@ def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> N
     assert any(query == "LangGraph production engineering blog adoption" for _, query in crawler.queries)
 
 
-def test_media_engine_fallback_keeps_traceable_sources() -> None:
+def test_media_engine_run_without_llm_plan_fails_early() -> None:
     engine = MediaEngine(
         chat_client=None,
         crawler=EmptyMediaCrawler(),
@@ -183,11 +216,12 @@ def test_media_engine_fallback_keeps_traceable_sources() -> None:
         initial_strategy=["deep learning community trend"],
     )
 
-    result = engine.run(context, round_number=1)
-
-    assert result.sources
-    assert {source.source_type for source in result.sources} == {"social", "community", "blog"}
-    assert any("社交查询：" in item for item in result.raw_material)
+    try:
+        engine.run(context, round_number=1)
+    except RuntimeError as exc:
+        assert "requires an LLM chat client" in str(exc)
+    else:
+        raise AssertionError("MediaEngine must not fallback to a rule plan when LLM is missing")
 
 
 def test_media_engine_normalizes_abbreviation_for_search() -> None:
@@ -213,7 +247,7 @@ def test_media_engine_normalizes_abbreviation_for_search() -> None:
 def test_media_engine_uses_confirmed_normalized_domain_without_extra_normalization() -> None:
     crawler = FakeMediaCrawler()
     engine = MediaEngine(
-        chat_client=None,
+        chat_client=FakeMediaPlanFirstChatClient(),
         crawler=crawler,
     )
     context = RequestContext(

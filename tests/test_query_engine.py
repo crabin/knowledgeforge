@@ -110,6 +110,103 @@ class FakeNormalizationChatClient:
         }
 
 
+class FakePlanFirstChatClient:
+    def __init__(self) -> None:
+        self.plan_calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "术语归一化助手" in system_prompt:
+            return {
+                "normalized_domain": "Machine Learning",
+                "aliases": ["ML", "Machine Learning"],
+                "search_terms": ["Machine Learning"],
+                "reasoning": "测试归一化。",
+            }
+        self.plan_calls += 1
+        if self.plan_calls == 1:
+            return {
+                "questions": [
+                    {
+                        "question": "Machine Learning 在基础概念方面有哪些官方事实与权威说明？",
+                        "google_query": "Machine Learning basic concepts official documentation standard",
+                        "search_targets": ["官方定义", "权威来源"],
+                        "expected_info": ["官方定义", "权威说明"],
+                        "source_priority": ["official documentation", "official GitHub"],
+                        "success_criteria": ["命中官方文档"],
+                        "fallback_queries": ["Machine Learning basic concepts official guide"],
+                    },
+                    {
+                        "question": "Machine Learning 在基础概念方面有哪些教程案例？",
+                        "google_query": "Machine Learning basic concepts tutorial guide",
+                        "search_targets": ["教程示例"],
+                        "expected_info": ["教程示例"],
+                        "source_priority": ["tutorial", "technical blog"],
+                        "success_criteria": ["命中教程或技术参考"],
+                        "fallback_queries": ["Machine Learning basic concepts examples"],
+                    },
+                ],
+                "official_queries": ["Machine Learning basic concepts official documentation standard"],
+                "tutorial_queries": ["Machine Learning basic concepts tutorial guide"],
+                "official_domains": [],
+                "reasoning": "LLM 生成计划。",
+            }
+        if self.plan_calls == 2:
+            return {
+                "missing_aspects": ["检索结果不足或缺少权威支撑"],
+                "supplementary_official_queries": ["Machine Learning basic concepts official guide"],
+                "supplementary_tutorial_queries": [],
+                "candidate_official_domains": [],
+                "reasoning": "检索结果不足或缺少权威支撑。",
+            }
+        return {
+            "summary": "已基于 LLM 计划完成检索整理。",
+            "key_points": ["LLM 计划已执行"],
+            "coverage_topics": ["基础概念"],
+            "official_findings": [],
+            "tutorial_findings": [],
+        }
+
+
+class FakeChineseTopicPlanChatClient:
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "术语归一化助手" in system_prompt:
+            return {
+                "normalized_domain": "deep learning",
+                "aliases": ["deep learning"],
+                "search_terms": ["deep learning"],
+                "reasoning": "测试归一化。",
+            }
+        return {
+            "questions": [
+                {
+                    "question": "deep learning 基础概念",
+                    "google_query": "deep learning basic concepts tutorial guide best practices",
+                    "search_targets": ["教程示例"],
+                    "expected_info": ["教程示例"],
+                    "source_priority": ["tutorial"],
+                    "success_criteria": ["命中教程"],
+                    "fallback_queries": ["deep learning basic concepts examples"],
+                },
+                {
+                    "question": "deep learning 核心方法",
+                    "google_query": "deep learning core methods tutorial guide best practices",
+                    "search_targets": ["核心方法案例"],
+                    "expected_info": ["核心方法案例"],
+                    "source_priority": ["tutorial"],
+                    "success_criteria": ["命中教程"],
+                    "fallback_queries": ["deep learning core methods examples"],
+                },
+            ],
+            "official_queries": [],
+            "tutorial_queries": [
+                "deep learning basic concepts tutorial guide best practices",
+                "deep learning core methods tutorial guide best practices",
+            ],
+            "official_domains": [],
+            "reasoning": "LLM 使用英文检索 topic。",
+        }
+
+
 class FakeEmbeddingClient:
     def embed_texts(self, texts: list[str]):
         return [[0.1, 0.2, 0.3] for _ in texts]
@@ -271,7 +368,7 @@ def test_query_engine_normalizes_abbreviation_for_search() -> None:
 def test_query_engine_uses_confirmed_normalized_domain_without_extra_normalization() -> None:
     crawler = FakeCrawler()
     engine = QueryEngine(
-        chat_client=None,
+        chat_client=FakePlanFirstChatClient(),
         embedding_client=FakeEmbeddingClient(),
         crawler=crawler,
     )
@@ -295,10 +392,10 @@ def test_query_engine_uses_confirmed_normalized_domain_without_extra_normalizati
     assert not any("machinery" in query.lower() or "vending machine" in query.lower() for _, query in crawler.queries)
 
 
-def test_query_engine_fallback_plan_emits_structured_questions() -> None:
+def test_query_engine_llm_plan_emits_structured_questions() -> None:
     crawler = FakeCrawler()
     engine = QueryEngine(
-        chat_client=None,
+        chat_client=FakePlanFirstChatClient(),
         embedding_client=FakeEmbeddingClient(),
         crawler=crawler,
     )
@@ -314,7 +411,7 @@ def test_query_engine_fallback_plan_emits_structured_questions() -> None:
     result = engine.run(context, round_number=1)
 
     assert any(item == "查询计划：" for item in result.raw_material)
-    assert any("Machine Learning 在“基础概念”方面有哪些官方事实与权威说明？" in item for item in result.raw_material)
+    assert any("Machine Learning 在基础概念方面有哪些官方事实与权威说明？" in item for item in result.raw_material)
     assert any("Google 查询：Machine Learning basic concepts official documentation standard" in item for item in result.raw_material)
     assert any("查询内容：" in item and "权威来源" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方定义" in item for item in result.raw_material)
@@ -324,7 +421,7 @@ def test_query_engine_fallback_plan_emits_structured_questions() -> None:
 def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
     crawler = EmptyCrawler()
     engine = QueryEngine(
-        chat_client=None,
+        chat_client=FakePlanFirstChatClient(),
         embedding_client=FakeEmbeddingClient(),
         crawler=crawler,
     )
@@ -345,8 +442,8 @@ def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
     assert any("☐ Q1 [insufficient]" in item for item in result.raw_material)
 
 
-def test_query_engine_fallback_plan_translates_common_chinese_topics() -> None:
-    engine = QueryEngine(chat_client=None, crawler=EmptyCrawler())
+def test_query_engine_llm_plan_can_use_search_friendly_english_topics() -> None:
+    engine = QueryEngine(chat_client=FakeChineseTopicPlanChatClient(), crawler=EmptyCrawler())
     context = RequestContext(
         domain="deep learning",
         subdomains=["基础概念", "核心方法"],
@@ -367,7 +464,7 @@ def test_query_engine_fallback_plan_translates_common_chinese_topics() -> None:
 def test_query_engine_reflection_supplements_only_insufficient_questions() -> None:
     crawler = PartialCrawler()
     engine = QueryEngine(
-        chat_client=None,
+        chat_client=FakePlanFirstChatClient(),
         embedding_client=FakeEmbeddingClient(),
         crawler=crawler,
     )

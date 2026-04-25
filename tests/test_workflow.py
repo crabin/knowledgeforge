@@ -6,6 +6,7 @@ from pathlib import Path
 
 from knowledgeforge.api import create_app
 from knowledgeforge.config import AppConfig
+from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.services.task_service import TaskService
 
 
@@ -320,6 +321,32 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     assert "query_plan_item_started" in events
     assert "query_question_completed" in events
     assert final_payload["task_status"] != "running"
+
+
+def test_async_task_stops_when_llm_plan_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    def fail_plan(self, *, system_prompt: str, user_prompt: str):
+        raise RuntimeError("planner llm down")
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", fail_plan)
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["计划失败"]})
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["task_status"] == "plan_failed"
+    assert "planner llm down" in payload["current_action"]
+    logs = client.get(f"/tasks/{payload['task_id']}/logs").get_json()["logs"]
+    events = [entry["event"] for entry in logs]
+    assert "agent_plan_failed" in events
+    assert "workflow_step" in events
 
 
 def test_async_task_detail_includes_realtime_query_action(tmp_path: Path) -> None:

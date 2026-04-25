@@ -1,31 +1,88 @@
 from __future__ import annotations
 
+import json
+
 from agent.base import BaseEngine
+from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.utils.time import now_iso
+
+
+INSIGHT_PLAN_SYSTEM_PROMPT = """
+你是 KnowledgeForge 的 InsightEngine 规划器。
+任务目标：在执行本地知识/历史上下文梳理前，生成结构化执行计划。
+
+要求：
+1. 只规划 InsightEngine 的职责：本地知识库、历史任务、intake 上下文、领域边界、已知空白。
+2. 不要规划外部事实检索，也不要规划社交媒体/社区抓取。
+3. 每个子领域至少生成一个 plan item。
+4. 只返回 JSON。
+
+输出 JSON：
+{
+  "items": [
+    {
+      "title": "...",
+      "action": "...",
+      "targets": ["..."],
+      "success_criteria": ["..."],
+      "source_priority": ["..."]
+    }
+  ],
+  "reasoning": "..."
+}
+"""
 
 
 class InsightEngine(BaseEngine):
     name = "InsightEngine"
 
+    def __init__(self, chat_client: OpenAICompatibleChatClient | None = None) -> None:
+        self._chat_client = chat_client
+
     def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
+        if self._chat_client is None:
+            raise RuntimeError("InsightEngine plan generation requires an LLM chat client.")
         timestamp = now_iso()
-        topics = context.subdomains or [context.domain]
+        payload = self._chat_client.complete_json(
+            system_prompt=INSIGHT_PLAN_SYSTEM_PROMPT,
+            user_prompt=json.dumps(
+                {
+                    "domain": context.domain,
+                    "subdomains": context.subdomains,
+                    "time_window": context.time_window,
+                    "focus_points": context.focus_points,
+                    "constraints": context.constraints,
+                    "clarification_summary": context.clarification_summary,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        items = [
+            item
+            for item in payload.get("items", [])
+            if isinstance(item, dict) and str(item.get("title", "")).strip() and str(item.get("action", "")).strip()
+        ]
+        if not items:
+            raise RuntimeError("InsightEngine LLM did not return any valid plan items.")
         return EnginePlan(
             agent_name=self.name,
             plan_items=[
                 EnginePlanItem(
                     plan_item_id=f"I{index}",
-                    title=f"梳理 {topic} 的已有知识线索",
-                    query_or_action=f"读取本地知识库、历史任务和 intake 上下文中关于 {topic} 的资料",
-                    targets=["本地上下文", "历史沉淀", "领域边界", "已知空白"],
-                    success_criteria=["形成可供完整性评估使用的背景线索", "保留 local:// 来源追溯"],
-                    fallbacks=["没有历史知识时使用 intake 上下文生成首版知识框架"],
-                    source_priority=["local markdown", "task history", "intake context"],
+                    title=str(item.get("title", "")).strip(),
+                    query_or_action=str(item.get("action", "")).strip(),
+                    targets=[str(value).strip() for value in item.get("targets", []) if str(value).strip()],
+                    success_criteria=[
+                        str(value).strip() for value in item.get("success_criteria", []) if str(value).strip()
+                    ],
+                    source_priority=[
+                        str(value).strip() for value in item.get("source_priority", []) if str(value).strip()
+                    ],
                 )
-                for index, topic in enumerate(topics[:3], start=1)
+                for index, item in enumerate(items[:5], start=1)
             ],
-            reasoning="InsightEngine 优先确认本地已有知识、历史沉淀和用户澄清上下文，作为三路采集的内部线索。",
+            reasoning=str(payload.get("reasoning", "")).strip() or "由 LLM 生成 InsightEngine 本地上下文计划。",
             status="awaiting_confirmation",
             created_at=timestamp,
         )

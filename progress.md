@@ -1040,6 +1040,34 @@
 - 当前保守结论：
   - 后续如果 Q4/Q5 仍为 insufficient，任务会停在补检索状态；不会再产出“看似完成但无有效信息”的 verified 文档。
 
+### 阶段 41：计划阶段取消规则 fallback
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - QueryEngine / MediaEngine 计划生成不再回退到规则计划；LLM 缺失、超时或返回无效结构会直接失败
+  - InsightEngine 计划生成改为 LLM 生成，不再使用本地规则计划
+  - TaskService 捕获计划阶段异常，将任务保存为 `plan_failed`
+  - 计划失败时写入 `agent_plan_failed` audit log 与 blocked workflow step，前端摘要区通过 `current_action` 展示失败原因
+  - 前端将 `plan_failed` 识别为终态，避免继续轮询
+  - 测试层用 fake OpenAI-compatible chat 保持服务级回归稳定，同时验证真实代码路径仍走 LLM plan 接口
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/InsightEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/conftest.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest -q`：98 passed
+- 当前保守结论：
+  - 计划阶段现在只有 LLM 成功这一条路径；失败会提前结束并在前端和日志中明确显示。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25

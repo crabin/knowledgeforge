@@ -6,6 +6,60 @@ from agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.models import EnginePlan, EnginePlanItem, RequestContext
 
 
+class FakePlanChatClient:
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "术语归一化助手" in system_prompt:
+            return {
+                "normalized_domain": "知识工程",
+                "aliases": ["知识工程"],
+                "search_terms": ["知识工程"],
+                "reasoning": "测试归一化。",
+            }
+        if "InsightEngine" in system_prompt:
+            return {
+                "items": [
+                    {
+                        "title": "梳理本地上下文",
+                        "action": "读取 intake 上下文与历史任务",
+                        "targets": ["本地上下文"],
+                        "success_criteria": ["形成内部线索"],
+                        "source_priority": ["intake context"],
+                    }
+                ],
+                "reasoning": "先确认本地线索。",
+            }
+        if "QueryEngine 搜索规划器" in system_prompt:
+            return {
+                "questions": [
+                    {
+                        "question": "确认官方事实",
+                        "google_query": "knowledge engineering official documentation",
+                        "search_targets": ["官方事实"],
+                        "expected_info": ["官方事实"],
+                        "source_priority": ["official documentation"],
+                        "success_criteria": ["命中官方来源"],
+                        "fallback_queries": [],
+                    }
+                ],
+                "official_queries": ["knowledge engineering official documentation"],
+                "tutorial_queries": [],
+                "official_domains": [],
+                "reasoning": "官方优先。",
+            }
+        return {
+            "social_queries": ["knowledge engineering social discussion"],
+            "community_queries": ["knowledge engineering community discussion"],
+            "blog_queries": ["knowledge engineering engineering blog"],
+            "reasoning": "社区观点计划。",
+            "is_technical": True,
+        }
+
+
+class FailingChatClient:
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        raise RuntimeError("llm unavailable")
+
+
 class FailingCrawler:
     def search(self, **kwargs):
         raise AssertionError("plan() must not call crawler.search")
@@ -51,10 +105,11 @@ def _context() -> RequestContext:
 
 def test_three_engines_generate_plans_without_execution() -> None:
     context = _context()
+    chat_client = FakePlanChatClient()
 
-    insight_plan = InsightEngine().plan(context, 1)
-    query_plan = QueryEngine(chat_client=None, crawler=FailingCrawler()).plan(context, 1)
-    media_plan = MediaEngine(chat_client=None, crawler=FailingCrawler()).plan(context, 1)
+    insight_plan = InsightEngine(chat_client=chat_client).plan(context, 1)
+    query_plan = QueryEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
 
     assert insight_plan.agent_name == "InsightEngine"
     assert query_plan.agent_name == "QueryEngine"
@@ -63,6 +118,38 @@ def test_three_engines_generate_plans_without_execution() -> None:
     assert query_plan.plan_items
     assert media_plan.plan_items
     assert all(plan.status == "awaiting_confirmation" for plan in [insight_plan, query_plan, media_plan])
+
+
+def test_plan_generation_requires_llm() -> None:
+    context = _context()
+
+    for engine in [
+        InsightEngine(chat_client=None),
+        QueryEngine(chat_client=None, crawler=FailingCrawler()),
+        MediaEngine(chat_client=None, crawler=FailingCrawler()),
+    ]:
+        try:
+            engine.plan(context, 1)
+        except RuntimeError as exc:
+            assert "requires an LLM chat client" in str(exc)
+        else:
+            raise AssertionError("plan() must fail when LLM client is missing")
+
+
+def test_plan_generation_failure_is_not_rule_fallback() -> None:
+    context = _context()
+
+    for engine in [
+        InsightEngine(chat_client=FailingChatClient()),
+        QueryEngine(chat_client=FailingChatClient(), crawler=FailingCrawler()),
+        MediaEngine(chat_client=FailingChatClient(), crawler=FailingCrawler()),
+    ]:
+        try:
+            engine.plan(context, 1)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("plan() must fail when LLM planning fails")
 
 
 def test_query_engine_executes_approved_plan() -> None:

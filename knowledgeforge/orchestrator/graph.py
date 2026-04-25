@@ -50,7 +50,12 @@ class KnowledgeGraphWorkflow:
                 "QueryEngine": executor.submit(self._query_engine.plan, context, round_number),
                 "MediaEngine": executor.submit(self._media_engine.plan, context, round_number),
             }
-            plans = {name: future.result() for name, future in futures.items()}
+            plans = {}
+            for name, future in futures.items():
+                try:
+                    plans[name] = future.result()
+                except Exception as exc:
+                    raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
         state["agent_plans"] = plans
         state["task_status"] = "awaiting_plan_confirmation"
         state["current_step"] = "awaiting_confirmation"

@@ -170,6 +170,12 @@
 - 主知识文档不适合展开完整查询执行清单；计划明细应保存在独立 query 文档，主文档只保留可读摘要、证据和后续动作。
 - 测试环境的 no-op crawler 应提供稳定 fixture，而不是空结果；空结果代表真实检索失败，会触发新门禁。
 
+## 计划阶段 LLM-only 结论
+- 用户确认前的三路计划属于关键决策，不应在 LLM 不可用时悄悄降级为规则计划，否则前端看不到真实失败。
+- Query / Media 的规则 fallback 已移除；Insight 也改为 LLM 计划，保持三路体验和审计口径一致。
+- 计划失败是任务终态 `plan_failed`，不是 `failed` 或 `supplement_required`；它表示“执行尚未开始，规划阶段就失败”。
+- 前端与 logs 都需要呈现失败原因：`current_action` 给用户看，`agent_plan_failed` 和 `workflow_step(blocked)` 给排障看。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

@@ -547,7 +547,7 @@ function renderExecutionLog(payload) {
 }
 
 function isTerminalStatus(status) {
-  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed"].includes(status);
+  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed", "plan_failed"].includes(status);
 }
 
 function isSuccessfulTerminalStatus(status) {

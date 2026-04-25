@@ -68,7 +68,7 @@ class MediaSearchNode(BaseMediaNode):
     def _build_plan(self, state: MediaEngineState) -> MediaSearchPlan:
         self._normalize_domain(state)
         if self._chat_client is None:
-            return self._fallback_plan(state)
+            raise RuntimeError("MediaEngine plan generation requires an LLM chat client.")
 
         context = state.request_context
         is_technical = is_technical_context(
@@ -90,53 +90,24 @@ class MediaSearchNode(BaseMediaNode):
             },
             ensure_ascii=False,
         )
-        try:
-            payload = self._chat_client.complete_json(
-                system_prompt=MEDIA_SEARCH_PLAN_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-            )
-            return MediaSearchPlan(
-                social_queries=[str(item).strip() for item in payload.get("social_queries", []) if str(item).strip()],
-                community_queries=[
-                    str(item).strip() for item in payload.get("community_queries", []) if str(item).strip()
-                ],
-                blog_queries=[str(item).strip() for item in payload.get("blog_queries", []) if str(item).strip()],
-                reasoning=str(payload.get("reasoning", "")).strip()
-                or "优先聚合当前社区、社交媒体和技术博客对该主题的观点。",
-                is_technical=bool(payload.get("is_technical", is_technical)),
-            )
-        except Exception:
-            return self._fallback_plan(state)
-
-    @staticmethod
-    def _fallback_plan(state: MediaEngineState) -> MediaSearchPlan:
-        context = state.request_context
-        subject = state.normalized_domain or context.domain
-        technical = is_technical_context(subject, context.subdomains, context.focus_points)
-        main_topic = context.subdomains[0] if context.subdomains else subject
-        if technical:
-            social_queries = [
-                f"{subject} {main_topic} site:x.com OR site:twitter.com opinion trend",
-                f"{subject} {main_topic} site:reddit.com discussion adoption",
-            ]
-            community_queries = [
-                f"{subject} {main_topic} site:news.ycombinator.com discussion",
-                f"{subject} {main_topic} site:github.com discussions OR site:v2ex.com",
-            ]
-            blog_queries = [
-                f"{subject} {main_topic} engineering blog future trend",
-                f"{subject} {main_topic} site:juejin.cn OR site:zhihu.com blog analysis",
-            ]
-        else:
-            social_queries = [f"{subject} {main_topic} social media discussion trend"]
-            community_queries = [f"{subject} {main_topic} community discussion outlook"]
-            blog_queries = [f"{subject} {main_topic} blog analysis future trend"]
+        payload = self._chat_client.complete_json(
+            system_prompt=MEDIA_SEARCH_PLAN_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        social_queries = [str(item).strip() for item in payload.get("social_queries", []) if str(item).strip()]
+        community_queries = [
+            str(item).strip() for item in payload.get("community_queries", []) if str(item).strip()
+        ]
+        blog_queries = [str(item).strip() for item in payload.get("blog_queries", []) if str(item).strip()]
+        if not (social_queries or community_queries or blog_queries):
+            raise RuntimeError("MediaEngine LLM did not return any valid media queries.")
         return MediaSearchPlan(
             social_queries=social_queries,
             community_queries=community_queries,
             blog_queries=blog_queries,
-            reasoning="未拿到 LLM 规划结果，按社交媒体、技术社区、博客三类观点源生成默认计划。",
-            is_technical=technical,
+            reasoning=str(payload.get("reasoning", "")).strip()
+            or "优先聚合当前社区、社交媒体和技术博客对该主题的观点。",
+            is_technical=bool(payload.get("is_technical", is_technical)),
         )
 
     @staticmethod

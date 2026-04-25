@@ -89,7 +89,7 @@ class QuerySearchNode(BaseQueryNode):
         context = state.request_context
         self._normalize_domain(state)
         if self._chat_client is None:
-            return self._fallback_plan(state)
+            raise RuntimeError("QueryEngine plan generation requires an LLM chat client.")
         user_prompt = json.dumps(
             {
                 "domain": state.normalized_domain or context.domain,
@@ -103,105 +103,35 @@ class QuerySearchNode(BaseQueryNode):
             },
             ensure_ascii=False,
         )
-        try:
-            payload = self._chat_client.complete_json(
-                system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
-                user_prompt=user_prompt,
-            )
-            self._record_event(state, "query_plan_llm_completed", {"payload_keys": sorted(payload.keys())})
-            questions = self._parse_questions(payload.get("questions", []))
-            official_queries = [
-                str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
-            ]
-            tutorial_queries = [
-                str(item).strip() for item in payload.get("tutorial_queries", []) if str(item).strip()
-            ]
-            if not questions:
-                questions = self._questions_from_query_lists(
-                    state,
-                    official_queries=official_queries,
-                    tutorial_queries=tutorial_queries,
-                )
-            return SearchPlan(
-                official_queries=official_queries or [
-                    question.google_query
-                    for question in questions
-                    if self._question_source_type(question) == "official"
-                ],
-                tutorial_queries=tutorial_queries or [
-                    question.google_query
-                    for question in questions
-                    if self._question_source_type(question) == "tutorial"
-                ],
-                official_domains=[str(item).strip() for item in payload.get("official_domains", []) if str(item).strip()],
-                reasoning=str(payload.get("reasoning", "")).strip() or "官方优先，教程补充。",
-                questions=questions,
-            )
-        except Exception:
-            self._record_event(state, "query_plan_fallback_used", {"reason": "llm_plan_failed"})
-            return self._fallback_plan(state)
-
-    def _fallback_plan(self, state: QueryEngineState) -> SearchPlan:
-        context = state.request_context
-        subject = state.normalized_domain or context.domain
-        topics = [self._search_topic(topic) for topic in context.subdomains]
+        payload = self._chat_client.complete_json(
+            system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+        )
+        self._record_event(state, "query_plan_llm_completed", {"payload_keys": sorted(payload.keys())})
+        questions = self._parse_questions(payload.get("questions", []))
         official_queries = [
-            f"{subject} {topic} official documentation"
-            for topic in topics[:3]
+            str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
         ]
         tutorial_queries = [
-            f"{subject} {topic} tutorial guide"
-            for topic in topics[:2]
+            str(item).strip() for item in payload.get("tutorial_queries", []) if str(item).strip()
         ]
-        questions = [
-            SearchQuestion(
-                question=f"{subject} 在“{display_topic}”方面有哪些官方事实与权威说明？",
-                google_query=f"{subject} {search_topic} official documentation standard",
-                search_targets=["官方定义", "权威来源", "关键能力", "适用边界"],
-                expected_info=["官方定义", "权威说明", "关键能力", "限制或适用范围"],
-                source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
-                success_criteria=["至少命中一个相关官方或权威来源", "结果能支持该子主题的事实描述"],
-                fallback_queries=[
-                    f"{subject} {search_topic} official guide",
-                    f"{subject} {search_topic} reference documentation",
-                ],
-            )
-            for display_topic, search_topic in zip(context.subdomains[:3], topics[:3])
-        ]
-        for display_topic, search_topic in zip(context.subdomains[:2], topics[:2]):
-            questions.append(
-                SearchQuestion(
-                    question=f"{subject} 在“{display_topic}”方面有哪些教程、案例或最佳实践可补充官方事实？",
-                    google_query=f"{subject} {search_topic} tutorial guide best practices",
-                    search_targets=["教程示例", "落地步骤", "最佳实践", "注意事项"],
-                    expected_info=["教程示例", "落地步骤", "最佳实践", "常见注意事项"],
-                    source_priority=["tutorial", "technical blog", "reference guide"],
-                    success_criteria=["至少命中一个相关教程或技术参考", "结果能补充官方事实的实践语境"],
-                    fallback_queries=[
-                        f"{subject} {search_topic} examples",
-                        f"{subject} {search_topic} best practices",
-                    ],
-                )
-            )
+        if not questions:
+            raise RuntimeError("QueryEngine LLM did not return any valid search questions.")
         return SearchPlan(
-            official_queries=official_queries,
-            tutorial_queries=tutorial_queries,
-            official_domains=[],
-            reasoning="未拿到 LLM 规划结果，按官方文档优先和教程补充的默认规则生成。",
+            official_queries=official_queries or [
+                question.google_query
+                for question in questions
+                if self._question_source_type(question) == "official"
+            ],
+            tutorial_queries=tutorial_queries or [
+                question.google_query
+                for question in questions
+                if self._question_source_type(question) == "tutorial"
+            ],
+            official_domains=[str(item).strip() for item in payload.get("official_domains", []) if str(item).strip()],
+            reasoning=str(payload.get("reasoning", "")).strip() or "官方优先，教程补充。",
             questions=questions,
         )
-
-    @staticmethod
-    def _search_topic(topic: str) -> str:
-        mapping = {
-            "基础概念": "basic concepts",
-            "核心方法": "core methods",
-            "应用场景": "applications",
-            "最新论文方向": "latest papers",
-            "工作流编排": "workflow orchestration",
-            "知识沉淀": "knowledge base construction",
-        }
-        return mapping.get(topic.strip(), topic.strip())
 
     @staticmethod
     def _dedupe_hits(hits):

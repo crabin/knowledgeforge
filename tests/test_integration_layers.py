@@ -21,6 +21,26 @@ class FakeChatClient:
             }
         if self.calls == 2:
             return {
+                "questions": [
+                    {
+                        "question": "LangGraph 官方工作流编排能力是什么？",
+                        "google_query": "langgraph official documentation",
+                        "search_targets": ["官方能力"],
+                        "expected_info": ["官方能力"],
+                        "source_priority": ["official documentation"],
+                        "success_criteria": ["命中官方文档"],
+                        "fallback_queries": [],
+                    },
+                    {
+                        "question": "LangGraph 教程如何补充知识沉淀场景？",
+                        "google_query": "langgraph tutorial guide",
+                        "search_targets": ["教程示例"],
+                        "expected_info": ["教程示例"],
+                        "source_priority": ["tutorial"],
+                        "success_criteria": ["命中教程"],
+                        "fallback_queries": [],
+                    },
+                ],
                 "official_queries": ["langgraph official documentation"],
                 "tutorial_queries": ["langgraph tutorial guide"],
                 "official_domains": ["langchain-ai.github.io"],

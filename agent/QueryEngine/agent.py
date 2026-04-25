@@ -80,6 +80,8 @@ class QueryEngine(BaseEngine):
             state = self._summary_node.run(state)
             return self._formatting_node.run(state)
         except Exception:
+            if approved_plan is None:
+                raise
             return self._fallback_result(context, round_number)
 
     def _engine_plan_from_search_plan(self, plan: SearchPlan) -> EnginePlan:

@@ -17,6 +17,7 @@
   - 已完成：`/tasks/async` 与 intake confirm 默认进入 `awaiting_plan_confirmation`，新增计划查看与确认接口。
   - 已完成：前端展示三路 Agent 执行计划，用户确认后再启动并行采集。
   - 已完成：Flow Map 改为 workflow step 事件驱动，可聚焦当前 planning / collecting / evaluating / writing / governing / versioning 步骤。
+  - 已完成：计划阶段取消规则 fallback，任一路 LLM 计划生成失败时进入 `plan_failed` 并记录 logs。
   - 已完成：Flow Map 接入 AntV X6 画布展示实时流程图，保留原卡片作为 X6 未加载时的语义回退。
 - 质量流水线来源门禁
   - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。

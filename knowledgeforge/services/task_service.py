@@ -60,7 +60,7 @@ class TaskService:
         self._intake_clarifier = IntakeClarifier(OpenAICompatibleChatClient(config.openai, timeout=1.0))
         graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
-            insight_engine=InsightEngine(),
+            insight_engine=InsightEngine(chat_client=OpenAICompatibleChatClient(config.openai, timeout=1.5)),
             query_engine=QueryEngine(
                 chat_client=query_chat_client,
                 embedding_client=query_embedding_client,
@@ -91,7 +91,10 @@ class TaskService:
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
         initial_state = self._create_initial_state(request_context, audit_source="api")
-        planned_state = self._workflow.generate_plans(initial_state)
+        try:
+            planned_state = self._workflow.generate_plans(initial_state)
+        except Exception as exc:
+            return self._persist_plan_failed(initial_state, exc)
         approved_state = self._approve_plans_in_state(planned_state)
         final_state = self._workflow.run(approved_state)
         return self._persist_and_serialize(final_state, "task_completed")
@@ -102,7 +105,10 @@ class TaskService:
 
     def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
-        planned_state = self._workflow.generate_plans(initial_state)
+        try:
+            planned_state = self._workflow.generate_plans(initial_state)
+        except Exception as exc:
+            return self._persist_plan_failed(initial_state, exc)
         task_id = initial_state["task_id"]
         with self._task_lock:
             self._tasks[task_id] = planned_state
@@ -113,6 +119,32 @@ class TaskService:
             "agent_plans_created",
             {"status": "awaiting_plan_confirmation", "source": "api_async", "round": planned_state.get("round_number", 1)},
         )
+        return self._attach_execution_log(payload_dict)
+
+    def _persist_plan_failed(self, state: WorkflowState, exc: Exception) -> dict[str, Any]:
+        task_id = state["task_id"]
+        message = str(exc)
+        event = WorkflowStepEvent(
+            step_id="planning",
+            label="三路计划生成失败",
+            status="blocked",
+            timestamp=now_iso(),
+            details={"error": message},
+        )
+        state["task_status"] = "plan_failed"
+        state["current_step"] = "planning"
+        state["current_action"] = f"计划生成失败：{message}"
+        state.setdefault("workflow_events", []).append(event)
+        with self._task_lock:
+            self._tasks[task_id] = state
+        payload_dict = self._serialize_state(state)
+        self._state_store.save(task_id, payload_dict)
+        self._audit_logger.log(
+            task_id,
+            "agent_plan_failed",
+            {"status": "plan_failed", "error": message},
+        )
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
         return self._attach_execution_log(payload_dict)
 
     def get_task_plan(self, task_id: str) -> dict[str, Any] | None:
