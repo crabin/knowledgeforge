@@ -44,18 +44,23 @@ class KnowledgeGraphWorkflow:
         context = state["request_context"]
         round_number = state.get("round_number", 1)
         self._append_workflow_event(state, "planning", "三路计划生成", "active")
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                "InsightEngine": executor.submit(self._insight_engine.plan, context, round_number),
-                "QueryEngine": executor.submit(self._query_engine.plan, context, round_number),
-                "MediaEngine": executor.submit(self._media_engine.plan, context, round_number),
-            }
-            plans = {}
-            for name, future in futures.items():
-                try:
-                    plans[name] = future.result()
-                except Exception as exc:
-                    raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
+        plans = {}
+        for name, engine in (
+            ("InsightEngine", self._insight_engine),
+            ("QueryEngine", self._query_engine),
+            ("MediaEngine", self._media_engine),
+        ):
+            self._append_workflow_event(
+                state,
+                "planning",
+                f"{name} 计划生成中",
+                "active",
+                {"agent": name},
+            )
+            try:
+                plans[name] = engine.plan(context, round_number)
+            except Exception as exc:
+                raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
         state["agent_plans"] = plans
         state["task_status"] = "awaiting_plan_confirmation"
         state["current_step"] = "awaiting_confirmation"

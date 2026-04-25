@@ -176,6 +176,7 @@
 - 计划失败是任务终态 `plan_failed`，不是 `failed` 或 `supplement_required`；它表示“执行尚未开始，规划阶段就失败”。
 - 前端与 logs 都需要呈现失败原因：`current_action` 给用户看，`agent_plan_failed` 和 `workflow_step(blocked)` 给排障看。
 - LLM-only 后，计划阶段 timeout 不能沿用 1.5 秒这类实时展示优化值；计划是阻塞决策点，默认应给更长窗口，并通过 `PLAN_LLM_TIMEOUT` 配置化。
+- 三路计划不适合并发压同一个本地 LLM 服务；并发会让某一路排队到 timeout。计划阶段改为顺序调用更符合“先拿到可审查计划”的交互目标，真正执行采集阶段仍保持并行。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*

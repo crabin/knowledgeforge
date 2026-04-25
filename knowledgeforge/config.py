@@ -87,7 +87,7 @@ class AppConfig:
     log_level: str = "INFO"
     strict_graph_sync: bool = False
     enable_live_crawlers: bool = False
-    plan_llm_timeout: float = 15.0
+    plan_llm_timeout: float = 45.0
     execution_llm_timeout: float = 5.0
 
     @classmethod
@@ -121,7 +121,7 @@ class AppConfig:
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
-            plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 15.0),
+            plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 45.0),
             execution_llm_timeout=_get_float("EXECUTION_LLM_TIMEOUT", 5.0),
         )
 
