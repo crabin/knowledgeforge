@@ -570,4 +570,7 @@ def test_app_config_loads_from_env_file(tmp_path: Path) -> None:
     assert config.openai.embedding_dimensions == 1024
     assert config.neo4j.user == "neo4j"
     assert config.database.mysql_database_url.startswith("mysql://")
-    assert config.show_config_status()["openai_configured"] is True
+    status = config.show_config_status()
+    assert status["legacy"]["openai_configured"] is True
+    assert status["llm"]["chat"]["model"] == "gpt-5.2"
+    assert status["llm"]["chat"]["base_url"] == "http://localhost:8317/v1"

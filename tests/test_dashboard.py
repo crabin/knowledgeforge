@@ -50,4 +50,12 @@ def test_dashboard_does_not_break_status_endpoints(tmp_path: Path) -> None:
     assert health_response.status_code == 200
     assert health_response.get_json() == {"status": "ok"}
     assert config_response.status_code == 200
-    assert isinstance(config_response.get_json(), dict)
+    payload = config_response.get_json()
+    assert isinstance(payload, dict)
+    assert payload["llm"]["provider"] == "openai"
+    assert payload["llm"]["chat"]["model"] == "gpt-5.2"
+    assert payload["llm"]["chat"]["base_url"] == "http://localhost:8317/v1"
+    assert payload["llm"]["embedding"]["model"] == "bge-m3:latest"
+    assert payload["llm"]["embedding"]["base_url"] == "http://localhost:11434/v1"
+    assert payload["llm"]["chat"]["api_key_present"] is True
+    assert "api_key" not in payload["llm"]["chat"]

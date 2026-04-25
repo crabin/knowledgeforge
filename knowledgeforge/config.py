@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 
@@ -121,18 +121,71 @@ class AppConfig:
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
         )
 
-    def show_config_status(self) -> dict[str, bool | str]:
+    def show_config_status(self) -> dict[str, Any]:
         return {
-            "llm_provider": self.llm_provider,
-            "openai_configured": bool(self.openai.api_key and self.openai.base_url and self.openai.model),
-            "embedding_configured": bool(
-                self.openai.embedding_model
-                and self.openai.embedding_api_key
-                and self.openai.embedding_base_url
-            ),
-            "neo4j_configured": bool(self.neo4j.uri and self.neo4j.user and self.neo4j.password),
-            "mysql_configured": bool(self.database.mysql_database_url),
-            "chromadb_configured": bool(self.chroma.path and self.chroma.collection_name),
+            "llm": {
+                "provider": self.llm_provider,
+                "chat": {
+                    "configured": bool(self.openai.api_key and self.openai.base_url and self.openai.model),
+                    "provider_family": "openai-compatible",
+                    "model": self.openai.model,
+                    "base_url": self.openai.base_url,
+                    "api_key_present": bool(self.openai.api_key),
+                },
+                "embedding": {
+                    "configured": bool(
+                        self.openai.embedding_model
+                        and self.openai.embedding_api_key
+                        and self.openai.embedding_base_url
+                    ),
+                    "provider_family": "openai-compatible",
+                    "model": self.openai.embedding_model,
+                    "base_url": self.openai.embedding_base_url,
+                    "dimensions": self.openai.embedding_dimensions,
+                    "api_key_present": bool(self.openai.embedding_api_key),
+                },
+            },
+            "storage": {
+                "save_root": str(self.save_root),
+                "task_state_root": str(self.task_state_root),
+                "intake_session_root": str(self.intake_session_root),
+                "audit_root": str(self.audit_root),
+                "frozen_root": str(self.frozen_root),
+            },
+            "retrieval": {
+                "live_crawlers_enabled": self.enable_live_crawlers,
+                "query_crawler": "DomainKnowledgeCrawler" if self.enable_live_crawlers else "_NoopQueryCrawler",
+                "media_crawler": "MediaPerspectiveCrawler" if self.enable_live_crawlers else "_NoopMediaCrawler",
+                "chromadb_configured": bool(self.chroma.path and self.chroma.collection_name),
+                "chromadb_path": str(self.chroma.path),
+                "chromadb_collection": self.chroma.collection_name,
+            },
+            "graph": {
+                "neo4j_configured": bool(self.neo4j.uri and self.neo4j.user and self.neo4j.password),
+                "neo4j_uri": self.neo4j.uri,
+                "neo4j_user": self.neo4j.user,
+                "strict_graph_sync": self.strict_graph_sync,
+            },
+            "database": {
+                "mysql_configured": bool(self.database.mysql_database_url),
+                "mysql_database_url_present": bool(self.database.mysql_database_url),
+            },
+            "runtime": {
+                "max_rounds": self.max_rounds,
+                "log_level": self.log_level,
+            },
+            "legacy": {
+                "llm_provider": self.llm_provider,
+                "openai_configured": bool(self.openai.api_key and self.openai.base_url and self.openai.model),
+                "embedding_configured": bool(
+                    self.openai.embedding_model
+                    and self.openai.embedding_api_key
+                    and self.openai.embedding_base_url
+                ),
+                "neo4j_configured": bool(self.neo4j.uri and self.neo4j.user and self.neo4j.password),
+                "mysql_configured": bool(self.database.mysql_database_url),
+                "chromadb_configured": bool(self.chroma.path and self.chroma.collection_name),
+            },
         }
 
 

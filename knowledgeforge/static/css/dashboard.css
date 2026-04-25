@@ -493,6 +493,34 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.config-group {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.config-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding-top: 8px;
+  border-top: 1px solid rgba(23, 33, 31, 0.08);
+}
+
+.config-row span:first-child {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.config-row span:last-child {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

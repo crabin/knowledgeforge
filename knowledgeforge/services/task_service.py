@@ -75,7 +75,7 @@ class TaskService:
         self._tasks: dict[str, WorkflowState] = {}
         self._task_lock = Lock()
 
-    def get_config_status(self) -> dict[str, bool | str]:
+    def get_config_status(self) -> dict[str, Any]:
         return self._config.show_config_status()
 
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:

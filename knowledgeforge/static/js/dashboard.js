@@ -143,13 +143,68 @@ function renderConfig(payload) {
   }
 
   configGrid.innerHTML = entries
-    .map(([key, value]) => {
-      const label = String(key).replaceAll("_", " ");
-      const rendered = typeof value === "boolean" ? (value ? "已配置" : "未配置") : String(value);
-      const tone = value === true ? "tone-ok" : value === false ? "tone-bad" : "";
-      return `<div class="config-item"><strong>${escapeHtml(label)}</strong><span class="${tone}">${escapeHtml(rendered)}</span></div>`;
+    .filter(([key]) => key !== "legacy")
+    .map(([key, value]) => renderConfigGroup(key, value))
+    .join("");
+}
+
+function renderConfigGroup(key, value) {
+  const label = formatConfigLabel(key);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `<div class="config-item"><strong>${escapeHtml(label)}</strong>${renderConfigValue(value)}</div>`;
+  }
+  const rows = flattenConfig(value)
+    .map(([itemKey, itemValue]) => {
+      return `<div class="config-row"><span>${escapeHtml(formatConfigLabel(itemKey))}</span>${renderConfigValue(itemValue)}</div>`;
     })
     .join("");
+  return `<div class="config-item config-group"><strong>${escapeHtml(label)}</strong>${rows}</div>`;
+}
+
+function flattenConfig(value, prefix = "") {
+  const rows = [];
+  Object.entries(value).forEach(([key, item]) => {
+    const nextKey = prefix ? `${prefix}.${key}` : key;
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      rows.push(...flattenConfig(item, nextKey));
+    } else {
+      rows.push([nextKey, item]);
+    }
+  });
+  return rows;
+}
+
+function renderConfigValue(value) {
+  if (typeof value === "boolean") {
+    return `<span class="${value ? "tone-ok" : "tone-bad"}">${value ? "是" : "否"}</span>`;
+  }
+  if (Array.isArray(value)) {
+    return `<span>${escapeHtml(value.join(", "))}</span>`;
+  }
+  return `<span>${escapeHtml(value ?? "")}</span>`;
+}
+
+function formatConfigLabel(key) {
+  const labels = {
+    llm: "LLM",
+    storage: "存储",
+    retrieval: "检索",
+    graph: "图谱",
+    database: "数据库",
+    runtime: "运行时",
+    "chat.configured": "Chat 已配置",
+    "chat.provider_family": "Chat Provider",
+    "chat.model": "Chat 模型",
+    "chat.base_url": "Chat API",
+    "chat.api_key_present": "Chat Key",
+    "embedding.configured": "Embedding 已配置",
+    "embedding.provider_family": "Embedding Provider",
+    "embedding.model": "Embedding 模型",
+    "embedding.base_url": "Embedding API",
+    "embedding.dimensions": "Embedding 维度",
+    "embedding.api_key_present": "Embedding Key",
+  };
+  return labels[key] || String(key).replaceAll("_", " ").replaceAll(".", " / ");
 }
 
 function renderQueryPlan(payload) {

@@ -896,13 +896,38 @@
 - 验证结果：
   - `node --check knowledgeforge/static/js/dashboard.js`：通过
   - `uv run pytest tests/test_dashboard.py tests/test_workflow.py`：23 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：85 个测试通过
 - 当前保守结论：
   - 首页默认更聚焦任务操作区域，同时仍可展开查看主流程能力和配置状态
+
+### 阶段 35：配置状态详情增强
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - `/config/status` 从布尔摘要扩展为分组运行配置
+  - LLM 组展示 provider、OpenAI-compatible chat 模型、chat base_url、embedding 模型、embedding base_url、维度和 key 是否存在
+  - 增加 storage、retrieval、graph、database、runtime 分组
+  - 保留 legacy 布尔字段，避免旧调用方完全断裂
+  - 前端配置状态改为分组卡片，支持嵌套字段扁平展示
+  - 不展示 API key 明文，只展示 `api_key_present`
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/config.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_dashboard.py tests/test_workflow.py`：23 个测试通过
+- 当前保守结论：
+  - 配置状态面板现在能直接看到 LLM provider、模型名和 API 地址，同时不会泄露密钥
 
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 34 已完成；顶部“主流程能力”和“配置状态”已默认收起 |
+| 我在哪里？ | 阶段 35 已完成；配置状态已展示更完整的 provider、模型和运行配置 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |
