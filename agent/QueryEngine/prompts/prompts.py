@@ -13,6 +13,7 @@ SEARCH_PLAN_SCHEMA = {
                 "properties": {
                     "question": {"type": "string"},
                     "google_query": {"type": "string"},
+                    "search_targets": {"type": "array", "items": {"type": "string"}},
                     "expected_info": {"type": "array", "items": {"type": "string"}},
                     "source_priority": {"type": "array", "items": {"type": "string"}},
                     "success_criteria": {"type": "array", "items": {"type": "string"}},
@@ -21,6 +22,7 @@ SEARCH_PLAN_SCHEMA = {
                 "required": [
                     "question",
                     "google_query",
+                    "search_targets",
                     "expected_info",
                     "source_priority",
                     "success_criteria",
@@ -79,12 +81,14 @@ SEARCH_PLAN_SYSTEM_PROMPT = f"""
 3. 每个子领域至少生成 1 个官方/权威事实问题，问题要能回答“需要确认什么事实”。
 4. 每个 question 必须写清楚：
    - google_query：面向 Google 风格的查询语句，但不要使用只能由 Google API 执行的特殊能力。
+   - search_targets：这个计划项需要查询/确认的内容列表，写成可以逐条勾选的短句。
    - expected_info：需要从搜索结果中拿到哪些信息，例如定义、官方说明、版本/时间范围、关键能力、限制、案例证据。
    - source_priority：优先来源类型，例如 official documentation、standard、vendor docs、official GitHub、tutorial。
    - success_criteria：什么结果算满足该问题。
    - fallback_queries：主查询不足时才执行的补查查询。
-5. official_queries / tutorial_queries 保持兼容输出，应从 questions 中提取代表性查询。
-6. 只返回 JSON，不要附加解释。
+5. 计划项数量要克制，优先覆盖最关键问题；每个计划项查询完后系统会立即标记完成或不足。
+6. official_queries / tutorial_queries 保持兼容输出，应从 questions 中提取代表性查询。
+7. 只返回 JSON，不要附加解释。
 
 输出 JSON Schema：
 {json.dumps(SEARCH_PLAN_SCHEMA, ensure_ascii=False, indent=2)}

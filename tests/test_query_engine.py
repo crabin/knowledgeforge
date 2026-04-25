@@ -24,6 +24,7 @@ class FakeChatClient:
                     {
                         "question": "LangGraph 的官方工作流编排能力是什么？",
                         "google_query": "langgraph official documentation workflow orchestration",
+                        "search_targets": ["官方能力说明", "核心 API"],
                         "expected_info": ["官方能力说明", "核心 API", "适用范围"],
                         "source_priority": ["official documentation", "official GitHub"],
                         "success_criteria": ["命中官方文档", "能支持工作流编排事实"],
@@ -32,6 +33,7 @@ class FakeChatClient:
                     {
                         "question": "LangGraph 有哪些教程案例可补充知识沉淀场景？",
                         "google_query": "langgraph tutorial guide knowledge workflows",
+                        "search_targets": ["教程示例", "最佳实践"],
                         "expected_info": ["教程示例", "最佳实践", "案例步骤"],
                         "source_priority": ["tutorial", "technical blog"],
                         "success_criteria": ["命中教程或技术参考", "能补充实践语境"],
@@ -79,6 +81,7 @@ class FakeNormalizationChatClient:
                     {
                         "question": "machine learning basics 的官方基础定义是什么？",
                         "google_query": "machine learning basics official documentation",
+                        "search_targets": ["官方定义"],
                         "expected_info": ["官方定义", "基础概览"],
                         "source_priority": ["official documentation"],
                         "success_criteria": ["查询语句使用完整 machine learning 术语"],
@@ -225,7 +228,9 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any("术语归一化：" in item for item in result.raw_material)
     assert any("官方文档优先：" in item or item == "官方文档优先：" for item in result.raw_material)
     assert any(item == "查询计划：" for item in result.raw_material)
+    assert any("☑ Q1 [completed]" in item for item in result.raw_material)
     assert any("Google 查询：langgraph official documentation workflow orchestration" in item for item in result.raw_material)
+    assert any("查询内容：" in item and "核心 API" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方能力说明" in item for item in result.raw_material)
     assert any("满足标准：" in item and "命中官方文档" in item for item in result.raw_material)
     assert crawler.queries[0] == ("official", "langgraph official documentation workflow orchestration")
@@ -235,6 +240,11 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any("检索轨迹：" in item for item in result.raw_material)
     assert any(query == "langgraph best practices tutorial" for _, query in crawler.queries)
     assert any("langchain-ai.github.io" in item for item in result.raw_material)
+    assert any(entry["event"] == "query_plan_item_started" for entry in result.execution_log)
+    assert any(
+        entry["event"] == "query_question_completed" and entry["details"]["status"] == "completed"
+        for entry in result.execution_log
+    )
 
 
 def test_query_engine_normalizes_abbreviation_for_search() -> None:
@@ -306,6 +316,7 @@ def test_query_engine_fallback_plan_emits_structured_questions() -> None:
     assert any(item == "查询计划：" for item in result.raw_material)
     assert any("Machine Learning 在“基础概念”方面有哪些官方事实与权威说明？" in item for item in result.raw_material)
     assert any("Google 查询：Machine Learning 基础概念 official documentation standard" in item for item in result.raw_material)
+    assert any("查询内容：" in item and "权威来源" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方定义" in item for item in result.raw_material)
     assert crawler.queries[0] == ("official", "Machine Learning 基础概念 official documentation standard")
 
@@ -331,7 +342,7 @@ def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
     assert result.sources
     assert all(source.publisher == "query-plan" for source in result.sources)
     assert all(source.reliability == "unknown" for source in result.sources)
-    assert any("[insufficient]" in item for item in result.raw_material)
+    assert any("☐ Q1 [insufficient]" in item for item in result.raw_material)
 
 
 def test_query_engine_reflection_supplements_only_insufficient_questions() -> None:

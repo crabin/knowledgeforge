@@ -789,10 +789,41 @@
   - 后续 Machine Learning / 最新论文方向任务会在对应 save 子目录下生成查询计划 Markdown 文件
   - `save/` 被 `.gitignore` 忽略，因此生成的知识文档保留在本地，不随代码提交
 
+### 阶段 31：QueryEngine 查询计划清单化与前端显示优化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 为 `SearchQuestion` 增加 `plan_item_id`、`search_targets`、`completed_at`
+  - 将查询状态调整为 `planned`、`in_progress`、`completed`、`insufficient`
+  - 搜索规划 prompt 要求输出 `search_targets`，作为需要查询/确认的内容列表
+  - QuerySearchNode 在每个计划项开始、执行查询、完成后写入结构化事件
+  - QueryFormattingNode 输出 `☑/☐` 勾选标记、查询内容、预期信息、满足标准和补查查询
+  - Markdown Writer 兼容新的勾选格式并写入查询计划文件
+  - 前端 QueryEngine 查询计划面板改为从 `execution_log` 重建结构化卡片，显示勾选、状态、查询语句、查询内容和满足标准
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/state/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/formatting_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_writer_dynamic_status.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_query_engine.py tests/test_writer_dynamic_status.py tests/test_workflow.py tests/test_dashboard.py`：30 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：82 个测试通过
+- 当前保守结论：
+  - 查询计划现在以清单形式构建和展示，每条查询执行完成后会立即记录 completed 或 insufficient
+  - 前端不再依赖 raw_material 文本解析，展示效果更适合浏览和排障
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 30 已完成；QueryEngine 查询计划已能保存为同一子领域目录下的 Markdown 文件 |
+| 我在哪里？ | 阶段 31 已完成；QueryEngine 查询计划已清单化，并能在前端以勾选卡片展示 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

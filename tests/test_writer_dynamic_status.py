@@ -118,7 +118,8 @@ def test_writer_saves_query_plan_document_in_subdomain_directory() -> None:
         raw_material=[
             "搜索规划：plan",
             "查询计划：",
-            "- Q1 [planned] Machine Learning 最新论文方向有哪些官方或权威来源？ | Google 查询：Machine Learning latest papers official",
+            "- ☑ Q1 [completed] Machine Learning 最新论文方向有哪些官方或权威来源？ | Google 查询：Machine Learning latest papers official",
+            "  查询内容：论文列表; 官方来源",
             "  预期信息：论文列表; 官方来源",
             "  满足标准：命中权威来源",
             "反思结论：无",

@@ -236,6 +236,93 @@ h3 {
   white-space: pre-wrap;
 }
 
+.plan-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(23, 33, 31, 0.14);
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.plan-card.done {
+  border-color: rgba(30, 123, 100, 0.32);
+  background: #f1f8f2;
+}
+
+.plan-card.pending {
+  border-color: rgba(187, 139, 39, 0.32);
+}
+
+.plan-card-head {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.checkmark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--green);
+  border-radius: 50%;
+  color: var(--green);
+  font-weight: 900;
+  line-height: 1;
+}
+
+.plan-card.pending .checkmark {
+  border-color: var(--gold);
+}
+
+.plan-card-head strong,
+.plan-card-head span {
+  display: block;
+}
+
+.plan-card-head span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.plan-query {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(47, 95, 145, 0.08);
+  color: var(--blue);
+  font-size: 0.84rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.plan-lists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.plan-lists b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.plan-lists ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.plan-lists li {
+  margin-bottom: 3px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .task-list-item {
   display: block;
   width: 100%;
@@ -430,7 +517,8 @@ button:disabled {
   .flow-grid,
   .config-grid,
   .summary-strip,
-  .trace-grid {
+  .trace-grid,
+  .plan-lists {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -451,6 +539,7 @@ button:disabled {
   .config-grid,
   .summary-strip,
   .trace-grid,
+  .plan-lists,
   .button-row,
   .button-grid {
     grid-template-columns: 1fr;

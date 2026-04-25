@@ -35,6 +35,9 @@
 - QueryEngine 查询计划文件落盘
   - 已完成：Markdown Writer 会将 QueryEngine 查询计划保存为同一子领域目录下的 `*-query.md` 文档，并在综述文档后续动作中引用。
   - 已验证：`save/Machine Learning/最新论文方向/20260425-machine-learning-queryengine-query.md` 已生成；`save/` 目录按仓库规则被 git ignore。
+- QueryEngine 查询计划清单化
+  - 已完成：查询计划项新增 `search_targets`、`plan_item_id`、`completed_at`，执行状态调整为 `planned -> in_progress -> completed/insufficient`。
+  - 已完成：每条计划项执行完立即输出完成或不足事件，前端以清单卡片显示查询内容、满足标准和勾选状态。
 - 技术领域社区优先策略
   - 技术领域默认采用中外技术社区混合来源，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补 `V2EX / 掘金 / 知乎`。
 - crawler 质量增强

@@ -136,11 +136,8 @@ function renderConfig(payload) {
 
 function renderQueryPlan(payload) {
   const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
-  const rawMaterial = queryOutput?.raw_material || [];
-  const planStart = rawMaterial.indexOf("查询计划：");
-  const planItems = planStart >= 0
-    ? rawMaterial.slice(planStart + 1).filter((item) => String(item).startsWith("- Q") || String(item).startsWith("  "))
-    : [];
+  const logs = queryOutput?.execution_log || payload.execution_log || payload.task?.execution_log || [];
+  const planItems = buildQueryPlanItems(logs);
 
   if (!planItems.length) {
     queryPlanOutput.innerHTML = '<div class="empty-state">暂无结构化查询计划。</div>';
@@ -148,8 +145,55 @@ function renderQueryPlan(payload) {
   }
 
   queryPlanOutput.innerHTML = planItems
-    .map((item) => `<div class="trace-item">${escapeHtml(item)}</div>`)
+    .map((item) => {
+      const done = item.status === "completed";
+      const statusLabel = done ? "已完成" : item.status === "in_progress" ? "查询中" : item.status === "insufficient" ? "需补检索" : "待查询";
+      const targets = (item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
+      const criteria = (item.success_criteria || []).map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("");
+      return `<article class="plan-card ${done ? "done" : "pending"}">
+        <div class="plan-card-head">
+          <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
+          <div>
+            <strong>${escapeHtml(item.plan_item_id || "Q")}. ${escapeHtml(item.question)}</strong>
+            <span>${escapeHtml(statusLabel)}</span>
+          </div>
+        </div>
+        <div class="plan-query">${escapeHtml(item.google_query || "")}</div>
+        <div class="plan-lists">
+          <div><b>查询内容</b><ul>${targets || "<li>未提供</li>"}</ul></div>
+          <div><b>满足标准</b><ul>${criteria || "<li>未提供</li>"}</ul></div>
+        </div>
+      </article>`;
+    })
     .join("");
+}
+
+function buildQueryPlanItems(logs) {
+  const items = new Map();
+  logs.forEach((entry) => {
+    const details = entry.details || {};
+    if (entry.event === "query_plan_created" && Array.isArray(details.questions)) {
+      details.questions.forEach((question, index) => {
+        const key = question.plan_item_id || `Q${index + 1}`;
+        items.set(key, {
+          ...question,
+          plan_item_id: key,
+          status: question.status || "planned",
+        });
+      });
+    }
+    if (entry.event === "query_plan_item_started" || entry.event === "query_question_completed") {
+      const key = details.plan_item_id || details.question;
+      if (!key) return;
+      const existing = items.get(key) || {};
+      items.set(key, {
+        ...existing,
+        ...details,
+        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
+      });
+    }
+  });
+  return Array.from(items.values());
 }
 
 function renderExecutionLog(payload) {

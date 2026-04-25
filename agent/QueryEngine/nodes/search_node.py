@@ -152,6 +152,7 @@ class QuerySearchNode(BaseQueryNode):
             SearchQuestion(
                 question=f"{subject} 在“{topic}”方面有哪些官方事实与权威说明？",
                 google_query=f"{subject} {topic} official documentation standard",
+                search_targets=["官方定义", "权威来源", "关键能力", "适用边界"],
                 expected_info=["官方定义", "权威说明", "关键能力", "限制或适用范围"],
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["至少命中一个相关官方或权威来源", "结果能支持该子主题的事实描述"],
@@ -167,6 +168,7 @@ class QuerySearchNode(BaseQueryNode):
                 SearchQuestion(
                     question=f"{subject} 在“{topic}”方面有哪些教程、案例或最佳实践可补充官方事实？",
                     google_query=f"{subject} {topic} tutorial guide best practices",
+                    search_targets=["教程示例", "落地步骤", "最佳实践", "注意事项"],
                     expected_info=["教程示例", "落地步骤", "最佳实践", "常见注意事项"],
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["至少命中一个相关教程或技术参考", "结果能补充官方事实的实践语境"],
@@ -213,6 +215,7 @@ class QuerySearchNode(BaseQueryNode):
             official_queries=official_queries,
             tutorial_queries=tutorial_queries,
         )
+        self._prepare_plan_questions(plan_questions)
         state.execution_log.append(
             {
                 "event": "query_plan_created",
@@ -222,8 +225,10 @@ class QuerySearchNode(BaseQueryNode):
                     "question_count": len(plan_questions),
                     "questions": [
                         {
+                            "plan_item_id": question.plan_item_id,
                             "question": question.question,
                             "google_query": question.google_query,
+                            "search_targets": question.search_targets,
                             "expected_info": question.expected_info,
                             "source_priority": question.source_priority,
                             "success_criteria": question.success_criteria,
@@ -236,10 +241,18 @@ class QuerySearchNode(BaseQueryNode):
             }
         )
         for question in plan_questions:
-            question.status = "searched"
+            question.status = "in_progress"
             source_type = self._question_source_type(question)
             queries = [question.google_query, *question.fallback_queries]
             question_hits = []
+            state.execution_log.append(
+                {
+                    "event": "query_plan_item_started",
+                    "timestamp": now_iso(),
+                    "node": "QuerySearchNode",
+                    "details": self._question_log_details(question, status=question.status),
+                }
+            )
             for index, query in enumerate(self._dedupe_terms(queries)):
                 if index > 0 and self._question_satisfied(question_hits):
                     break
@@ -257,7 +270,7 @@ class QuerySearchNode(BaseQueryNode):
                         "expected_info": question.expected_info,
                         "source_type": source_type,
                         "hits": len(hits),
-                        "status": "satisfied" if self._question_satisfied(hits) else "insufficient",
+                        "status": "completed" if self._question_satisfied(hits) else "insufficient",
                     }
                 )
                 state.execution_log.append(
@@ -266,27 +279,34 @@ class QuerySearchNode(BaseQueryNode):
                         "timestamp": now_iso(),
                         "node": "QuerySearchNode",
                         "details": {
+                            "plan_item_id": question.plan_item_id,
                             "question": question.question,
                             "query": query,
+                            "search_targets": question.search_targets,
                             "expected_info": question.expected_info,
                             "source_type": source_type,
                             "hits": len(hits),
-                            "status": "satisfied" if self._question_satisfied(hits) else "insufficient",
+                            "status": "completed" if self._question_satisfied(hits) else "insufficient",
                         },
                     }
                 )
                 question_hits.extend(hits)
                 all_hits.extend(hits)
-            question.status = "satisfied" if self._question_satisfied(question_hits) else "insufficient"
+            question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
+            if question.status == "completed":
+                question.completed_at = now_iso()
             state.execution_log.append(
                 {
                     "event": "query_question_completed",
                     "timestamp": now_iso(),
                     "node": "QuerySearchNode",
                     "details": {
+                        "plan_item_id": question.plan_item_id,
                         "question": question.question,
+                        "search_targets": question.search_targets,
                         "status": question.status,
                         "total_hits": len(question_hits),
+                        "completed_at": question.completed_at,
                     },
                 }
             )
@@ -360,6 +380,11 @@ class QuerySearchNode(BaseQueryNode):
                 SearchQuestion(
                     question=question,
                     google_query=google_query,
+                    search_targets=[
+                        str(value).strip()
+                        for value in item.get("search_targets", item.get("expected_info", []))
+                        if str(value).strip()
+                    ],
                     expected_info=[
                         str(value).strip()
                         for value in item.get("expected_info", [])
@@ -396,6 +421,7 @@ class QuerySearchNode(BaseQueryNode):
             SearchQuestion(
                 question=f"需要确认 {state.normalized_domain or state.request_context.domain} 的官方事实：{query}",
                 google_query=query,
+                search_targets=["官方定义", "权威说明", "关键事实"],
                 expected_info=["官方定义", "权威说明", "关键事实"],
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["命中相关官方或权威来源"],
@@ -407,6 +433,7 @@ class QuerySearchNode(BaseQueryNode):
             SearchQuestion(
                 question=f"需要补充 {state.normalized_domain or state.request_context.domain} 的实践资料：{query}",
                 google_query=query,
+                search_targets=["教程示例", "实践步骤", "注意事项"],
                 expected_info=["教程示例", "实践步骤", "注意事项"],
                 source_priority=["tutorial", "technical blog", "reference guide"],
                 success_criteria=["命中相关教程或技术参考"],
@@ -435,6 +462,7 @@ class QuerySearchNode(BaseQueryNode):
                 SearchQuestion(
                     question=f"补检索：{base_question}",
                     google_query=query,
+                    search_targets=["补齐官方或权威证据"],
                     expected_info=["补齐官方或权威证据"],
                     source_priority=["official documentation", "standard", "vendor docs"],
                     success_criteria=["补检索命中相关官方或权威来源"],
@@ -447,6 +475,7 @@ class QuerySearchNode(BaseQueryNode):
                 SearchQuestion(
                     question=f"补检索：{base_question}",
                     google_query=query,
+                    search_targets=["补齐教程、案例或最佳实践证据"],
                     expected_info=["补齐教程、案例或最佳实践证据"],
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["补检索命中相关实践资料"],
@@ -454,6 +483,29 @@ class QuerySearchNode(BaseQueryNode):
                 )
             )
         return questions
+
+    @staticmethod
+    def _prepare_plan_questions(questions: list[SearchQuestion]) -> None:
+        for index, question in enumerate(questions, start=1):
+            if not question.plan_item_id:
+                question.plan_item_id = f"Q{index}"
+            if not question.search_targets:
+                question.search_targets = list(question.expected_info)
+
+    @staticmethod
+    def _question_log_details(question: SearchQuestion, *, status: str | None = None) -> dict:
+        return {
+            "plan_item_id": question.plan_item_id,
+            "question": question.question,
+            "google_query": question.google_query,
+            "search_targets": question.search_targets,
+            "expected_info": question.expected_info,
+            "source_priority": question.source_priority,
+            "success_criteria": question.success_criteria,
+            "fallback_queries": question.fallback_queries,
+            "status": status or question.status,
+            "completed_at": question.completed_at,
+        }
 
     @staticmethod
     def _question_source_type(question: SearchQuestion) -> str:

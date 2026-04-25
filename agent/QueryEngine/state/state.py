@@ -8,7 +8,7 @@ from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.time import now_iso
 
 
-QuestionStatus = Literal["planned", "searched", "insufficient", "satisfied"]
+QuestionStatus = Literal["planned", "in_progress", "completed", "insufficient"]
 
 
 @dataclass(slots=True)
@@ -20,6 +20,9 @@ class SearchQuestion:
     success_criteria: list[str]
     fallback_queries: list[str]
     status: QuestionStatus = "planned"
+    plan_item_id: str = ""
+    search_targets: list[str] = field(default_factory=list)
+    completed_at: str = ""
 
 
 @dataclass(slots=True)

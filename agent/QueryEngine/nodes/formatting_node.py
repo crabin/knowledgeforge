@@ -104,9 +104,12 @@ class QueryFormattingNode(BaseQueryNode):
             return ["- 无结构化查询问题。"]
         formatted: list[str] = []
         for index, question in enumerate(state.search_plan.questions, start=1):
+            marker = "☑" if question.status == "completed" else "☐"
             formatted.append(
-                f"- Q{index} [{question.status}] {question.question} | Google 查询：{question.google_query}"
+                f"- {marker} Q{index} [{question.status}] {question.question} | Google 查询：{question.google_query}"
             )
+            if question.search_targets:
+                formatted.append(f"  查询内容：{'; '.join(question.search_targets)}")
             if question.expected_info:
                 formatted.append(f"  预期信息：{'; '.join(question.expected_info)}")
             if question.success_criteria:

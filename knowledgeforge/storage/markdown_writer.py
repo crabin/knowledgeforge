@@ -141,7 +141,7 @@ class MarkdownKnowledgeWriter:
         for item in raw_material[start:]:
             if item in {"反思结论：", "官方文档优先：", "教程/补充资料："} or item.startswith("反思结论："):
                 break
-            if item.startswith("- Q") or item.startswith("  "):
+            if item.startswith("- Q") or item.startswith("- ☑") or item.startswith("- ☐") or item.startswith("  "):
                 lines.append(item)
         return lines
 
