@@ -1068,6 +1068,24 @@
 - 当前保守结论：
   - 计划阶段现在只有 LLM 成功这一条路径；失败会提前结束并在前端和日志中明确显示。
 
+### 阶段 42：计划阶段 LLM 超时配置化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 将计划阶段 LLM timeout 从硬编码 1.5 秒改为 `PLAN_LLM_TIMEOUT`
+  - 默认计划超时调整为 15 秒，降低 InsightEngine planning 因短超时失败的概率
+  - `/config/status` runtime 分组展示 `plan_llm_timeout`
+  - 保留 LLM 失败即 `plan_failed` 的行为，不恢复规则 fallback
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/config.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_dashboard.py tests/test_workflow.py::test_async_task_stops_when_llm_plan_generation_fails -q`：3 passed
+  - `uv run pytest -q`：98 passed
+- 当前保守结论：
+  - 如果 LLM 15 秒内仍超时，任务仍会 `plan_failed` 并提示；可通过 `.env` 设置 `PLAN_LLM_TIMEOUT=30` 继续放宽。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25

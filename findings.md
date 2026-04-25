@@ -175,6 +175,7 @@
 - Query / Media 的规则 fallback 已移除；Insight 也改为 LLM 计划，保持三路体验和审计口径一致。
 - 计划失败是任务终态 `plan_failed`，不是 `failed` 或 `supplement_required`；它表示“执行尚未开始，规划阶段就失败”。
 - 前端与 logs 都需要呈现失败原因：`current_action` 给用户看，`agent_plan_failed` 和 `workflow_step(blocked)` 给排障看。
+- LLM-only 后，计划阶段 timeout 不能沿用 1.5 秒这类实时展示优化值；计划是阻塞决策点，默认应给更长窗口，并通过 `PLAN_LLM_TIMEOUT` 配置化。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*

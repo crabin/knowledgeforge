@@ -87,6 +87,8 @@ class AppConfig:
     log_level: str = "INFO"
     strict_graph_sync: bool = False
     enable_live_crawlers: bool = False
+    plan_llm_timeout: float = 15.0
+    execution_llm_timeout: float = 5.0
 
     @classmethod
     def from_env(cls, env_file: str | Path = ".env") -> AppConfig:
@@ -119,6 +121,8 @@ class AppConfig:
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
+            plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 15.0),
+            execution_llm_timeout=_get_float("EXECUTION_LLM_TIMEOUT", 5.0),
         )
 
     def show_config_status(self) -> dict[str, Any]:
@@ -173,6 +177,8 @@ class AppConfig:
             "runtime": {
                 "max_rounds": self.max_rounds,
                 "log_level": self.log_level,
+                "plan_llm_timeout": self.plan_llm_timeout,
+                "execution_llm_timeout": self.execution_llm_timeout,
             },
             "legacy": {
                 "llm_provider": self.llm_provider,
@@ -201,6 +207,16 @@ def _get_int(name: str, default: int) -> int:
     if value is None or value.strip() == "":
         return default
     return int(value)
+
+
+def _get_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def _get_bool(name: str, default: bool) -> bool:

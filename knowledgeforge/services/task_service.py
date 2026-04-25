@@ -54,21 +54,21 @@ class TaskService:
         self._audit_logger = AuditLogger(config.audit_root)
         self._frozen_store = FrozenVersionStore(config.frozen_root)
         self._report_service = ReportService()
-        query_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
+        planning_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.plan_llm_timeout)
+        execution_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.execution_llm_timeout)
         query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
-        media_chat_client = OpenAICompatibleChatClient(config.openai, timeout=1.5)
         self._intake_clarifier = IntakeClarifier(OpenAICompatibleChatClient(config.openai, timeout=1.0))
         graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
-            insight_engine=InsightEngine(chat_client=OpenAICompatibleChatClient(config.openai, timeout=1.5)),
+            insight_engine=InsightEngine(chat_client=planning_chat_client),
             query_engine=QueryEngine(
-                chat_client=query_chat_client,
+                chat_client=planning_chat_client,
                 embedding_client=query_embedding_client,
                 crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
                 event_callback=self._log_realtime_query_event,
             ),
             media_engine=MediaEngine(
-                chat_client=media_chat_client,
+                chat_client=execution_chat_client,
                 crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
             ),
             evaluator=CompletenessEvaluator(),
