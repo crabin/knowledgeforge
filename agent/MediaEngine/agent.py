@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from agent.MediaEngine.nodes.formatting_node import MediaFormattingNode
 from agent.MediaEngine.nodes.reflection_node import MediaReflectionNode
-from agent.MediaEngine.nodes.search_node import MediaSearchNode
+from agent.MediaEngine.nodes.search_node import MediaEventCallback, MediaRealtimeFileCallback, MediaSearchNode
 from agent.MediaEngine.nodes.summary_node import MediaSummaryNode
 from agent.MediaEngine.state.state import MediaEngineState
 from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
@@ -20,11 +20,18 @@ class MediaEngine(BaseEngine):
         chat_client: OpenAICompatibleChatClient | None = None,
         planning_chat_client: OpenAICompatibleChatClient | None = None,
         crawler: MediaPerspectiveCrawler | None = None,
+        event_callback: MediaEventCallback | None = None,
+        realtime_file_callback: MediaRealtimeFileCallback | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._planning_chat_client = planning_chat_client or chat_client
         self._crawler = crawler or MediaPerspectiveCrawler()
-        self._search_node = MediaSearchNode(chat_client=self._planning_chat_client, crawler=self._crawler)
+        self._search_node = MediaSearchNode(
+            chat_client=self._planning_chat_client,
+            crawler=self._crawler,
+            event_callback=event_callback,
+            realtime_file_callback=realtime_file_callback,
+        )
         self._reflection_node = MediaReflectionNode(chat_client=self._chat_client)
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)
         self._formatting_node = MediaFormattingNode()

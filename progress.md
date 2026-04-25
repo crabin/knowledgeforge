@@ -2,6 +2,36 @@
 
 ## 会话：2026-04-24
 
+### 阶段 46：Query / Media 计划项实时文件审查保存
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 新增 `RealtimeFileReviewer`，按计划项审查 QueryEngine / MediaEngine 获取的合格内容并实时保存 Markdown
+  - 实时文档写入 `realtime_saved`、`plan_item_id`、`query`、agent、round、sources 和本地 path，默认状态为 `draft`
+  - 每次保存或跳过后刷新领域 `README.md` 的“实时保存文档”索引区块
+  - QueryEngine 在每个 `SearchQuestion` 完成后触发实时审查；MediaEngine 在每个 social / community / blog 查询项执行后触发实时审查
+  - TaskService 注入共享审查器，并把实时审查事件写入 audit log 与运行中任务快照
+  - 最终 Markdown writer 在重写领域 README 时保留实时保存文档索引
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/realtime_reviewer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_realtime_reviewer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `PYTHONPATH=. pytest tests/test_realtime_reviewer.py tests/test_engine_plans.py tests/test_writer_dynamic_status.py -q`：14 passed
+  - `PYTHONPATH=. pytest tests/test_query_engine.py tests/test_media_engine.py tests/test_workflow.py tests/test_supplement_decision.py -q`：39 passed
+  - `PYTHONPATH=. pytest -q`：105 passed
+- 当前保守结论：
+  - Query / Media 现在能在计划项级别实时沉淀合格资料；最终综合文档和治理链路保持原有职责，不会提前把实时草稿当成 verified 知识。
+
 ### 阶段 1：上下文恢复与需求收敛
 - **状态：** complete
 - **开始时间：** 2026-04-24

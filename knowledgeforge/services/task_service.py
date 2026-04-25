@@ -42,6 +42,11 @@ from knowledgeforge.runtime.intake_session_store import IntakeSessionStore
 from knowledgeforge.runtime.state_store import TaskStateStore
 from knowledgeforge.reporting.report_service import ReportService
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.storage.realtime_reviewer import (
+    RealtimeFileReviewer,
+    RealtimeReviewCandidate,
+    RealtimeReviewResult,
+)
 from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
@@ -55,6 +60,7 @@ class TaskService:
         self._audit_logger = AuditLogger(config.audit_root)
         self._frozen_store = FrozenVersionStore(config.frozen_root)
         self._report_service = ReportService()
+        self._realtime_file_reviewer = RealtimeFileReviewer(config)
         planning_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.plan_llm_timeout)
         execution_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.execution_llm_timeout)
         query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
@@ -67,11 +73,14 @@ class TaskService:
                 embedding_client=query_embedding_client,
                 crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
                 event_callback=self._log_realtime_query_event,
+                realtime_file_callback=self._review_realtime_file,
             ),
             media_engine=MediaEngine(
                 chat_client=execution_chat_client,
                 planning_chat_client=planning_chat_client,
                 crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
+                event_callback=self._log_realtime_media_event,
+                realtime_file_callback=self._review_realtime_file,
             ),
             evaluator=CompletenessEvaluator(),
             supplement_planner=SupplementDecisionPlanner(
@@ -586,6 +595,8 @@ class TaskService:
             event = str(entry.get("event", "agent_execution_event"))
             if event.startswith("query_") and event != "query_engine_fallback_result":
                 continue
+            if event.startswith("media_"):
+                continue
             details = dict(entry.get("details", {}))
             details["agent"] = entry.get("agent")
             details["node"] = entry.get("node")
@@ -609,6 +620,45 @@ class TaskService:
                 "details": entry.get("details", {}),
             },
         )
+
+    def _log_realtime_media_event(self, task_id: str, entry: dict[str, Any]) -> None:
+        details = dict(entry.get("details", {}))
+        details["agent"] = "MediaEngine"
+        details["node"] = entry.get("node")
+        details["event_timestamp"] = entry.get("timestamp")
+        event = str(entry.get("event", "media_execution_event"))
+        self._audit_logger.log(task_id, event, details)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "MediaEngine",
+                "event": event,
+                "timestamp": entry.get("timestamp"),
+                "node": entry.get("node"),
+                "details": entry.get("details", {}),
+            },
+        )
+
+    def _review_realtime_file(
+        self,
+        task_id: str,
+        candidate: RealtimeReviewCandidate,
+    ) -> RealtimeReviewResult:
+        result = self._realtime_file_reviewer.review_and_save(candidate)
+        self._audit_logger.log(
+            task_id,
+            "realtime_file_reviewed",
+            {
+                "agent": candidate.agent,
+                "round": candidate.round_number,
+                "plan_item_id": candidate.plan_item_id,
+                "query": candidate.query,
+                "source_type": candidate.source_type,
+                "platform_type": candidate.platform_type,
+                **result.to_dict(),
+            },
+        )
+        return result
 
     def _log_workflow_step_event(self, task_id: str, event: WorkflowStepEvent) -> None:
         payload = event.to_dict()
@@ -708,6 +758,20 @@ class TaskService:
             return f"QueryEngine 已抓取 {details.get('document_count', 0)} 篇候选文档"
         if event == "query_embeddings_completed":
             return "QueryEngine 已完成候选文档向量化"
+        if event == "query_realtime_file_reviewed":
+            return f"QueryEngine 实时文件审查完成：{len(details.get('saved_paths', []))} 个文件"
+        if event == "query_realtime_file_failed":
+            return f"QueryEngine 实时文件保存失败：{details.get('error', '')}"
+        if event == "media_plan_item_started":
+            return f"MediaEngine 正在查询：{details.get('query', '')}"
+        if event == "media_search_executed":
+            return f"MediaEngine 已执行搜索：{details.get('query', '')}"
+        if event == "media_documents_fetched":
+            return f"MediaEngine 已抓取 {details.get('document_count', 0)} 篇候选文档"
+        if event == "media_realtime_file_reviewed":
+            return f"MediaEngine 实时文件审查完成：{len(details.get('saved_paths', []))} 个文件"
+        if event == "media_realtime_file_failed":
+            return f"MediaEngine 实时文件保存失败：{details.get('error', '')}"
         return str(event)
 
     def _freeze_version_if_eligible(self, task_id: str, payload: dict[str, Any]) -> None:

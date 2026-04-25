@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from collections.abc import Callable
+from typing import Any
+
 from agent.MediaEngine.nodes.base_node import BaseMediaNode
 from agent.MediaEngine.prompts.prompts import MEDIA_SEARCH_PLAN_SYSTEM_PROMPT
 from agent.MediaEngine.state.state import MediaEngineState, MediaSearchPlan
@@ -9,7 +12,11 @@ from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.utils.query_normalization import normalize_query_term
+from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
 from knowledgeforge.utils.time import now_iso
+
+MediaEventCallback = Callable[[str, dict[str, Any]], None]
+MediaRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
 
 
 class MediaSearchNode(BaseMediaNode):
@@ -18,9 +25,13 @@ class MediaSearchNode(BaseMediaNode):
         *,
         chat_client: OpenAICompatibleChatClient | None,
         crawler: MediaPerspectiveCrawler,
+        event_callback: MediaEventCallback | None = None,
+        realtime_file_callback: MediaRealtimeFileCallback | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._crawler = crawler
+        self._event_callback = event_callback
+        self._realtime_file_callback = realtime_file_callback
 
     def run(self, state: MediaEngineState, **kwargs) -> MediaEngineState:
         plan = self._build_plan(state)
@@ -132,7 +143,7 @@ class MediaSearchNode(BaseMediaNode):
     ) -> None:
         all_hits = list(state.search_hits)
         domain_phrases = self._domain_phrases(state)
-        for query in social_queries:
+        for index, query in enumerate(social_queries, start=1):
             self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "social"})
             hits = self._search(
                 query=query,
@@ -148,7 +159,14 @@ class MediaSearchNode(BaseMediaNode):
                 {"query": query, "platform_type": "social", "hits": len(hits)},
             )
             all_hits.extend(hits)
-        for query in community_queries:
+            self._save_realtime_query_documents(
+                state,
+                plan_item_id=f"M-S{index}",
+                query=query,
+                platform_type="social",
+                hits=hits,
+            )
+        for index, query in enumerate(community_queries, start=1):
             self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "community"})
             hits = self._search(
                 query=query,
@@ -164,7 +182,14 @@ class MediaSearchNode(BaseMediaNode):
                 {"query": query, "platform_type": "community", "hits": len(hits)},
             )
             all_hits.extend(hits)
-        for query in blog_queries:
+            self._save_realtime_query_documents(
+                state,
+                plan_item_id=f"M-C{index}",
+                query=query,
+                platform_type="community",
+                hits=hits,
+            )
+        for index, query in enumerate(blog_queries, start=1):
             self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "blog"})
             hits = self._search(
                 query=query,
@@ -180,6 +205,13 @@ class MediaSearchNode(BaseMediaNode):
                 {"query": query, "platform_type": "blog", "hits": len(hits)},
             )
             all_hits.extend(hits)
+            self._save_realtime_query_documents(
+                state,
+                plan_item_id=f"M-B{index}",
+                query=query,
+                platform_type="blog",
+                hits=hits,
+            )
 
         state.search_hits = self._dedupe_hits(all_hits)
         state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=10)
@@ -189,16 +221,17 @@ class MediaSearchNode(BaseMediaNode):
             {"hit_count": len(state.search_hits), "document_count": len(state.crawled_documents)},
         )
 
-    @staticmethod
-    def _record_event(state: MediaEngineState, event: str, details: dict[str, object]) -> None:
-        state.execution_log.append(
-            {
-                "event": event,
-                "timestamp": now_iso(),
-                "node": "MediaSearchNode",
-                "details": details,
-            }
-        )
+    def _record_event(self, state: MediaEngineState, event: str, details: dict[str, object]) -> None:
+        entry = {
+            "event": event,
+            "timestamp": now_iso(),
+            "node": "MediaSearchNode",
+            "details": details,
+        }
+        state.execution_log.append(entry)
+        task_id = getattr(state.request_context, "task_id", "")
+        if task_id and self._event_callback is not None:
+            self._event_callback(task_id, entry)
 
     def _normalize_domain(self, state: MediaEngineState) -> None:
         if state.normalized_domain:
@@ -268,4 +301,52 @@ class MediaSearchNode(BaseMediaNode):
                 platform_type=platform_type,
                 is_technical=is_technical,
                 max_results=max_results,
+            )
+
+    def _save_realtime_query_documents(
+        self,
+        state: MediaEngineState,
+        *,
+        plan_item_id: str,
+        query: str,
+        platform_type: str,
+        hits: list[Any],
+    ) -> None:
+        task_id = getattr(state.request_context, "task_id", "")
+        if not task_id or self._realtime_file_callback is None or not hits:
+            return
+        try:
+            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=4)
+            candidate = RealtimeReviewCandidate(
+                agent="MediaEngine",
+                round_number=state.round_number,
+                plan_item_id=plan_item_id,
+                query=query,
+                source_type=platform_type,
+                platform_type=platform_type,
+                documents=documents,
+                context=state.request_context,
+            )
+            result = self._realtime_file_callback(task_id, candidate)
+            self._record_event(
+                state,
+                "media_realtime_file_reviewed",
+                {
+                    "plan_item_id": plan_item_id,
+                    "query": query,
+                    "platform_type": platform_type,
+                    **result.to_dict(),
+                },
+            )
+        except Exception as exc:
+            self._record_event(
+                state,
+                "media_realtime_file_failed",
+                {
+                    "plan_item_id": plan_item_id,
+                    "query": query,
+                    "platform_type": platform_type,
+                    "error": str(exc),
+                    "failure_category": "file_write_failed",
+                },
             )

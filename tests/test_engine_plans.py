@@ -4,6 +4,7 @@ from agent.InsightEngine.agent import InsightEngine
 from agent.MediaEngine.agent import MediaEngine
 from agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.models import EnginePlan, EnginePlanItem, RequestContext
+from knowledgeforge.storage.realtime_reviewer import RealtimeReviewResult
 
 
 class FakePlanChatClient:
@@ -180,6 +181,81 @@ def test_query_engine_executes_approved_plan() -> None:
     assert any(entry["event"] == "query_plan_created" for entry in result.execution_log)
 
 
+def test_query_engine_reviews_files_after_plan_item_completion() -> None:
+    context = _context()
+    context.task_id = "task-query-review"
+    crawler = RecordingQueryCrawler()
+    reviewed = []
+
+    def review_callback(task_id, candidate):
+        reviewed.append((task_id, candidate))
+        return RealtimeReviewResult(
+            saved_paths=["save/知识工程/工作流编排/q1.md"],
+            index_path="save/知识工程/README.md",
+            status="saved",
+        )
+
+    class HitCrawler(RecordingQueryCrawler):
+        def search(self, **kwargs):
+            from agent.QueryEngine.state.state import SearchHit
+
+            self.queries.append(kwargs["query"])
+            return [
+                SearchHit(
+                    title="Official Hit",
+                    url="https://example.com/docs",
+                    snippet="official reference",
+                    source_type="official",
+                    score=1.0,
+                )
+            ]
+
+        def fetch_documents(self, hits, *, max_documents: int = 8):
+            from agent.QueryEngine.state.state import CrawledDocument
+
+            return [
+                CrawledDocument(
+                    title=hit.title,
+                    url=hit.url,
+                    snippet=hit.snippet,
+                    content="official reference content",
+                    source_type=hit.source_type,
+                    publisher=hit.publisher,
+                    score=hit.score,
+                )
+                for hit in hits
+            ]
+
+    plan = EnginePlan(
+        agent_name="QueryEngine",
+        plan_items=[
+            EnginePlanItem(
+                plan_item_id="Q1",
+                title="确认权威事实",
+                query_or_action="custom approved query",
+                targets=["权威事实"],
+                success_criteria=["执行已确认 query"],
+                source_priority=["official documentation"],
+            )
+        ],
+        reasoning="人工确认计划",
+        status="approved",
+        created_at="2026-04-25T00:00:00+09:00",
+    )
+
+    result = QueryEngine(
+        chat_client=None,
+        crawler=HitCrawler(),
+        realtime_file_callback=review_callback,
+    ).run(context, 1, approved_plan=plan)
+
+    assert reviewed
+    assert reviewed[0][0] == "task-query-review"
+    assert reviewed[0][1].plan_item_id == "Q1"
+    assert reviewed[0][1].agent == "QueryEngine"
+    assert any(entry["event"] == "query_realtime_file_reviewed" for entry in result.execution_log)
+
+
 def test_media_engine_executes_approved_plan() -> None:
     context = _context()
     crawler = RecordingMediaCrawler()
@@ -206,3 +282,77 @@ def test_media_engine_executes_approved_plan() -> None:
     assert crawler.queries[0] == ("community", "custom community query")
     assert result.agent_name == "MediaEngine"
     assert any(entry["event"] == "media_search_executed" for entry in result.execution_log)
+
+
+def test_media_engine_reviews_files_after_query_item_completion() -> None:
+    context = _context()
+    context.task_id = "task-media-review"
+    reviewed = []
+
+    def review_callback(task_id, candidate):
+        reviewed.append((task_id, candidate))
+        return RealtimeReviewResult(
+            saved_paths=["save/知识工程/工作流编排/m1.md"],
+            index_path="save/知识工程/README.md",
+            status="saved",
+        )
+
+    class HitMediaCrawler(RecordingMediaCrawler):
+        def search(self, **kwargs):
+            from agent.MediaEngine.state.state import MediaSearchHit
+
+            self.queries.append((kwargs["platform_type"], kwargs["query"]))
+            return [
+                MediaSearchHit(
+                    title="Community Hit",
+                    url="https://example.com/thread",
+                    snippet="community trend",
+                    platform_type=kwargs["platform_type"],
+                    score=1.0,
+                )
+            ]
+
+        def fetch_documents(self, hits, *, max_documents: int = 8):
+            from agent.MediaEngine.state.state import MediaCrawledDocument
+
+            return [
+                MediaCrawledDocument(
+                    title=hit.title,
+                    url=hit.url,
+                    snippet=hit.snippet,
+                    content="community trend content",
+                    platform_type=hit.platform_type,
+                    publisher=hit.publisher,
+                    score=hit.score,
+                )
+                for hit in hits
+            ]
+
+    plan = EnginePlan(
+        agent_name="MediaEngine",
+        plan_items=[
+            EnginePlanItem(
+                plan_item_id="M-C1",
+                title="确认社区观点",
+                query_or_action="custom community query",
+                targets=["社区观点"],
+                success_criteria=["执行已确认社区 query"],
+                source_priority=["community"],
+            )
+        ],
+        reasoning="人工确认计划",
+        status="approved",
+        created_at="2026-04-25T00:00:00+09:00",
+    )
+
+    result = MediaEngine(
+        chat_client=None,
+        crawler=HitMediaCrawler(),
+        realtime_file_callback=review_callback,
+    ).run(context, 1, approved_plan=plan)
+
+    assert reviewed
+    assert reviewed[0][0] == "task-media-review"
+    assert reviewed[0][1].agent == "MediaEngine"
+    assert reviewed[0][1].platform_type == "community"
+    assert any(entry["event"] == "media_realtime_file_reviewed" for entry in result.execution_log)

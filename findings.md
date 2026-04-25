@@ -186,6 +186,13 @@
 - LLM 不可用时可以退回完整性评估生成的补查 query，但必须标记 `source=fallback_index_analysis`，不能伪装成 LLM index 分析。
 - 第二次完整性评估通过后仍应保留上一轮 `supplement_decision`，否则最终任务只能看到“已通过”，看不到为什么曾经补采、读了哪些 index 文件。
 
+## 实时文件审查保存结论
+- Query / Media 的合格资料不应等完整性评估后才落盘；按计划项实时保存能让补充决策读取更真实的领域 index。
+- 保存粒度采用“每个计划项一篇 Markdown”，比逐来源保存更可控，同时仍在 front matter 和证据表中保留每个 URL 的追溯信息。
+- 领域索引继续使用 `save/{领域}/README.md`，不新增平行 `index.md`；每次实时保存后刷新“实时保存文档”区块。
+- 实时保存文档只能是 `draft`，不能替代最终综合文档、结构化治理、Neo4j 路径关联和质量检测。
+- 文件写入失败属于 `file_write_failed`，应进入 audit / execution log，但默认不打断 Query / Media 的采集线程。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

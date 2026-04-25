@@ -25,6 +25,10 @@
   - 已完成：新增 LLM 补充决策器，分析当前 index 暴露的缺陷、优先级、补查 query、预期信息和成功标准。
   - 已完成：补充决策只分发给 QueryEngine 执行权威事实补采，执行后合并 QueryEngine 输出并重新评估完整性。
   - 已完成：补充决策结果进入 `CompletenessResult.supplement_decision`，最终通过后仍可审计读取的 index 路径和决策来源。
+- Query / Media 计划项实时保存
+  - 已完成：新增文件审查模块，按计划项审查 QueryEngine / MediaEngine 获取的合格内容并实时保存 Markdown 草稿。
+  - 已完成：每次实时保存或跳过后刷新领域 `README.md` 的“实时保存文档”索引区块，最终 writer 重写 README 时保留该区块。
+  - 已完成：实时保存事件进入 audit log 与运行中任务快照，失败按 `file_write_failed` 记录但默认不阻断采集流程。
 - 质量流水线来源门禁
   - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。
 - Browser 抓取稳定性

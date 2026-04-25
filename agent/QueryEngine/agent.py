@@ -3,7 +3,7 @@ from __future__ import annotations
 from agent.QueryEngine.nodes.base_node import QueryEventCallback
 from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
 from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
-from agent.QueryEngine.nodes.search_node import QuerySearchNode
+from agent.QueryEngine.nodes.search_node import QueryRealtimeFileCallback, QuerySearchNode
 from agent.QueryEngine.nodes.summary_node import QuerySummaryNode
 from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
@@ -25,6 +25,7 @@ class QueryEngine(BaseEngine):
         embedding_client: OpenAICompatibleEmbeddingClient | None = None,
         crawler: DomainKnowledgeCrawler | None = None,
         event_callback: QueryEventCallback | None = None,
+        realtime_file_callback: QueryRealtimeFileCallback | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._embedding_client = embedding_client
@@ -33,6 +34,7 @@ class QueryEngine(BaseEngine):
             chat_client=self._chat_client,
             crawler=self._crawler,
             event_callback=event_callback,
+            realtime_file_callback=realtime_file_callback,
         )
         self._reflection_node = QueryReflectionNode(
             chat_client=self._chat_client,

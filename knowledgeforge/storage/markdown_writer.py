@@ -12,6 +12,7 @@ from knowledgeforge.models import (
     EngineRunResult,
     RequestContext,
 )
+from knowledgeforge.storage.realtime_reviewer import RealtimeFileReviewer
 from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso, today_compact
 
@@ -50,7 +51,7 @@ class MarkdownKnowledgeWriter:
         )
 
         document_body = self._render_document(artifact, context, outputs, completeness, round_number)
-        domain_readme = self._render_domain_readme(context, outputs)
+        domain_readme = self._render_domain_readme(context, outputs, domain_dir)
         query_plan_path = self._write_query_plan_document(
             context=context,
             query_output=outputs.get("QueryEngine"),
@@ -435,11 +436,14 @@ class MarkdownKnowledgeWriter:
             readable.append(f"查询计划明细已保存到独立 query 文档，本节省略 {skipped_plan_lines} 行执行清单。")
         return readable
 
-    @staticmethod
     def _render_domain_readme(
+        self,
         context: RequestContext,
         outputs: dict[str, EngineRunResult],
+        domain_dir: Path,
     ) -> str:
+        if RealtimeFileReviewer.scan_realtime_documents(domain_dir):
+            return RealtimeFileReviewer.render_domain_index(context, domain_dir)
         sections = "\n".join(f"- {topic}" for topic in context.subdomains)
         sources = sum(len(output.sources) for output in outputs.values())
         return "\n".join(

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from collections.abc import Callable
+from typing import Any
+
 from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
@@ -17,7 +20,10 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
+from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
 from knowledgeforge.utils.time import now_iso
+
+QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
 
 
 class QuerySearchNode(BaseQueryNode):
@@ -27,10 +33,12 @@ class QuerySearchNode(BaseQueryNode):
         chat_client: OpenAICompatibleChatClient | None,
         crawler: DomainKnowledgeCrawler,
         event_callback: QueryEventCallback | None = None,
+        realtime_file_callback: QueryRealtimeFileCallback | None = None,
     ) -> None:
         super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
         self._crawler = crawler
+        self._realtime_file_callback = realtime_file_callback
 
     def run(
         self,
@@ -244,6 +252,12 @@ class QuerySearchNode(BaseQueryNode):
                     "total_hits": len(question_hits),
                     "completed_at": question.completed_at,
                 },
+            )
+            self._save_realtime_question_documents(
+                state,
+                question=question,
+                source_type=source_type,
+                hits=question_hits,
             )
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
@@ -572,4 +586,50 @@ class QuerySearchNode(BaseQueryNode):
                 official_domains=official_domains,
                 preferred_domains=preferred_domains,
                 max_results=max_results,
+            )
+
+    def _save_realtime_question_documents(
+        self,
+        state: QueryEngineState,
+        *,
+        question: SearchQuestion,
+        source_type: str,
+        hits: list[Any],
+    ) -> None:
+        task_id = getattr(state.request_context, "task_id", "")
+        if not task_id or self._realtime_file_callback is None or not hits:
+            return
+        try:
+            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=4)
+            candidate = RealtimeReviewCandidate(
+                agent="QueryEngine",
+                round_number=state.round_number,
+                plan_item_id=question.plan_item_id,
+                query=question.google_query,
+                source_type=source_type,
+                documents=documents,
+                context=state.request_context,
+            )
+            result = self._realtime_file_callback(task_id, candidate)
+            self._record_event(
+                state,
+                "query_realtime_file_reviewed",
+                {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "query": question.google_query,
+                    **result.to_dict(),
+                },
+            )
+        except Exception as exc:
+            self._record_event(
+                state,
+                "query_realtime_file_failed",
+                {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "query": question.google_query,
+                    "error": str(exc),
+                    "failure_category": "file_write_failed",
+                },
             )
