@@ -943,6 +943,27 @@
 - 当前保守结论：
   - 前端现在能在直接任务和 intake 确认任务中看到 QueryEngine 的中间动作；日志和任务详情都保持可轮询。
 
+### 阶段 37：logs 新日志落盘补写
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 复查 `/tasks/{task_id}/logs` 与 task state `execution_log` 的数据来源差异
+  - 将 logs 接口改为读取 audit jsonl 前后合并任务快照里的 `execution_log`
+  - 当 audit jsonl 缺少任务快照中的执行事件时，自动补写到 audit 文件
+  - 增加去重 key，避免重复追加同一条 QueryEngine 执行事件
+  - 补充回归测试确认 logs 返回新事件且 audit jsonl 已落盘
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_workflow.py -q`：23 passed
+  - `uv run pytest -q`：89 passed
+- 当前保守结论：
+  - 即使新的执行事件只先进入任务快照，访问 logs 时也会被补写进 audit jsonl，后续刷新和重启后仍能看到。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

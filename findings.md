@@ -153,6 +153,7 @@
 - QueryEngine 的实时事件此前主要进入 audit jsonl；任务详情 JSON 不会随每条中间事件刷新，因此前端轮询 `/tasks/{task_id}` 时缺少当前动作与中间 execution_log。
 - 修复后，intake 确认复用异步任务启动路径，前端拿到 `task_id` 后立即轮询日志和任务详情。
 - 修复后，QueryEngine 每条实时事件会同时写入 audit log 和运行中任务快照，并生成 `current_action`，用于前端摘要区实时展示。
+- 追加修复：`/tasks/{task_id}/logs` 不能只读 audit jsonl；当运行中任务快照已经有新的 `execution_log` 而 audit 文件缺项时，需要在读取 logs 时补写缺失事件，保证日志接口和落盘 jsonl 一致。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*

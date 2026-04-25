@@ -353,8 +353,11 @@ class TaskService:
         return self._frozen_store.load(task_id)
 
     def get_task_logs(self, task_id: str) -> dict[str, Any] | None:
-        if self.get_task(task_id) is None:
+        task = self.get_task(task_id)
+        if task is None:
             return None
+        audit_logs = self._audit_logger.read(task_id)
+        self._backfill_audit_logs_from_task(task_id, task, audit_logs)
         return {
             "task_id": task_id,
             "logs": self._audit_logger.read(task_id),
@@ -479,6 +482,40 @@ class TaskService:
                 "details": entry.get("details", {}),
             },
         )
+
+    def _backfill_audit_logs_from_task(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        audit_logs: list[dict[str, Any]],
+    ) -> None:
+        existing = {
+            self._audit_dedupe_key(entry.get("event"), entry.get("details", {}))
+            for entry in audit_logs
+        }
+        for entry in task.get("execution_log", []):
+            event = str(entry.get("event", "agent_execution_event"))
+            details = dict(entry.get("details", {}))
+            details["agent"] = entry.get("agent")
+            details["node"] = entry.get("node")
+            details["event_timestamp"] = entry.get("timestamp")
+            key = self._audit_dedupe_key(event, details)
+            if key in existing:
+                continue
+            self._audit_logger.log(task_id, event, details)
+            existing.add(key)
+
+    @staticmethod
+    def _audit_dedupe_key(event: object, details: dict[str, Any]) -> tuple[str, str, str, str]:
+        event_name = str(event or "")
+        event_timestamp = str(details.get("event_timestamp") or "")
+        node = str(details.get("node") or "")
+        stable_details = {
+            key: value
+            for key, value in details.items()
+            if key not in {"agent", "node", "event_timestamp"}
+        }
+        return (event_name, event_timestamp, node, str(sorted(stable_details.items())))
 
     def _refresh_running_task_snapshot(self, task_id: str, entry: dict[str, Any]) -> None:
         with self._task_lock:

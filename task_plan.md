@@ -11,6 +11,7 @@
   - 已完成：统一直接创建任务与 intake 确认任务的异步启动路径，避免确认时同步阻塞页面。
   - 已完成：QueryEngine 实时事件写入 audit log 的同时刷新任务快照，让前端轮询任务详情时能看到当前动作、更新时间和中间日志。
   - 已完成：补充回归测试覆盖 intake 确认后的实时轮询、任务详情中间状态和最终任务状态。
+  - 已完成：`/tasks/{task_id}/logs` 读取时从任务快照补写缺失 execution_log，确保新日志保存到 audit jsonl。
 - 质量流水线来源门禁
   - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。
 - Browser 抓取稳定性

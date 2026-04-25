@@ -345,6 +345,39 @@ def test_async_task_detail_includes_realtime_query_action(tmp_path: Path) -> Non
     assert "query_plan_item_started" in [entry["event"] for entry in logs["logs"]]
 
 
+def test_task_logs_backfill_saved_execution_log_entries(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["日志保存"]})
+    state = service._create_initial_state(context, audit_source="api_async")
+    task_id = state["task_id"]
+    payload = service._serialize_state(state)
+    payload["execution_log"] = [
+        {
+            "agent": "QueryEngine",
+            "event": "query_plan_created",
+            "timestamp": "2026-04-25T16:05:00+09:00",
+            "node": "QuerySearchNode",
+            "details": {"question_count": 1, "questions": []},
+        }
+    ]
+    service._state_store.save(task_id, payload)
+
+    logs = service.get_task_logs(task_id)
+    audit_file = config.audit_root / f"{task_id}.jsonl"
+
+    assert logs is not None
+    assert "query_plan_created" in [entry["event"] for entry in logs["logs"]]
+    assert audit_file.exists()
+    saved_events = [json.loads(line)["event"] for line in audit_file.read_text(encoding="utf-8").splitlines()]
+    assert "query_plan_created" in saved_events
+
+
 def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",
