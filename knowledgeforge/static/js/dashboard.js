@@ -114,6 +114,7 @@ function renderSummary(payload) {
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
+    ["当前动作", payload.current_action || payload.task?.current_action],
     ["文档路径", getNested(payload, "document_artifact.path")],
     ["质量检查", getNested(payload, "post_storage_result.quality_check.status")],
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
@@ -468,11 +469,17 @@ document.querySelector("#confirm-intake").addEventListener("click", async (event
   const sessionId = intakeSessionInput.value.trim();
   setBusy(button, true);
   try {
-    showPayload(await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/confirm`, {
+    const payload = await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/confirm`, {
       method: "POST",
-    }));
+    });
+    showPayload(payload);
+    const taskId = payload.task?.task_id || payload.task_id || payload.intake_session?.task_id;
+    if (taskId) {
+      startTaskPolling(taskId);
+    }
   } catch (error) {
     showError(error);
+    stopTaskPolling();
   } finally {
     setBusy(button, false);
   }
@@ -513,7 +520,12 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
 
     setBusy(button, true);
     try {
-      showPayload(await requestJson(route[0], { method: route[1] }));
+      const payload = await requestJson(route[0], { method: route[1] });
+      showPayload(payload);
+      const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
+      if (action === "resume" && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
+        startTaskPolling(activeTaskId);
+      }
     } catch (error) {
       showError(error);
     } finally {

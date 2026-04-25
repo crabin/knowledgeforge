@@ -84,6 +84,9 @@ class TaskService:
 
     def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
+        return self._start_task_from_context(request_context)
+
+    def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
         task_id = initial_state["task_id"]
         with self._task_lock:
@@ -280,7 +283,7 @@ class TaskService:
             "intake_confirmed",
             {"domain": request_context.domain, "output_language": request_context.output_language},
         )
-        task_payload = self._run_workflow(request_context, audit_source="intake")
+        task_payload = self._start_task_from_context(request_context)
         stored["status"] = "confirmed"
         stored["task_id"] = task_payload["task_id"]
         stored["updated_at"] = now_iso()
@@ -464,7 +467,59 @@ class TaskService:
         details["agent"] = "QueryEngine"
         details["node"] = entry.get("node")
         details["event_timestamp"] = entry.get("timestamp")
-        self._audit_logger.log(task_id, str(entry.get("event", "query_execution_event")), details)
+        event = str(entry.get("event", "query_execution_event"))
+        self._audit_logger.log(task_id, event, details)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "QueryEngine",
+                "event": event,
+                "timestamp": entry.get("timestamp"),
+                "node": entry.get("node"),
+                "details": entry.get("details", {}),
+            },
+        )
+
+    def _refresh_running_task_snapshot(self, task_id: str, entry: dict[str, Any]) -> None:
+        with self._task_lock:
+            state = self._tasks.get(task_id)
+            if state is None:
+                stored = self._state_store.load(task_id)
+                if stored is None or not self._is_running_status(stored.get("task_status", "")):
+                    return
+                execution_log = stored.setdefault("execution_log", [])
+                if entry not in execution_log:
+                    execution_log.append(entry)
+                stored["current_action"] = self._describe_realtime_action(entry)
+                stored["updated_at"] = now_iso()
+                self._state_store.save(task_id, stored)
+                return
+
+            execution_log = state.setdefault("execution_log", [])
+            if entry not in execution_log:
+                execution_log.append(entry)
+            state["current_action"] = self._describe_realtime_action(entry)
+            state["updated_at"] = now_iso()
+            payload = self._serialize_state(state)
+            self._state_store.save(task_id, payload)
+
+    @staticmethod
+    def _describe_realtime_action(entry: dict[str, Any]) -> str:
+        details = entry.get("details", {})
+        event = entry.get("event", "")
+        if event == "query_plan_created":
+            return f"QueryEngine 已生成 {details.get('question_count', 0)} 个查询计划项"
+        if event == "query_plan_item_started":
+            return f"QueryEngine 正在查询：{details.get('question', '')}"
+        if event == "query_search_executed":
+            return f"QueryEngine 已执行搜索：{details.get('query', '')}"
+        if event == "query_question_completed":
+            return f"QueryEngine 完成查询项：{details.get('question', '')}"
+        if event == "query_documents_fetched":
+            return f"QueryEngine 已抓取 {details.get('document_count', 0)} 篇候选文档"
+        if event == "query_embeddings_completed":
+            return "QueryEngine 已完成候选文档向量化"
+        return str(event)
 
     def _freeze_version_if_eligible(self, task_id: str, payload: dict[str, Any]) -> None:
         post_storage = payload.get("post_storage_result") or {}

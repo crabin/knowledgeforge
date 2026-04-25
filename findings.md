@@ -148,6 +148,12 @@
 - 删除任务会移除 task state 与 frozen version；知识文档仍按 `save/` 事实存储保留，避免误删领域知识正文。
 - 修改和删除都写入 audit 事件，便于审计是谁在任务生命周期上做过管理操作。
 
+## 前端动作实时展示修复结论
+- 直接任务创建已经走 `/tasks/async`，但 intake 确认此前仍走同步 workflow，会导致“确认并启动任务”直到后台执行完成后才返回，前端无法看到中间动作。
+- QueryEngine 的实时事件此前主要进入 audit jsonl；任务详情 JSON 不会随每条中间事件刷新，因此前端轮询 `/tasks/{task_id}` 时缺少当前动作与中间 execution_log。
+- 修复后，intake 确认复用异步任务启动路径，前端拿到 `task_id` 后立即轮询日志和任务详情。
+- 修复后，QueryEngine 每条实时事件会同时写入 audit log 和运行中任务快照，并生成 `current_action`，用于前端摘要区实时展示。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

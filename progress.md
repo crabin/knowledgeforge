@@ -222,13 +222,8 @@
   - /Users/lpb/workspace/myProjects/KnowledgeForge/scripts/test_single_engines.py
   - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
   - /Users/lpb/workspace/myProjects/KnowledgeForge/pyproject.toml
-  - /Users/lpb/workspace/myProjects/KnowledgeForge/uv.lock
-  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
-- 当前保守结论：
-  - QueryEngine 专项测试已通过
-  - 单引擎脚本可运行
-  - `tests/test_workflow.py` 仍需一次最终稳定化确认，不按已全绿记录
-  - crawler 的真实检索质量与官方域名过滤策略仍需继续收敛
+
+## 会话：2026-04-25
 
 ### 阶段 10：MediaEngine 节点化重构与趋势观点补充
 - **状态：** complete-with-followup
@@ -923,6 +918,30 @@
   - `uv run pytest tests/test_dashboard.py tests/test_workflow.py`：23 个测试通过
 - 当前保守结论：
   - 配置状态面板现在能直接看到 LLM provider、模型名和 API 地址，同时不会泄露密钥
+
+### 阶段 36：前端动作实时展示修复
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 排查 `/tasks/async`、`/tasks/{task_id}/logs`、`dashboard.js` 和 QueryEngine 实时事件链路
+  - 将 intake 确认任务改为复用异步启动路径，避免确认按钮同步阻塞到任务结束
+  - 前端在 intake 确认返回 task_id 后立即启动轮询
+  - QueryEngine 实时事件写入 audit log 的同时刷新运行中 task state
+  - 新增 `current_action`，让摘要区展示当前查询计划、搜索、抓取等动作
+  - 补充回归测试覆盖 intake 确认异步启动与实时任务详情
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_workflow.py -q`：22 passed
+  - `uv run pytest tests/test_dashboard.py -q`：2 passed
+  - `uv run pytest -q`：88 passed
+- 当前保守结论：
+  - 前端现在能在直接任务和 intake 确认任务中看到 QueryEngine 的中间动作；日志和任务详情都保持可轮询。
 
 ## 五问重启检查
 | 问题 | 答案 |

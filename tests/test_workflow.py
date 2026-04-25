@@ -73,15 +73,14 @@ def test_intake_session_clarifies_ml_without_starting_task(tmp_path: Path) -> No
 
 
 def test_intake_confirm_starts_task_with_normalized_domain(tmp_path: Path, monkeypatch) -> None:
-    def fake_run_workflow(self, request_context, *, audit_source: str):
+    def fake_start_task_from_context(self, request_context):
         return {
             "task_id": "task-from-intake",
-            "task_status": "created",
+            "task_status": "running",
             "request_context": request_context.to_dict(),
-            "audit_source": audit_source,
         }
 
-    monkeypatch.setattr(TaskService, "_run_workflow", fake_run_workflow)
+    monkeypatch.setattr(TaskService, "_start_task_from_context", fake_start_task_from_context)
     app = create_app(
         AppConfig(
             save_root=tmp_path / "save",
@@ -100,6 +99,8 @@ def test_intake_confirm_starts_task_with_normalized_domain(tmp_path: Path, monke
     payload = confirmed.get_json()
     context = payload["task"]["request_context"]
     assert payload["intake_session"]["status"] == "confirmed"
+    assert payload["intake_session"]["task_id"] == "task-from-intake"
+    assert payload["task"]["task_status"] == "running"
     assert context["domain"] == "Machine Learning"
     assert context["normalized_domain"] == "Machine Learning"
     assert context["original_input"] == "ML"
@@ -304,6 +305,44 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     assert "query_plan_item_started" in events
     assert "query_question_completed" in events
     assert final_payload["task_status"] != "running"
+
+
+def test_async_task_detail_includes_realtime_query_action(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["实时动作"]})
+    initial_state = service._create_initial_state(context, audit_source="api_async")
+    task_id = initial_state["task_id"]
+    service._tasks[task_id] = initial_state
+    service._state_store.save(task_id, service._serialize_state(initial_state))
+
+    service._log_realtime_query_event(
+        task_id,
+        {
+            "event": "query_plan_item_started",
+            "timestamp": "2026-04-25T16:00:00+09:00",
+            "node": "QuerySearchNode",
+            "details": {
+                "plan_item_id": "Q1",
+                "question": "知识工程如何实时展示动作？",
+                "status": "in_progress",
+            },
+        },
+    )
+
+    task = service.get_task(task_id)
+    logs = service.get_task_logs(task_id)
+
+    assert task is not None
+    assert "正在查询" in task["current_action"]
+    assert any(entry["event"] == "query_plan_item_started" for entry in task["execution_log"])
+    assert logs is not None
+    assert "query_plan_item_started" in [entry["event"] for entry in logs["logs"]]
 
 
 def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:
