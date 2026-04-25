@@ -881,10 +881,28 @@
 - 当前保守结论：
   - 任务管理只处理任务元数据与任务记录，不自动删除 `save/` 下已经生成的知识文档
 
+### 阶段 34：顶部能力与配置面板默认收起
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 将“主流程能力”面板改为原生 `details/summary` 折叠面板
+  - 将“配置状态”面板改为原生 `details/summary` 折叠面板
+  - 两个面板默认收起，点击标题区可展开或收起
+  - 增加折叠状态按钮样式，展开时显示“收起”
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_dashboard.py tests/test_workflow.py`：23 个测试通过
+- 当前保守结论：
+  - 首页默认更聚焦任务操作区域，同时仍可展开查看主流程能力和配置状态
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 33 已完成实现，等待验证；任务可在前端/API 中修改和删除 |
+| 我在哪里？ | 阶段 34 已完成；顶部“主流程能力”和“配置状态”已默认收起 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

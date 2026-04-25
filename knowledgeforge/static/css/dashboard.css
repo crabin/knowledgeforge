@@ -134,6 +134,10 @@ h3 {
   padding: 22px;
 }
 
+.collapsible-panel {
+  padding: 0;
+}
+
 .section-heading {
   display: flex;
   justify-content: space-between;
@@ -144,6 +148,74 @@ h3 {
 
 .section-heading.compact {
   margin-bottom: 14px;
+}
+
+.collapsible-summary {
+  min-height: 68px;
+  margin-bottom: 0;
+  padding: 18px 22px;
+  cursor: pointer;
+  list-style: none;
+  align-items: center;
+}
+
+.collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-summary .eyebrow {
+  display: block;
+}
+
+.summary-title {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.summary-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: #fffdf8;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.summary-state::after {
+  content: "▾";
+  margin-left: 8px;
+  color: var(--green);
+}
+
+.collapsible-panel[open] .summary-state {
+  color: var(--green);
+}
+
+.collapsible-panel[open] .summary-state::before {
+  content: "收起";
+}
+
+.collapsible-panel[open] .summary-state {
+  font-size: 0;
+}
+
+.collapsible-panel[open] .summary-state::before,
+.collapsible-panel[open] .summary-state::after {
+  font-size: 0.84rem;
+}
+
+.collapsible-panel[open] .summary-state::after {
+  content: "▴";
+}
+
+.collapsible-panel[open] .flow-grid,
+.collapsible-panel[open] .config-grid {
+  padding: 0 22px 22px;
 }
 
 .flow-grid {

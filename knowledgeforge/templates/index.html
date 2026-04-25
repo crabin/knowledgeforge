@@ -23,11 +23,14 @@
     </header>
 
     <main class="dashboard-shell">
-      <section class="panel hero-panel" aria-labelledby="flow-title">
-        <div class="section-heading">
-          <p class="eyebrow">Flow Map</p>
-          <h2 id="flow-title">主流程能力</h2>
-        </div>
+      <details class="panel hero-panel collapsible-panel">
+        <summary class="section-heading collapsible-summary">
+          <span>
+            <span class="eyebrow">Flow Map</span>
+            <span class="summary-title" id="flow-title">主流程能力</span>
+          </span>
+          <span class="summary-state">展开</span>
+        </summary>
         <div class="flow-grid">
           <article class="flow-step active">
             <span>01</span>
@@ -70,17 +73,20 @@
             <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
           </article>
         </div>
-      </section>
+      </details>
 
-      <section class="panel config-panel" aria-labelledby="config-title">
-        <div class="section-heading compact">
-          <p class="eyebrow">Runtime</p>
-          <h2 id="config-title">配置状态</h2>
-        </div>
+      <details class="panel config-panel collapsible-panel">
+        <summary class="section-heading compact collapsible-summary">
+          <span>
+            <span class="eyebrow">Runtime</span>
+            <span class="summary-title" id="config-title">配置状态</span>
+          </span>
+          <span class="summary-state">展开</span>
+        </summary>
         <div class="config-grid" id="config-grid">
           <div class="empty-state">正在读取配置状态</div>
         </div>
-      </section>
+      </details>
 
       <section class="workbench">
         <div class="panel" aria-labelledby="intake-title">
