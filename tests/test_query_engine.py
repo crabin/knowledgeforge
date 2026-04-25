@@ -315,10 +315,10 @@ def test_query_engine_fallback_plan_emits_structured_questions() -> None:
 
     assert any(item == "查询计划：" for item in result.raw_material)
     assert any("Machine Learning 在“基础概念”方面有哪些官方事实与权威说明？" in item for item in result.raw_material)
-    assert any("Google 查询：Machine Learning 基础概念 official documentation standard" in item for item in result.raw_material)
+    assert any("Google 查询：Machine Learning basic concepts official documentation standard" in item for item in result.raw_material)
     assert any("查询内容：" in item and "权威来源" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方定义" in item for item in result.raw_material)
-    assert crawler.queries[0] == ("official", "Machine Learning 基础概念 official documentation standard")
+    assert crawler.queries[0] == ("official", "Machine Learning basic concepts official documentation standard")
 
 
 def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
@@ -343,6 +343,25 @@ def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
     assert all(source.publisher == "query-plan" for source in result.sources)
     assert all(source.reliability == "unknown" for source in result.sources)
     assert any("☐ Q1 [insufficient]" in item for item in result.raw_material)
+
+
+def test_query_engine_fallback_plan_translates_common_chinese_topics() -> None:
+    engine = QueryEngine(chat_client=None, crawler=EmptyCrawler())
+    context = RequestContext(
+        domain="deep learning",
+        subdomains=["基础概念", "核心方法"],
+        time_window="latest",
+        focus_points=[],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    plan = engine.plan(context, round_number=1)
+    queries = [item.query_or_action for item in plan.plan_items]
+
+    assert any("basic concepts" in query for query in queries)
+    assert any("core methods" in query for query in queries)
+    assert not any("基础概念 tutorial" in query for query in queries)
 
 
 def test_query_engine_reflection_supplements_only_insufficient_questions() -> None:

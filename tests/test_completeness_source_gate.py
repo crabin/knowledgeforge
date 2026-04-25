@@ -43,6 +43,16 @@ def _make_engine_result(sources: list[SourceRecord], topics: list[str]) -> Engin
     )
 
 
+def _make_engine_result_with_log(
+    sources: list[SourceRecord],
+    topics: list[str],
+    execution_log: list[dict],
+) -> EngineRunResult:
+    result = _make_engine_result(sources, topics)
+    result.execution_log.extend(execution_log)
+    return result
+
+
 def test_passes_with_high_reliability_source_and_full_coverage() -> None:
     ctx = _make_context()
     output = _make_engine_result(
@@ -77,3 +87,25 @@ def test_supplement_queries_are_domain_specific() -> None:
     result = CompletenessEvaluator().evaluate(ctx, {"QueryEngine": output})
     for query in result.supplement_queries:
         assert "machine learning" in query.lower() or "ml" in query.lower()
+
+
+def test_fails_when_query_plan_has_insufficient_items() -> None:
+    ctx = _make_context()
+    output = _make_engine_result_with_log(
+        sources=[_make_source(reliability="high")],
+        topics=["supervised learning", "unsupervised learning"],
+        execution_log=[
+            {
+                "event": "query_question_completed",
+                "details": {
+                    "status": "insufficient",
+                    "question": "需要补充教程案例",
+                },
+            }
+        ],
+    )
+
+    result = CompletenessEvaluator().evaluate(ctx, {"QueryEngine": output})
+
+    assert result.status == "supplement_required"
+    assert "query_plan_incomplete" in result.failure_categories

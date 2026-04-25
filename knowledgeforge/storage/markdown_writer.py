@@ -304,7 +304,7 @@ class MarkdownKnowledgeWriter:
         body_sections = []
         for agent_name, output in outputs.items():
             bullet_points = "\n".join(f"- {point}" for point in output.key_points)
-            raw_material = "\n".join(f"- {item}" for item in output.raw_material)
+            raw_material = "\n".join(f"- {item}" for item in self._readable_raw_material(agent_name, output.raw_material))
             body_sections.append(
                 "\n".join(
                     [
@@ -410,6 +410,30 @@ class MarkdownKnowledgeWriter:
                 "",
             ]
         )
+
+    @staticmethod
+    def _readable_raw_material(agent_name: str, raw_material: list[str]) -> list[str]:
+        if agent_name != "QueryEngine":
+            return raw_material
+        readable: list[str] = []
+        skipping_query_plan = False
+        skipped_plan_lines = 0
+        for item in raw_material:
+            if item == "查询计划：":
+                skipping_query_plan = True
+                continue
+            if skipping_query_plan:
+                if item.startswith("反思结论："):
+                    readable.append(f"查询计划明细已保存到独立 query 文档，本节省略 {skipped_plan_lines} 行执行清单。")
+                    readable.append(item)
+                    skipping_query_plan = False
+                    continue
+                skipped_plan_lines += 1
+                continue
+            readable.append(item)
+        if skipping_query_plan:
+            readable.append(f"查询计划明细已保存到独立 query 文档，本节省略 {skipped_plan_lines} 行执行清单。")
+        return readable
 
     @staticmethod
     def _render_domain_readme(

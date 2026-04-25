@@ -33,12 +33,21 @@ class CompletenessEvaluator:
         if missing_topics:
             reasons.append("存在未覆盖的核心子主题。")
             failure_categories.append("missing_topics")
+        insufficient_plan_items = self._insufficient_query_plan_items(outputs.get("QueryEngine"))
+        if insufficient_plan_items:
+            reasons.append("QueryEngine 查询计划仍存在未完成项，不能进入最终入库。")
+            failure_categories.append("query_plan_incomplete")
 
         if reasons:
             if missing_topics:
                 supplement_queries = [
                     f"{context.domain} {topic} 官方资料"
                     for topic in missing_topics
+                ]
+            elif insufficient_plan_items:
+                supplement_queries = [
+                    item.get("query", item.get("question", "补充查询"))
+                    for item in insufficient_plan_items[:5]
                 ]
             else:
                 supplement_queries = [
@@ -61,3 +70,21 @@ class CompletenessEvaluator:
             supplement_queries=[],
             failure_categories=[],
         )
+
+    @staticmethod
+    def _insufficient_query_plan_items(output: EngineRunResult | None) -> list[dict]:
+        if output is None:
+            return []
+        items: list[dict] = []
+        for entry in output.execution_log:
+            if entry.get("event") != "query_question_completed":
+                continue
+            details = entry.get("details", {})
+            if details.get("status") == "insufficient":
+                items.append(
+                    {
+                        "question": str(details.get("question", "")).strip(),
+                        "query": str(details.get("query", details.get("question", ""))).strip(),
+                    }
+                )
+        return items

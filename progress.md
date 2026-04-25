@@ -1016,6 +1016,30 @@
 - 当前保守结论：
   - verified 任务结束后，“计划进度”应显示全部完成，不再混入采集过程中的临时不足状态。
 
+### 阶段 40：查询计划不足门禁与主文档可读性修复
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 将 QueryEngine `query_question_completed: insufficient` 纳入完整性评估门禁
+  - 当查询计划存在未完成项时，任务进入 `supplement_required`，不再继续生成 verified 文档
+  - 优化 QueryEngine fallback plan，将常见中文子主题映射为英文检索 topic，减少中英混杂 query 空命中
+  - 主知识文档不再展开完整 QueryEngine 查询计划清单，只保留摘要并引用独立 query plan 文档
+  - 离线 `_NoopQueryCrawler` 改为返回稳定 fixture 命中，避免测试环境因关闭 live crawler 被误判为真实失败
+  - 补充完整性、QueryEngine fallback 和 Writer 可读性回归测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/evaluation/completeness.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_completeness_source_gate.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_query_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_writer_dynamic_status.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_workflow.py tests/test_completeness_source_gate.py tests/test_query_engine.py tests/test_writer_dynamic_status.py -q`：40 passed
+- 当前保守结论：
+  - 后续如果 Q4/Q5 仍为 insufficient，任务会停在补检索状态；不会再产出“看似完成但无有效信息”的 verified 文档。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

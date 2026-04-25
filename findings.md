@@ -163,6 +163,12 @@
 - Flow Map 使用 `WorkflowStepEvent` 比直接推断 `task_status` 更稳定，因为一个任务状态无法表达 planning、collecting、writing、governing 等细粒度前端焦点。
 - 计划进度展示应以最终任务状态为准：`verified` 表示三路计划已经完成执行，不能再让 QueryEngine 过程日志里的 `insufficient` 覆盖最终进度。
 
+## 查询计划不足门禁结论
+- 仅看“有中高可信来源”不够；如果 QueryEngine 的结构化计划项仍有 `insufficient`，说明用户确认的检索目标没有完成，不能进入 verified。
+- `deep learning 基础概念 tutorial guide` 这类中英混杂 query 容易空命中，fallback plan 应把常见中文子主题映射为英文检索 topic，同时保留中文问题标题给用户阅读。
+- 主知识文档不适合展开完整查询执行清单；计划明细应保存在独立 query 文档，主文档只保留可读摘要、证据和后续动作。
+- 测试环境的 no-op crawler 应提供稳定 fixture，而不是空结果；空结果代表真实检索失败，会触发新门禁。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

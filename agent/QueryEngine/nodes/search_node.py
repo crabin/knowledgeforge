@@ -144,41 +144,42 @@ class QuerySearchNode(BaseQueryNode):
     def _fallback_plan(self, state: QueryEngineState) -> SearchPlan:
         context = state.request_context
         subject = state.normalized_domain or context.domain
+        topics = [self._search_topic(topic) for topic in context.subdomains]
         official_queries = [
             f"{subject} {topic} official documentation"
-            for topic in context.subdomains[:3]
+            for topic in topics[:3]
         ]
         tutorial_queries = [
             f"{subject} {topic} tutorial guide"
-            for topic in context.subdomains[:2]
+            for topic in topics[:2]
         ]
         questions = [
             SearchQuestion(
-                question=f"{subject} 在“{topic}”方面有哪些官方事实与权威说明？",
-                google_query=f"{subject} {topic} official documentation standard",
+                question=f"{subject} 在“{display_topic}”方面有哪些官方事实与权威说明？",
+                google_query=f"{subject} {search_topic} official documentation standard",
                 search_targets=["官方定义", "权威来源", "关键能力", "适用边界"],
                 expected_info=["官方定义", "权威说明", "关键能力", "限制或适用范围"],
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["至少命中一个相关官方或权威来源", "结果能支持该子主题的事实描述"],
                 fallback_queries=[
-                    f"{subject} {topic} official guide",
-                    f"{subject} {topic} reference documentation",
+                    f"{subject} {search_topic} official guide",
+                    f"{subject} {search_topic} reference documentation",
                 ],
             )
-            for topic in context.subdomains[:3]
+            for display_topic, search_topic in zip(context.subdomains[:3], topics[:3])
         ]
-        for topic in context.subdomains[:2]:
+        for display_topic, search_topic in zip(context.subdomains[:2], topics[:2]):
             questions.append(
                 SearchQuestion(
-                    question=f"{subject} 在“{topic}”方面有哪些教程、案例或最佳实践可补充官方事实？",
-                    google_query=f"{subject} {topic} tutorial guide best practices",
+                    question=f"{subject} 在“{display_topic}”方面有哪些教程、案例或最佳实践可补充官方事实？",
+                    google_query=f"{subject} {search_topic} tutorial guide best practices",
                     search_targets=["教程示例", "落地步骤", "最佳实践", "注意事项"],
                     expected_info=["教程示例", "落地步骤", "最佳实践", "常见注意事项"],
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["至少命中一个相关教程或技术参考", "结果能补充官方事实的实践语境"],
                     fallback_queries=[
-                        f"{subject} {topic} examples",
-                        f"{subject} {topic} best practices",
+                        f"{subject} {search_topic} examples",
+                        f"{subject} {search_topic} best practices",
                     ],
                 )
             )
@@ -189,6 +190,18 @@ class QuerySearchNode(BaseQueryNode):
             reasoning="未拿到 LLM 规划结果，按官方文档优先和教程补充的默认规则生成。",
             questions=questions,
         )
+
+    @staticmethod
+    def _search_topic(topic: str) -> str:
+        mapping = {
+            "基础概念": "basic concepts",
+            "核心方法": "core methods",
+            "应用场景": "applications",
+            "最新论文方向": "latest papers",
+            "工作流编排": "workflow orchestration",
+            "知识沉淀": "knowledge base construction",
+        }
+        return mapping.get(topic.strip(), topic.strip())
 
     @staticmethod
     def _dedupe_hits(hits):

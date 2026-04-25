@@ -152,3 +152,36 @@ def test_writer_saves_query_plan_document_in_subdomain_directory() -> None:
     assert "Google 查询：Machine Learning latest papers official" in query_content
     assert "query_plan_created" in query_content
     assert str(query_docs[0]) in article_content
+
+
+def test_writer_keeps_query_plan_detail_out_of_main_document() -> None:
+    writer = MarkdownKnowledgeWriter(_make_config())
+    ctx = _make_context()
+    output = EngineRunResult(
+        agent_name="QueryEngine",
+        summary="Query summary.",
+        key_points=["point 1"],
+        raw_material=[
+            "搜索规划：plan",
+            "查询计划：",
+            "- ☐ Q1 [insufficient] noisy detail",
+            "  查询内容：detail",
+            "  满足标准：detail",
+            "反思结论：needs more",
+            "官方文档优先：",
+            "- Official source",
+        ],
+        coverage_topics=["supervised learning"],
+        sources=[_make_source()],
+        collected_at="2026-04-25T00:00:00+09:00",
+        round_number=1,
+    )
+    completeness = CompletenessResult(
+        status="pass", reasons=[], missing_topics=[], supplement_queries=[], failure_categories=[]
+    )
+
+    artifact = writer.write(ctx, {"QueryEngine": output}, completeness, round_number=1)
+    content = Path(artifact.path).read_text(encoding="utf-8")
+
+    assert "查询计划明细已保存到独立 query 文档" in content
+    assert "- ☐ Q1 [insufficient] noisy detail" not in content

@@ -779,10 +779,35 @@ class TaskService:
 
 class _NoopQueryCrawler:
     def search(self, **kwargs):
-        return []
+        from agent.QueryEngine.state.state import SearchHit
+
+        query = str(kwargs.get("query", "offline query"))
+        source_type = str(kwargs.get("source_type", "reference"))
+        return [
+            SearchHit(
+                title=f"Offline reference for {query}",
+                url=f"https://example.com/offline?q={query.replace(' ', '+')}",
+                snippet=f"Offline fixture covering {query}.",
+                source_type=source_type,
+                score=1.0,
+            )
+        ]
 
     def fetch_documents(self, hits, *, max_documents: int = 6):
-        return []
+        from agent.QueryEngine.state.state import CrawledDocument
+
+        return [
+            CrawledDocument(
+                title=hit.title,
+                url=hit.url,
+                snippet=hit.snippet,
+                content=f"{hit.title}. {hit.snippet}",
+                source_type=hit.source_type,
+                publisher=hit.publisher,
+                score=hit.score,
+            )
+            for hit in hits[:max_documents]
+        ]
 
 
 class _NoopMediaCrawler:
