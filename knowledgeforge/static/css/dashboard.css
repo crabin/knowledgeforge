@@ -374,6 +374,11 @@ h3 {
   color: var(--ink);
 }
 
+.task-list-item:focus {
+  outline: 3px solid rgba(47, 95, 145, 0.2);
+  border-color: var(--blue);
+}
+
 .task-list-item strong,
 .task-list-item span,
 .task-list-item small {
@@ -491,6 +496,17 @@ button:disabled {
 .secondary-button {
   background: transparent;
   color: var(--ink);
+}
+
+.danger-button {
+  border-color: var(--red);
+  background: var(--red);
+  color: #fffdf6;
+}
+
+.danger-button:hover {
+  border-color: #8c352d;
+  background: #8c352d;
 }
 
 .button-row,

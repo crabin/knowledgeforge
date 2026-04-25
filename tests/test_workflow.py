@@ -349,6 +349,67 @@ def test_task_list_persists_across_app_recreation(tmp_path: Path) -> None:
     assert created["task_id"] in task_ids
 
 
+def test_task_management_updates_and_deletes_saved_task(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["任务管理"]}).get_json()
+    task_id = created["task_id"]
+
+    updated = client.patch(
+        f"/tasks/{task_id}",
+        json={
+            "request_context": {
+                "domain": "知识工程管理",
+                "subdomains": ["删除", "修改"],
+                "focus_points": ["任务状态"],
+            },
+            "management_note": "人工修正任务范围",
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_payload = updated.get_json()
+    assert updated_payload["request_context"]["domain"] == "知识工程管理"
+    assert updated_payload["request_context"]["subdomains"] == ["删除", "修改"]
+    assert updated_payload["management_metadata"]["note"] == "人工修正任务范围"
+
+    logs = client.get(f"/tasks/{task_id}/logs").get_json()["logs"]
+    assert "task_updated" in [entry["event"] for entry in logs]
+
+    deleted = client.delete(f"/tasks/{task_id}")
+
+    assert deleted.status_code == 200
+    assert deleted.get_json()["deleted"] is True
+    assert client.get(f"/tasks/{task_id}").status_code == 404
+    listed = client.get("/tasks").get_json()
+    assert task_id not in [item["task_id"] for item in listed["tasks"]]
+
+
+def test_running_task_cannot_be_managed(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+    started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["运行中"]}).get_json()
+    task_id = started["task_id"]
+
+    updated = client.patch(f"/tasks/{task_id}", json={"management_note": "不应允许"})
+    deleted = client.delete(f"/tasks/{task_id}")
+
+    assert updated.status_code == 400
+    assert deleted.status_code == 400
+
+
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

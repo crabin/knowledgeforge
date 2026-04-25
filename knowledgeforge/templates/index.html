@@ -131,6 +131,21 @@
               <button type="button" data-task-action="logs">查看日志</button>
             </div>
           </form>
+          <form class="action-form split-form" id="task-manage-form">
+            <label for="task-update-payload">任务修改 JSON</label>
+            <textarea id="task-update-payload" name="payload" rows="6">{
+  "request_context": {
+    "domain": "知识工程",
+    "subdomains": ["工作流编排", "知识沉淀"],
+    "focus_points": ["状态恢复", "来源追溯"]
+  },
+  "management_note": "人工调整任务范围"
+}</textarea>
+            <div class="button-row">
+              <button type="submit">保存修改</button>
+              <button class="danger-button" type="button" id="delete-task">删除任务</button>
+            </div>
+          </form>
         </div>
       </section>
 

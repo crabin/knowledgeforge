@@ -12,6 +12,7 @@ const healthDot = document.querySelector("#health-dot");
 const healthLabel = document.querySelector("#health-label");
 const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
+const taskUpdateInput = document.querySelector("#task-update-payload");
 const queryPlanOutput = document.querySelector("#query-plan-output");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
@@ -321,8 +322,25 @@ function renderTaskList(payload) {
   taskListOutput.querySelectorAll("[data-task-id]").forEach((button) => {
     button.addEventListener("click", () => {
       taskIdInput.value = button.dataset.taskId || "";
+      fillTaskUpdateForm(button.dataset.taskId || "");
     });
   });
+}
+
+function fillTaskUpdateForm(taskId) {
+  if (!taskId || !state.lastPayload) return;
+  const tasks = state.lastPayload.tasks || state.lastPayload.task_list || [];
+  const task = tasks.find((item) => item.task_id === taskId);
+  if (!task) return;
+  taskUpdateInput.value = JSON.stringify({
+    request_context: {
+      domain: task.domain || task.normalized_domain || "",
+      normalized_domain: task.normalized_domain || task.domain || "",
+      subdomains: task.subdomains || [],
+    },
+    task_status: task.task_status || "",
+    management_note: "人工调整任务信息",
+  }, null, 2);
 }
 
 function escapeHtml(value) {
@@ -447,6 +465,47 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       setBusy(button, false);
     }
   });
+});
+
+document.querySelector("#task-manage-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const taskId = taskIdInput.value.trim();
+  setBusy(form, true);
+  try {
+    const payload = JSON.parse(form.elements.payload.value);
+    showPayload(await requestJson(`/tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }));
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(form, false);
+  }
+});
+
+document.querySelector("#delete-task").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const taskId = taskIdInput.value.trim();
+  if (!taskId) {
+    showError(new Error("请先选择或输入 Task ID。"));
+    return;
+  }
+  if (!window.confirm(`确认删除任务 ${taskId}？`)) {
+    return;
+  }
+  setBusy(button, true);
+  try {
+    stopTaskPolling();
+    const deleted = await requestJson(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+    const listed = await requestJson("/tasks");
+    showPayload({ ...deleted, tasks: listed.tasks, count: listed.count });
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(button, false);
+  }
 });
 
 refreshStatus();

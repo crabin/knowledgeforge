@@ -852,10 +852,39 @@
   - 前端启动任务后无需等待 workflow 完成，即可看到查询计划生成、单项开始查询、查询执行和完成状态
   - 同步 `/tasks` 仍保留，现有 API 与回归测试不受异步前端入口影响
 
+### 阶段 33：任务管理修改与删除
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 新增 `PATCH /tasks/<task_id>`，支持修改任务上下文字段、状态和管理备注
+  - 新增 `DELETE /tasks/<task_id>`，支持删除任务状态与冻结版本记录
+  - 运行中的任务禁止修改和删除，避免后台线程写回已删除任务
+  - TaskStateStore 与 FrozenVersionStore 增加 delete 能力
+  - 前端任务操作区新增“任务修改 JSON”“保存修改”“删除任务”
+  - 任务列表项点击后回填 Task ID，并填充可编辑 JSON 草稿
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/state_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/frozen_store.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_workflow.py tests/test_dashboard.py`：23 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：85 个测试通过
+- 当前保守结论：
+  - 任务管理只处理任务元数据与任务记录，不自动删除 `save/` 下已经生成的知识文档
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 32 已完成；前端可实时轮询并展示 QueryEngine 查询计划执行进度 |
+| 我在哪里？ | 阶段 33 已完成实现，等待验证；任务可在前端/API 中修改和删除 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

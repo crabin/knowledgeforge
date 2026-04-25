@@ -108,6 +108,94 @@ class TaskService:
         tasks = sorted(tasks, key=lambda item: item["updated_at"], reverse=True)
         return {"count": len(tasks), "tasks": tasks}
 
+    def update_task(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be updated.")
+
+        request_updates = payload.get("request_context") if isinstance(payload.get("request_context"), dict) else payload
+        request_context = dict(stored.get("request_context") or {})
+        changed: dict[str, Any] = {}
+        allowed_context_fields = {
+            "domain",
+            "normalized_domain",
+            "subdomains",
+            "time_window",
+            "focus_points",
+            "constraints",
+            "initial_strategy",
+            "original_input",
+            "output_language",
+            "search_language",
+            "search_terms",
+            "clarification_summary",
+            "confirmed",
+        }
+        for field in allowed_context_fields:
+            if field not in request_updates:
+                continue
+            value = request_updates[field]
+            if field in {"subdomains", "focus_points", "constraints", "initial_strategy", "search_terms"}:
+                if not isinstance(value, list):
+                    raise ValueError(f"`{field}` must be a list.")
+                value = [str(item).strip() for item in value if str(item).strip()]
+            elif field == "confirmed":
+                value = bool(value)
+            else:
+                value = str(value).strip()
+            if request_context.get(field) != value:
+                request_context[field] = value
+                changed[f"request_context.{field}"] = value
+
+        if "task_status" in payload:
+            status = str(payload["task_status"]).strip()
+            if not status:
+                raise ValueError("`task_status` cannot be empty.")
+            if stored.get("task_status") != status:
+                stored["task_status"] = status
+                changed["task_status"] = status
+
+        metadata = stored.setdefault("management_metadata", {})
+        if "management_note" in payload:
+            note = str(payload["management_note"]).strip()
+            metadata["note"] = note
+            changed["management_metadata.note"] = note
+        if changed:
+            metadata["updated_at"] = now_iso()
+            stored["request_context"] = request_context
+            with self._task_lock:
+                self._tasks[task_id] = stored
+            self._state_store.save(task_id, stored)
+            self._audit_logger.log(task_id, "task_updated", {"changed_fields": sorted(changed.keys())})
+        return self._attach_execution_log(stored)
+
+    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be deleted.")
+        self._audit_logger.log(
+            task_id,
+            "task_deleted",
+            {
+                "status": stored.get("task_status", "unknown"),
+                "domain": (stored.get("request_context") or {}).get("domain", ""),
+            },
+        )
+        with self._task_lock:
+            self._tasks.pop(task_id, None)
+        state_deleted = self._state_store.delete(task_id)
+        frozen_deleted = self._frozen_store.delete(task_id)
+        return {
+            "task_id": task_id,
+            "deleted": True,
+            "state_deleted": state_deleted,
+            "frozen_deleted": frozen_deleted,
+        }
+
     def create_intake_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = str(payload.get("message", payload.get("domain", ""))).strip()
         if not message:
@@ -458,6 +546,10 @@ class TaskService:
     @staticmethod
     def _deserialize_messages(payload: list[dict[str, Any]]) -> list[AgentMessage]:
         return [AgentMessage(**item) for item in payload]
+
+    @staticmethod
+    def _is_running_status(status: object) -> bool:
+        return str(status) in {"running", "resumed"}
 
 
 class _NoopQueryCrawler:

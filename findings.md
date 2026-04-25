@@ -142,6 +142,12 @@
 - 前端创建任务改走 `/tasks/async`，随后轮询 `/tasks/{task_id}/logs` 和 `/tasks/{task_id}`；查询计划卡片可实时显示待查询、查询中、已完成和需补检索。
 - `RequestContext.task_id` 作为本轮最小运行期关联字段，解决 QueryEngine 在并行线程内无法通过外层上下文可靠拿到当前任务 ID 的问题。
 
+## 任务管理功能结论
+- 任务管理仍以本地 task state JSON 为事实源；修改任务只更新 `request_context`、`task_status` 和 `management_metadata`，不重写已生成知识文档。
+- 运行中的异步任务不能修改或删除，否则后台 workflow 可能把已删除状态重新写回，造成 UI 与落盘状态不一致。
+- 删除任务会移除 task state 与 frozen version；知识文档仍按 `save/` 事实存储保留，避免误删领域知识正文。
+- 修改和删除都写入 audit 事件，便于审计是谁在任务生命周期上做过管理操作。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

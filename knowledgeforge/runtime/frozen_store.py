@@ -24,3 +24,10 @@ class FrozenVersionStore:
         if not path.exists():
             return None
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def delete(self, task_id: str) -> bool:
+        path = self._root / f"{task_id}.json"
+        if not path.exists():
+            return False
+        path.unlink()
+        return True
