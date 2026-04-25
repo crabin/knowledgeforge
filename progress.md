@@ -2,6 +2,29 @@
 
 ## 会话：2026-04-24
 
+### 阶段 47：前端流程步骤显示优化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 在实时流程图与 HTML fallback 流程卡片中新增“实时沉淀”步骤，放在并行采集与完整性评估之间
+  - 前端从 `query_realtime_file_reviewed` / `media_realtime_file_reviewed` / failed 事件合成 `realtime_saving` 流程状态
+  - 计划卡片展示实时审查状态和已保存 Markdown 路径，MediaEngine 计划项也能从执行日志中更新命中与保存状态
+  - 响应摘要新增“实时保存”统计，展示已保存文件数和跳过来源数
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `curl -s http://127.0.0.1:5017/ | rg -n "实时沉淀|workflow-x6|dashboard.js|实时流程图"`：页面响应包含新增步骤和脚本
+  - `PYTHONPATH=. pytest tests/test_dashboard.py tests/test_workflow.py -q`：26 passed
+  - `PYTHONPATH=. pytest -q`：105 passed
+- 当前保守结论：
+  - 前端现在能把“实时文件审查保存”从后台日志提升为明确步骤和计划项状态，不再只依赖 JSON 原文排查。
+
 ### 阶段 46：Query / Media 计划项实时文件审查保存
 - **状态：** complete
 - **开始时间：** 2026-04-25

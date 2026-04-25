@@ -25,10 +25,11 @@ const workflowSteps = [
   { id: "planning", order: "01", title: "计划生成", description: "三路 Agent 基于输入上下文先生成执行计划。" },
   { id: "awaiting_confirmation", order: "02", title: "用户确认", description: "展示 Insight、Query、Media 计划，确认后再执行。" },
   { id: "collecting", order: "03", title: "并行采集", description: "三路能力并行补充内部线索、权威事实与媒体视角。" },
-  { id: "evaluating", order: "04", title: "完整性评估", description: "检查核心子主题、可信来源、信息空洞、冲突与时效性。" },
-  { id: "writing", order: "05", title: "Markdown 落盘", description: "按领域、子领域、文章路径保存可追溯知识文档。" },
-  { id: "governing", order: "06", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "versioning", order: "07", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+  { id: "realtime_saving", order: "04", title: "实时沉淀", description: "Query / Media 每个合格计划项立即审查并保存 Markdown 草稿。" },
+  { id: "evaluating", order: "05", title: "完整性评估", description: "检查核心子主题、可信来源、信息空洞、冲突与时效性。" },
+  { id: "writing", order: "06", title: "Markdown 落盘", description: "生成最终综合文档并保留实时保存索引。" },
+  { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "versioning", order: "08", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
 ];
 
 async function requestJson(path, options = {}) {
@@ -126,6 +127,7 @@ function getNested(payload, path) {
 
 function renderSummary(payload) {
   const progress = summarizePlanProgress(payload);
+  const realtime = summarizeRealtimeSaves(payload);
   const items = [
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
@@ -138,6 +140,7 @@ function renderSummary(payload) {
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
     ["错误", payload.error],
     ["计划进度", progress],
+    ["实时保存", realtime],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   if (!items.length) {
@@ -228,7 +231,7 @@ function formatConfigLabel(key) {
 function renderWorkflowMap(payload) {
   const events = normalizeWorkflowEvents(payload);
   const byStep = new Map(events.map((event) => [event.step_id, event]));
-  const current = payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "planning";
+  const current = getCurrentWorkflowStep(payload, events);
   renderWorkflowFallback(byStep, current);
   renderWorkflowX6(byStep, current);
 }
@@ -342,8 +345,8 @@ function getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeig
   if (compact) {
     return { x: startX, y: startY + index * (nodeHeight + rowGap) };
   }
-  const row = index < 4 ? 0 : 1;
-  const column = index < 4 ? index : 6 - index;
+  const row = Math.floor(index / 4);
+  const column = index % 4;
   return {
     x: startX + column * columnGap,
     y: startY + row * (nodeHeight + rowGap),
@@ -410,10 +413,41 @@ function getWorkflowEdgeAttrs(status) {
 
 function normalizeWorkflowEvents(payload) {
   const taskEvents = payload.workflow_events || payload.task?.workflow_events || [];
-  const logEvents = (payload.logs || payload.execution_log || payload.task?.execution_log || [])
+  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const logEvents = logs
     .filter((entry) => entry.event === "workflow_step")
     .map((entry) => entry.details || {});
-  return [...taskEvents, ...logEvents].filter((event) => event.step_id);
+  const syntheticEvents = [];
+  const realtimeLogs = logs.filter((entry) => isRealtimeFileEvent(entry.event));
+  if (realtimeLogs.length) {
+    syntheticEvents.push({
+      step_id: "realtime_saving",
+      label: "实时文件审查与 Markdown 草稿保存",
+      status: realtimeLogs.some((entry) => entry.event.endsWith("_failed")) ? "blocked" : "completed",
+      timestamp: realtimeLogs.at(-1)?.timestamp || realtimeLogs.at(-1)?.details?.event_timestamp || "",
+    });
+  }
+  return [...taskEvents, ...logEvents, ...syntheticEvents].filter((event) => event.step_id);
+}
+
+function getCurrentWorkflowStep(payload, events) {
+  const current = payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "planning";
+  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const latestEvent = logs.at(-1)?.event || "";
+  if (current === "collecting" && isRealtimeFileEvent(latestEvent)) {
+    return "realtime_saving";
+  }
+  return current;
+}
+
+function isRealtimeFileEvent(event) {
+  return [
+    "query_realtime_file_reviewed",
+    "query_realtime_file_failed",
+    "media_realtime_file_reviewed",
+    "media_realtime_file_failed",
+    "realtime_file_reviewed",
+  ].includes(event);
 }
 
 function renderAgentPlans(payload) {
@@ -433,12 +467,15 @@ function renderAgentPlans(payload) {
       const targets = (item.targets || item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
       const criteria = (item.success_criteria || []).map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("");
       const attempts = (item.attempts || []).map((attempt) => `<li>${escapeHtml(attempt.query)}：${escapeHtml(attempt.hits)} 条命中</li>`).join("");
+      const savedPaths = (item.saved_paths || []).map((path) => `<li>${escapeHtml(path)}</li>`).join("");
+      const skippedCount = (item.skipped_sources || []).length;
+      const realtimeStatus = item.realtime_status ? `<span class="realtime-status ${escapeHtml(item.realtime_status)}">${escapeHtml(formatRealtimeStatus(item.realtime_status, skippedCount))}</span>` : "";
       return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
         <div class="plan-card-head">
           <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
           <div>
             <strong>${escapeHtml(item.agent_name)} · ${escapeHtml(item.plan_item_id || "P")}. ${escapeHtml(item.title || item.question)}</strong>
-            <span>${escapeHtml(statusLabel)}</span>
+            <span>${escapeHtml(statusLabel)}${realtimeStatus}</span>
           </div>
         </div>
         <div class="plan-query">${escapeHtml(item.query_or_action || item.google_query || "")}</div>
@@ -447,6 +484,7 @@ function renderAgentPlans(payload) {
           <div><b>满足标准</b><ul>${criteria || "<li>未提供</li>"}</ul></div>
         </div>
         ${attempts ? `<div class="plan-attempts"><b>执行记录</b><ul>${attempts}</ul></div>` : ""}
+        ${savedPaths ? `<div class="plan-saves"><b>实时保存</b><ul>${savedPaths}</ul></div>` : ""}
       </article>`;
     })
     .join("");
@@ -469,10 +507,19 @@ function buildAgentPlanItems(plans, payload) {
   }
   const queryLogs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
   const queryItems = buildQueryPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "QueryEngine" }));
+  const mediaItems = buildMediaPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "MediaEngine" }));
   queryItems.forEach((queryItem) => {
     const index = items.findIndex((item) => item.agent_name === "QueryEngine" && item.plan_item_id === queryItem.plan_item_id);
     if (index >= 0) {
       items[index] = { ...items[index], ...queryItem, title: items[index].title || queryItem.question };
+    }
+  });
+  mediaItems.forEach((mediaItem) => {
+    const index = items.findIndex((item) => item.agent_name === "MediaEngine" && item.plan_item_id === mediaItem.plan_item_id);
+    if (index >= 0) {
+      items[index] = { ...items[index], ...mediaItem, title: items[index].title || mediaItem.title };
+    } else {
+      items.push(mediaItem);
     }
   });
   return items;
@@ -515,8 +562,97 @@ function buildQueryPlanItems(logs) {
         attempts: [...attempts, { query: details.query, hits: details.hits, status: details.status }],
       });
     }
+    if (entry.event === "query_realtime_file_reviewed" || entry.event === "query_realtime_file_failed") {
+      const key = details.plan_item_id || details.question;
+      if (!key) return;
+      const existing = items.get(key) || {};
+      items.set(key, {
+        ...existing,
+        ...details,
+        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
+        realtime_status: entry.event.endsWith("_failed") ? "failed" : details.status || "saved",
+        saved_paths: details.saved_paths || existing.saved_paths || [],
+        skipped_sources: details.skipped_sources || existing.skipped_sources || [],
+      });
+    }
   });
   return Array.from(items.values());
+}
+
+function buildMediaPlanItems(logs) {
+  const items = new Map();
+  logs.forEach((entry) => {
+    const details = entry.details || {};
+    if (entry.event === "media_plan_item_started" || entry.event === "media_search_executed") {
+      const key = details.plan_item_id || mediaPlanItemId(details.platform_type, details.query, items);
+      if (!key) return;
+      const existing = items.get(key) || {};
+      const attempts = existing.attempts || [];
+      items.set(key, {
+        ...existing,
+        plan_item_id: key,
+        title: mediaPlanTitle(details.platform_type),
+        query_or_action: details.query || existing.query_or_action,
+        targets: mediaTargets(details.platform_type),
+        success_criteria: ["命中相关来源", "结果能补充观点或趋势语境"],
+        status: entry.event === "media_search_executed" ? "in_progress" : "in_progress",
+        attempts: entry.event === "media_search_executed"
+          ? [...attempts, { query: details.query, hits: details.hits, status: "completed" }]
+          : attempts,
+      });
+    }
+    if (entry.event === "media_realtime_file_reviewed" || entry.event === "media_realtime_file_failed") {
+      const key = details.plan_item_id || mediaPlanItemId(details.platform_type, details.query, items);
+      if (!key) return;
+      const existing = items.get(key) || {};
+      items.set(key, {
+        ...existing,
+        ...details,
+        plan_item_id: key,
+        title: existing.title || mediaPlanTitle(details.platform_type),
+        query_or_action: existing.query_or_action || details.query,
+        targets: existing.targets || mediaTargets(details.platform_type),
+        success_criteria: existing.success_criteria || ["命中相关来源", "结果能补充观点或趋势语境"],
+        status: details.status === "saved" ? "completed" : existing.status || "in_progress",
+        realtime_status: entry.event.endsWith("_failed") ? "failed" : details.status || "saved",
+        saved_paths: details.saved_paths || existing.saved_paths || [],
+        skipped_sources: details.skipped_sources || existing.skipped_sources || [],
+      });
+    }
+  });
+  return Array.from(items.values());
+}
+
+function mediaPlanItemId(platformType, query, items) {
+  const prefix = { social: "M-S", community: "M-C", blog: "M-B" }[platformType];
+  if (!prefix || !query) return "";
+  const existing = Array.from(items.values()).find((item) => item.query_or_action === query && item.plan_item_id?.startsWith(prefix));
+  if (existing) return existing.plan_item_id;
+  const count = Array.from(items.keys()).filter((key) => key.startsWith(prefix)).length + 1;
+  return `${prefix}${count}`;
+}
+
+function mediaPlanTitle(platformType) {
+  return {
+    social: "社交媒体观点检索",
+    community: "技术社区讨论检索",
+    blog: "博客与长文趋势检索",
+  }[platformType] || "媒体观点检索";
+}
+
+function mediaTargets(platformType) {
+  return {
+    social: ["社交讨论", "实时观点", "采用信号"],
+    community: ["社区共识", "争议点", "实践反馈"],
+    blog: ["趋势分析", "落地案例", "未来方向"],
+  }[platformType] || ["观点与趋势"];
+}
+
+function formatRealtimeStatus(status, skippedCount) {
+  if (status === "saved") return "已实时保存";
+  if (status === "skipped") return skippedCount ? `已审查，跳过 ${skippedCount} 个来源` : "已审查";
+  if (status === "failed") return "保存失败";
+  return status;
 }
 
 function summarizePlanProgress(payload) {
@@ -525,6 +661,15 @@ function summarizePlanProgress(payload) {
   const completed = items.filter((item) => item.status === "completed").length;
   const insufficient = items.filter((item) => item.status === "insufficient").length;
   return `${completed}/${items.length} 完成${insufficient ? `，${insufficient} 个需补检索` : ""}`;
+}
+
+function summarizeRealtimeSaves(payload) {
+  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const reviewed = logs.filter((entry) => entry.event === "query_realtime_file_reviewed" || entry.event === "media_realtime_file_reviewed");
+  if (!reviewed.length) return "";
+  const savedCount = reviewed.reduce((count, entry) => count + ((entry.details?.saved_paths || []).length), 0);
+  const skippedCount = reviewed.reduce((count, entry) => count + ((entry.details?.skipped_sources || []).length), 0);
+  return `${savedCount} 个文件${skippedCount ? `，${skippedCount} 个来源跳过` : ""}`;
 }
 
 function renderExecutionLog(payload) {

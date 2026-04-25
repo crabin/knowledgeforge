@@ -490,28 +490,58 @@ h3 {
   line-height: 1.45;
 }
 
-.plan-attempts {
+.plan-attempts,
+.plan-saves {
   padding-top: 8px;
   border-top: 1px solid rgba(23, 33, 31, 0.1);
 }
 
-.plan-attempts b {
+.plan-attempts b,
+.plan-saves b {
   display: block;
   margin-bottom: 4px;
   color: var(--muted);
   font-size: 0.76rem;
 }
 
-.plan-attempts ul {
+.plan-attempts ul,
+.plan-saves ul {
   margin: 0;
   padding-left: 18px;
 }
 
-.plan-attempts li {
+.plan-attempts li,
+.plan-saves li {
   margin-bottom: 3px;
   color: var(--blue);
   font-size: 0.82rem;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.realtime-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  margin-left: 8px;
+  padding: 0 8px;
+  border: 1px solid rgba(30, 123, 100, 0.24);
+  border-radius: 6px;
+  background: rgba(30, 123, 100, 0.08);
+  color: var(--green);
+  font-size: 0.74rem;
+}
+
+.realtime-status.skipped {
+  border-color: rgba(187, 139, 39, 0.28);
+  background: rgba(187, 139, 39, 0.1);
+  color: var(--gold);
+}
+
+.realtime-status.failed {
+  border-color: rgba(169, 72, 63, 0.3);
+  background: rgba(169, 72, 63, 0.1);
+  color: var(--red);
 }
 
 .task-list-item {
