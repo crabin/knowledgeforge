@@ -59,6 +59,7 @@ class RequestContext:
     search_terms: list[str] = field(default_factory=list)
     clarification_summary: str = ""
     confirmed: bool = False
+    task_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

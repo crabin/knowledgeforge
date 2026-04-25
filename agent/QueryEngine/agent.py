@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agent.QueryEngine.nodes.base_node import QueryEventCallback
 from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
 from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
 from agent.QueryEngine.nodes.search_node import QuerySearchNode
@@ -23,13 +24,24 @@ class QueryEngine(BaseEngine):
         chat_client: OpenAICompatibleChatClient | None = None,
         embedding_client: OpenAICompatibleEmbeddingClient | None = None,
         crawler: DomainKnowledgeCrawler | None = None,
+        event_callback: QueryEventCallback | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._embedding_client = embedding_client
         self._crawler = crawler or DomainKnowledgeCrawler()
-        self._search_node = QuerySearchNode(chat_client=self._chat_client, crawler=self._crawler)
-        self._reflection_node = QueryReflectionNode(chat_client=self._chat_client)
-        self._summary_node = QuerySummaryNode(chat_client=self._chat_client)
+        self._search_node = QuerySearchNode(
+            chat_client=self._chat_client,
+            crawler=self._crawler,
+            event_callback=event_callback,
+        )
+        self._reflection_node = QueryReflectionNode(
+            chat_client=self._chat_client,
+            event_callback=event_callback,
+        )
+        self._summary_node = QuerySummaryNode(
+            chat_client=self._chat_client,
+            event_callback=event_callback,
+        )
         self._formatting_node = QueryFormattingNode()
 
     def run(self, context: RequestContext, round_number: int) -> EngineRunResult:

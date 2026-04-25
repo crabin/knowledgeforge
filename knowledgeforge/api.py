@@ -35,6 +35,15 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": str(exc)}), 400
         return jsonify(result), 201
 
+    @app.post("/tasks/async")
+    def start_task():
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.start_task(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(result), 202
+
     @app.post("/intake/sessions")
     def create_intake_session():
         payload = request.get_json(silent=True) or {}

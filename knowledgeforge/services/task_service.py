@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Lock, Thread
 import uuid
 from dataclasses import asdict, is_dataclass
 from typing import Any
@@ -55,6 +56,7 @@ class TaskService:
                 chat_client=query_chat_client,
                 embedding_client=query_embedding_client,
                 crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
+                event_callback=self._log_realtime_query_event,
             ),
             media_engine=MediaEngine(
                 chat_client=media_chat_client,
@@ -71,6 +73,7 @@ class TaskService:
             ),
         )
         self._tasks: dict[str, WorkflowState] = {}
+        self._task_lock = Lock()
 
     def get_config_status(self) -> dict[str, bool | str]:
         return self._config.show_config_status()
@@ -78,6 +81,22 @@ class TaskService:
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
         return self._run_workflow(request_context, audit_source="api")
+
+    def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_context = self._context_builder.build(payload)
+        initial_state = self._create_initial_state(request_context, audit_source="api_async")
+        task_id = initial_state["task_id"]
+        with self._task_lock:
+            self._tasks[task_id] = initial_state
+        payload_dict = self._serialize_state(initial_state)
+        self._state_store.save(task_id, payload_dict)
+        self._audit_logger.log(
+            task_id,
+            "task_started",
+            {"status": "running", "source": "api_async", "round": initial_state.get("round_number", 1)},
+        )
+        Thread(target=self._run_started_task, args=(initial_state,), daemon=True).start()
+        return self._attach_execution_log(payload_dict)
 
     def list_tasks(self) -> dict[str, Any]:
         tasks = self._state_store.list()
@@ -186,7 +205,13 @@ class TaskService:
         return {"intake_session": stored, "task": task_payload}
 
     def _run_workflow(self, request_context: RequestContext, *, audit_source: str) -> dict[str, Any]:
+        initial_state = self._create_initial_state(request_context, audit_source=audit_source)
+        final_state = self._workflow.run(initial_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def _create_initial_state(self, request_context: RequestContext, *, audit_source: str) -> WorkflowState:
         task_id = uuid.uuid4().hex
+        request_context.task_id = task_id
         initial_state: WorkflowState = {
             "task_id": task_id,
             "request_context": request_context,
@@ -199,7 +224,7 @@ class TaskService:
             ],
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
-            "task_status": "created",
+            "task_status": "running" if audit_source == "api_async" else "created",
         }
         self._audit_logger.log(
             task_id,
@@ -211,8 +236,22 @@ class TaskService:
                 "source": audit_source,
             },
         )
-        final_state = self._workflow.run(initial_state)
-        return self._persist_and_serialize(final_state, "task_completed")
+        return initial_state
+
+    def _run_started_task(self, initial_state: WorkflowState) -> None:
+        task_id = initial_state["task_id"]
+        try:
+            final_state = self._workflow.run(initial_state)
+        except Exception as exc:
+            failed_state = dict(initial_state)
+            failed_state["task_status"] = "failed"
+            with self._task_lock:
+                self._tasks[task_id] = failed_state
+            payload = self._serialize_state(failed_state)
+            self._state_store.save(task_id, payload)
+            self._audit_logger.log(task_id, "task_failed", {"error": str(exc)})
+            return
+        self._persist_and_serialize(final_state, "task_completed")
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         if task_id in self._tasks:
@@ -260,6 +299,7 @@ class TaskService:
             return stored
 
         request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
         previous_status = str(stored.get("task_status", "unknown"))
         messages = self._deserialize_messages(stored.get("messages", []))
         messages.append(
@@ -287,7 +327,8 @@ class TaskService:
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
         task_id = state["task_id"]
-        self._tasks[task_id] = state
+        with self._task_lock:
+            self._tasks[task_id] = state
         payload = self._serialize_state(state)
         self._freeze_version_if_eligible(task_id, payload)
         self._attach_execution_log(payload)
@@ -322,11 +363,20 @@ class TaskService:
     def _log_agent_execution(self, task_id: str, payload: dict[str, Any]) -> None:
         for entry in payload.get("execution_log", []):
             event = str(entry.get("event", "agent_execution_event"))
+            if event.startswith("query_") and event != "query_engine_fallback_result":
+                continue
             details = dict(entry.get("details", {}))
             details["agent"] = entry.get("agent")
             details["node"] = entry.get("node")
             details["event_timestamp"] = entry.get("timestamp")
             self._audit_logger.log(task_id, event, details)
+
+    def _log_realtime_query_event(self, task_id: str, entry: dict[str, Any]) -> None:
+        details = dict(entry.get("details", {}))
+        details["agent"] = "QueryEngine"
+        details["node"] = entry.get("node")
+        details["event_timestamp"] = entry.get("timestamp")
+        self._audit_logger.log(task_id, str(entry.get("event", "query_execution_event")), details)
 
     def _freeze_version_if_eligible(self, task_id: str, payload: dict[str, Any]) -> None:
         post_storage = payload.get("post_storage_result") or {}

@@ -820,10 +820,42 @@
   - 查询计划现在以清单形式构建和展示，每条查询执行完成后会立即记录 completed 或 insufficient
   - 前端不再依赖 raw_material 文本解析，展示效果更适合浏览和排障
 
+### 阶段 32：前端实时展示查询进度
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 新增 `POST /tasks/async`，创建任务后立即返回 `running` 状态和 `task_id`
+  - TaskService 使用后台线程继续执行 workflow，并先保存初始任务状态，保证 `/tasks/<task_id>` 与 `/tasks/<task_id>/logs` 可立即读取
+  - QueryEngine 节点统一通过 `_record_event` 记录执行事件，并在运行中实时写入 audit log
+  - RequestContext 增加 `task_id`，让并行执行中的 QueryEngine 能可靠关联当前任务
+  - 前端直接创建任务改为异步启动，并轮询任务日志和任务状态
+  - QueryEngine 查询计划面板从实时日志重建卡片，展示“待查询 / 查询中 / 已完成 / 需补检索”和每条查询执行记录
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/base_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/nodes/summary_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/api.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_query_engine.py tests/test_workflow.py tests/test_dashboard.py`：27 个测试通过
+- 当前保守结论：
+  - 前端启动任务后无需等待 workflow 完成，即可看到查询计划生成、单项开始查询、查询执行和完成状态
+  - 同步 `/tasks` 仍保留，现有 API 与回归测试不受异步前端入口影响
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 31 已完成；QueryEngine 查询计划已清单化，并能在前端以勾选卡片展示 |
+| 我在哪里？ | 阶段 32 已完成；前端可实时轮询并展示 QueryEngine 查询计划执行进度 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

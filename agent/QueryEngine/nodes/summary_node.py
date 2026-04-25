@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode
+from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from agent.QueryEngine.prompts.prompts import SUMMARY_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.utils.time import now_iso
 
 
 class QuerySummaryNode(BaseQueryNode):
-    def __init__(self, *, chat_client: OpenAICompatibleChatClient | None) -> None:
+    def __init__(
+        self,
+        *,
+        chat_client: OpenAICompatibleChatClient | None,
+        event_callback: QueryEventCallback | None = None,
+    ) -> None:
+        super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
 
     def run(self, state: QueryEngineState, **kwargs) -> QueryEngineState:
@@ -50,24 +55,14 @@ class QuerySummaryNode(BaseQueryNode):
                 system_prompt=SUMMARY_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
-            state.execution_log.append(
-                {
-                    "event": "query_summary_llm_completed",
-                    "timestamp": now_iso(),
-                    "node": "QuerySummaryNode",
-                    "details": {"payload_keys": sorted(state.summary_payload.keys())},
-                }
+            self._record_event(
+                state,
+                "query_summary_llm_completed",
+                {"payload_keys": sorted(state.summary_payload.keys())},
             )
         except Exception:
             state.summary_payload = self._fallback_summary(state)
-            state.execution_log.append(
-                {
-                    "event": "query_summary_fallback_used",
-                    "timestamp": now_iso(),
-                    "node": "QuerySummaryNode",
-                    "details": {"reason": "llm_summary_failed"},
-                }
-            )
+            self._record_event(state, "query_summary_fallback_used", {"reason": "llm_summary_failed"})
         return state
 
     @staticmethod

@@ -136,6 +136,12 @@
 - 前端现在优先从 `execution_log` 重建结构化计划卡片，而不是解析 raw markdown 文本，展示更稳定。
 - Markdown query plan 文件保留 `☑/☐` 勾选符号与查询内容列表，便于人工审阅。
 
+## 前端实时查询进度结论
+- 同步 `/tasks` 接口无法让前端看到 QueryEngine 中间状态；需要新增异步启动接口，先返回 `task_id` 与 `running` 状态，再由后台线程执行 workflow。
+- QueryEngine 节点内统一通过 `_record_event` 写 `execution_log`，并在存在 `task_id` 时立即回调 `TaskService` 写 audit jsonl，避免等任务完成后才看到计划和执行轨迹。
+- 前端创建任务改走 `/tasks/async`，随后轮询 `/tasks/{task_id}/logs` 和 `/tasks/{task_id}`；查询计划卡片可实时显示待查询、查询中、已完成和需补检索。
+- `RequestContext.task_id` 作为本轮最小运行期关联字段，解决 QueryEngine 在并行线程内无法通过外层上下文可靠拿到当前任务 ID 的问题。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

@@ -250,6 +250,11 @@ h3 {
   background: #f1f8f2;
 }
 
+.plan-card.active {
+  border-color: rgba(47, 95, 145, 0.42);
+  background: #f2f6fb;
+}
+
 .plan-card.pending {
   border-color: rgba(187, 139, 39, 0.32);
 }
@@ -275,6 +280,11 @@ h3 {
 
 .plan-card.pending .checkmark {
   border-color: var(--gold);
+}
+
+.plan-card.active .checkmark {
+  border-color: var(--blue);
+  box-shadow: inset 0 0 0 6px rgba(47, 95, 145, 0.16);
 }
 
 .plan-card-head strong,
@@ -319,6 +329,30 @@ h3 {
 
 .plan-lists li {
   margin-bottom: 3px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.plan-attempts {
+  padding-top: 8px;
+  border-top: 1px solid rgba(23, 33, 31, 0.1);
+}
+
+.plan-attempts b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.plan-attempts ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.plan-attempts li {
+  margin-bottom: 3px;
+  color: var(--blue);
   font-size: 0.82rem;
   line-height: 1.45;
 }

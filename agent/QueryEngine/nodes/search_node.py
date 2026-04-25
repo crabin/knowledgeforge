@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode
+from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
@@ -26,7 +26,9 @@ class QuerySearchNode(BaseQueryNode):
         *,
         chat_client: OpenAICompatibleChatClient | None,
         crawler: DomainKnowledgeCrawler,
+        event_callback: QueryEventCallback | None = None,
     ) -> None:
+        super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
         self._crawler = crawler
 
@@ -90,14 +92,7 @@ class QuerySearchNode(BaseQueryNode):
                 system_prompt=SEARCH_PLAN_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
-            state.execution_log.append(
-                {
-                    "event": "query_plan_llm_completed",
-                    "timestamp": now_iso(),
-                    "node": "QuerySearchNode",
-                    "details": {"payload_keys": sorted(payload.keys())},
-                }
-            )
+            self._record_event(state, "query_plan_llm_completed", {"payload_keys": sorted(payload.keys())})
             questions = self._parse_questions(payload.get("questions", []))
             official_queries = [
                 str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
@@ -127,14 +122,7 @@ class QuerySearchNode(BaseQueryNode):
                 questions=questions,
             )
         except Exception:
-            state.execution_log.append(
-                {
-                    "event": "query_plan_fallback_used",
-                    "timestamp": now_iso(),
-                    "node": "QuerySearchNode",
-                    "details": {"reason": "llm_plan_failed"},
-                }
-            )
+            self._record_event(state, "query_plan_fallback_used", {"reason": "llm_plan_failed"})
             return self._fallback_plan(state)
 
     def _fallback_plan(self, state: QueryEngineState) -> SearchPlan:
@@ -216,42 +204,36 @@ class QuerySearchNode(BaseQueryNode):
             tutorial_queries=tutorial_queries,
         )
         self._prepare_plan_questions(plan_questions)
-        state.execution_log.append(
+        self._record_event(
+            state,
+            "query_plan_created",
             {
-                "event": "query_plan_created",
-                "timestamp": now_iso(),
-                "node": "QuerySearchNode",
-                "details": {
-                    "question_count": len(plan_questions),
-                    "questions": [
-                        {
-                            "plan_item_id": question.plan_item_id,
-                            "question": question.question,
-                            "google_query": question.google_query,
-                            "search_targets": question.search_targets,
-                            "expected_info": question.expected_info,
-                            "source_priority": question.source_priority,
-                            "success_criteria": question.success_criteria,
-                            "fallback_queries": question.fallback_queries,
-                            "status": question.status,
-                        }
-                        for question in plan_questions
-                    ],
-                },
-            }
+                "question_count": len(plan_questions),
+                "questions": [
+                    {
+                        "plan_item_id": question.plan_item_id,
+                        "question": question.question,
+                        "google_query": question.google_query,
+                        "search_targets": question.search_targets,
+                        "expected_info": question.expected_info,
+                        "source_priority": question.source_priority,
+                        "success_criteria": question.success_criteria,
+                        "fallback_queries": question.fallback_queries,
+                        "status": question.status,
+                    }
+                    for question in plan_questions
+                ],
+            },
         )
         for question in plan_questions:
             question.status = "in_progress"
             source_type = self._question_source_type(question)
             queries = [question.google_query, *question.fallback_queries]
             question_hits = []
-            state.execution_log.append(
-                {
-                    "event": "query_plan_item_started",
-                    "timestamp": now_iso(),
-                    "node": "QuerySearchNode",
-                    "details": self._question_log_details(question, status=question.status),
-                }
+            self._record_event(
+                state,
+                "query_plan_item_started",
+                self._question_log_details(question, status=question.status),
             )
             for index, query in enumerate(self._dedupe_terms(queries)):
                 if index > 0 and self._question_satisfied(question_hits):
@@ -273,42 +255,36 @@ class QuerySearchNode(BaseQueryNode):
                         "status": "completed" if self._question_satisfied(hits) else "insufficient",
                     }
                 )
-                state.execution_log.append(
+                self._record_event(
+                    state,
+                    "query_search_executed",
                     {
-                        "event": "query_search_executed",
-                        "timestamp": now_iso(),
-                        "node": "QuerySearchNode",
-                        "details": {
-                            "plan_item_id": question.plan_item_id,
-                            "question": question.question,
-                            "query": query,
-                            "search_targets": question.search_targets,
-                            "expected_info": question.expected_info,
-                            "source_type": source_type,
-                            "hits": len(hits),
-                            "status": "completed" if self._question_satisfied(hits) else "insufficient",
-                        },
-                    }
+                        "plan_item_id": question.plan_item_id,
+                        "question": question.question,
+                        "query": query,
+                        "search_targets": question.search_targets,
+                        "expected_info": question.expected_info,
+                        "source_type": source_type,
+                        "hits": len(hits),
+                        "status": "completed" if self._question_satisfied(hits) else "insufficient",
+                    },
                 )
                 question_hits.extend(hits)
                 all_hits.extend(hits)
             question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
             if question.status == "completed":
                 question.completed_at = now_iso()
-            state.execution_log.append(
+            self._record_event(
+                state,
+                "query_question_completed",
                 {
-                    "event": "query_question_completed",
-                    "timestamp": now_iso(),
-                    "node": "QuerySearchNode",
-                    "details": {
-                        "plan_item_id": question.plan_item_id,
-                        "question": question.question,
-                        "search_targets": question.search_targets,
-                        "status": question.status,
-                        "total_hits": len(question_hits),
-                        "completed_at": question.completed_at,
-                    },
-                }
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "search_targets": question.search_targets,
+                    "status": question.status,
+                    "total_hits": len(question_hits),
+                    "completed_at": question.completed_at,
+                },
             )
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
@@ -317,16 +293,13 @@ class QuerySearchNode(BaseQueryNode):
             detect_candidate_official_domains(state.request_context.domain, deduped_hits),
         )
         state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
-        state.execution_log.append(
+        self._record_event(
+            state,
+            "query_documents_fetched",
             {
-                "event": "query_documents_fetched",
-                "timestamp": now_iso(),
-                "node": "QuerySearchNode",
-                "details": {
-                    "hit_count": len(deduped_hits),
-                    "document_count": len(state.crawled_documents),
-                },
-            }
+                "hit_count": len(deduped_hits),
+                "document_count": len(state.crawled_documents),
+            },
         )
         wiki_doc = (
             self._crawler.fetch_wikipedia_supplement(state.normalized_domain or state.request_context.domain)
@@ -343,25 +316,19 @@ class QuerySearchNode(BaseQueryNode):
                 )
                 for doc, vector in zip(state.crawled_documents, vectors):
                     doc.embedding_dimensions = len(vector)
-                state.execution_log.append(
+                self._record_event(
+                    state,
+                    "query_embeddings_completed",
                     {
-                        "event": "query_embeddings_completed",
-                        "timestamp": now_iso(),
-                        "node": "QuerySearchNode",
-                        "details": {
-                            "document_count": len(state.crawled_documents),
-                            "dimensions": state.crawled_documents[0].embedding_dimensions,
-                        },
-                    }
+                        "document_count": len(state.crawled_documents),
+                        "dimensions": state.crawled_documents[0].embedding_dimensions,
+                    },
                 )
             except Exception:
-                state.execution_log.append(
-                    {
-                        "event": "query_embeddings_failed",
-                        "timestamp": now_iso(),
-                        "node": "QuerySearchNode",
-                        "details": {"document_count": len(state.crawled_documents)},
-                    }
+                self._record_event(
+                    state,
+                    "query_embeddings_failed",
+                    {"document_count": len(state.crawled_documents)},
                 )
 
     @staticmethod

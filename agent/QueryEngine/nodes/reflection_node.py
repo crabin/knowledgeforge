@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import json
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode
+from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from agent.QueryEngine.prompts.prompts import REFLECTION_SYSTEM_PROMPT
 from agent.QueryEngine.state.state import QueryEngineState, ReflectionPlan
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.utils.time import now_iso
 
 
 class QueryReflectionNode(BaseQueryNode):
-    def __init__(self, *, chat_client: OpenAICompatibleChatClient | None) -> None:
+    def __init__(
+        self,
+        *,
+        chat_client: OpenAICompatibleChatClient | None,
+        event_callback: QueryEventCallback | None = None,
+    ) -> None:
+        super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
 
     def run(self, state: QueryEngineState, **kwargs) -> QueryEngineState:
@@ -22,18 +27,15 @@ class QueryReflectionNode(BaseQueryNode):
                 state.candidate_official_domains.append(domain)
         if reflection.missing_aspects:
             state.observation_notes.extend(reflection.missing_aspects)
-        state.execution_log.append(
+        self._record_event(
+            state,
+            "query_reflection_completed",
             {
-                "event": "query_reflection_completed",
-                "timestamp": now_iso(),
-                "node": "QueryReflectionNode",
-                "details": {
-                    "missing_aspects": reflection.missing_aspects,
-                    "supplementary_official_queries": reflection.supplementary_official_queries,
-                    "supplementary_tutorial_queries": reflection.supplementary_tutorial_queries,
-                    "reasoning": reflection.reasoning,
-                },
-            }
+                "missing_aspects": reflection.missing_aspects,
+                "supplementary_official_queries": reflection.supplementary_official_queries,
+                "supplementary_tutorial_queries": reflection.supplementary_tutorial_queries,
+                "reasoning": reflection.reasoning,
+            },
         )
         return state
 

@@ -1,5 +1,8 @@
 const state = {
   lastPayload: null,
+  pollTimer: null,
+  pollTaskId: null,
+  pollCount: 0,
 };
 
 const output = document.querySelector("#response-output");
@@ -58,6 +61,18 @@ function showPayload(payload) {
   renderTaskList(payload);
 }
 
+function mergeTaskPayload(payload) {
+  const base = state.lastPayload && (state.lastPayload.task_id === payload.task_id || state.lastPayload.task_id === payload.task?.task_id)
+    ? state.lastPayload
+    : {};
+  return {
+    ...base,
+    ...payload,
+    logs: payload.logs || base.logs,
+    execution_log: payload.execution_log || base.execution_log,
+  };
+}
+
 function showError(error) {
   const payload = {
     error: error.message,
@@ -93,6 +108,7 @@ function getNested(payload, path) {
 }
 
 function renderSummary(payload) {
+  const progress = summarizeQueryProgress(payload);
   const items = [
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
@@ -102,6 +118,7 @@ function renderSummary(payload) {
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
     ["错误", payload.error],
+    ["查询进度", progress],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   if (!items.length) {
@@ -136,7 +153,7 @@ function renderConfig(payload) {
 
 function renderQueryPlan(payload) {
   const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
-  const logs = queryOutput?.execution_log || payload.execution_log || payload.task?.execution_log || [];
+  const logs = queryOutput?.execution_log || payload.logs || payload.execution_log || payload.task?.execution_log || [];
   const planItems = buildQueryPlanItems(logs);
 
   if (!planItems.length) {
@@ -147,10 +164,12 @@ function renderQueryPlan(payload) {
   queryPlanOutput.innerHTML = planItems
     .map((item) => {
       const done = item.status === "completed";
-      const statusLabel = done ? "已完成" : item.status === "in_progress" ? "查询中" : item.status === "insufficient" ? "需补检索" : "待查询";
+      const active = item.status === "in_progress";
+      const statusLabel = done ? "已完成" : active ? "查询中" : item.status === "insufficient" ? "需补检索" : "待查询";
       const targets = (item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
       const criteria = (item.success_criteria || []).map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("");
-      return `<article class="plan-card ${done ? "done" : "pending"}">
+      const attempts = (item.attempts || []).map((attempt) => `<li>${escapeHtml(attempt.query)}：${escapeHtml(attempt.hits)} 条命中</li>`).join("");
+      return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
         <div class="plan-card-head">
           <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
           <div>
@@ -163,6 +182,7 @@ function renderQueryPlan(payload) {
           <div><b>查询内容</b><ul>${targets || "<li>未提供</li>"}</ul></div>
           <div><b>满足标准</b><ul>${criteria || "<li>未提供</li>"}</ul></div>
         </div>
+        ${attempts ? `<div class="plan-attempts"><b>执行记录</b><ul>${attempts}</ul></div>` : ""}
       </article>`;
     })
     .join("");
@@ -192,8 +212,31 @@ function buildQueryPlanItems(logs) {
         plan_item_id: details.plan_item_id || existing.plan_item_id || key,
       });
     }
+    if (entry.event === "query_search_executed") {
+      const key = details.plan_item_id || details.question;
+      if (!key) return;
+      const existing = items.get(key) || {};
+      const attempts = existing.attempts || [];
+      items.set(key, {
+        ...existing,
+        ...details,
+        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
+        status: details.status === "completed" ? "in_progress" : existing.status || "in_progress",
+        attempts: [...attempts, { query: details.query, hits: details.hits, status: details.status }],
+      });
+    }
   });
   return Array.from(items.values());
+}
+
+function summarizeQueryProgress(payload) {
+  const queryOutput = payload.agent_outputs?.QueryEngine || payload.task?.agent_outputs?.QueryEngine;
+  const logs = queryOutput?.execution_log || payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const items = buildQueryPlanItems(logs);
+  if (!items.length) return "";
+  const completed = items.filter((item) => item.status === "completed").length;
+  const insufficient = items.filter((item) => item.status === "insufficient").length;
+  return `${completed}/${items.length} 完成${insufficient ? `，${insufficient} 个需补检索` : ""}`;
 }
 
 function renderExecutionLog(payload) {
@@ -213,6 +256,46 @@ function renderExecutionLog(payload) {
       return `<div class="trace-item"><strong>${escapeHtml(event)}</strong><span>${escapeHtml([timestamp, agent].filter(Boolean).join(" · "))}</span><code>${escapeHtml(details)}</code></div>`;
     })
     .join("");
+}
+
+function isTerminalStatus(status) {
+  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed"].includes(status);
+}
+
+function stopTaskPolling() {
+  if (state.pollTimer) {
+    clearInterval(state.pollTimer);
+  }
+  state.pollTimer = null;
+  state.pollTaskId = null;
+  state.pollCount = 0;
+}
+
+async function refreshRunningTask(taskId) {
+  const logsPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}/logs`);
+  let merged = mergeTaskPayload(logsPayload);
+  state.pollCount += 1;
+  if (state.pollCount % 3 === 0) {
+    const taskPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}`);
+    merged = mergeTaskPayload({ ...taskPayload, logs: logsPayload.logs });
+    if (isTerminalStatus(taskPayload.task_status)) {
+      stopTaskPolling();
+    }
+  }
+  showPayload(merged);
+}
+
+function startTaskPolling(taskId) {
+  stopTaskPolling();
+  state.pollTaskId = taskId;
+  state.pollTimer = setInterval(async () => {
+    try {
+      await refreshRunningTask(taskId);
+    } catch (error) {
+      stopTaskPolling();
+      showError(error);
+    }
+  }, 900);
 }
 
 function renderTaskList(payload) {
@@ -328,12 +411,15 @@ document.querySelector("#direct-task-form").addEventListener("submit", async (ev
   setBusy(form, true);
   try {
     const payload = JSON.parse(form.elements.payload.value);
-    showPayload(await requestJson("/tasks", {
+    const task = await requestJson("/tasks/async", {
       method: "POST",
       body: JSON.stringify(payload),
-    }));
+    });
+    showPayload(task);
+    startTaskPolling(task.task_id);
   } catch (error) {
     showError(error);
+    stopTaskPolling();
   } finally {
     setBusy(form, false);
   }

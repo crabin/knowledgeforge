@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from knowledgeforge.api import create_app
@@ -265,6 +266,44 @@ def test_task_response_and_logs_include_query_execution_trace(tmp_path: Path) ->
     events = [entry["event"] for entry in logs.get_json()["logs"]]
     assert "query_plan_created" in events
     assert "query_search_executed" in events
+
+
+def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["实时进度"]})
+
+    assert response.status_code == 202
+    started = response.get_json()
+    task_id = started["task_id"]
+    assert started["task_status"] == "running"
+
+    immediate_logs = client.get(f"/tasks/{task_id}/logs")
+    assert immediate_logs.status_code == 200
+    immediate_events = [entry["event"] for entry in immediate_logs.get_json()["logs"]]
+    assert "task_started" in immediate_events
+
+    events: list[str] = []
+    final_payload = {}
+    for _ in range(40):
+        logs_payload = client.get(f"/tasks/{task_id}/logs").get_json()
+        events = [entry["event"] for entry in logs_payload["logs"]]
+        final_payload = client.get(f"/tasks/{task_id}").get_json()
+        if "query_plan_created" in events and final_payload.get("task_status") != "running":
+            break
+        time.sleep(0.05)
+
+    assert "query_plan_created" in events
+    assert "query_plan_item_started" in events
+    assert "query_question_completed" in events
+    assert final_payload["task_status"] != "running"
 
 
 def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:
