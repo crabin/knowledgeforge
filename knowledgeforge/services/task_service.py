@@ -500,6 +500,7 @@ class TaskService:
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
         task_id = state["task_id"]
+        self._finalize_successful_plan_statuses(state)
         with self._task_lock:
             self._tasks[task_id] = state
         payload = self._serialize_state(state)
@@ -516,6 +517,15 @@ class TaskService:
             },
         )
         return payload
+
+    @staticmethod
+    def _finalize_successful_plan_statuses(state: WorkflowState) -> None:
+        if state.get("task_status") != "verified":
+            return
+        for plan in state.get("agent_plans", {}).values():
+            plan.status = "approved"
+            for item in plan.plan_items:
+                item.status = "completed"
 
     def _attach_execution_log(self, payload: dict[str, Any]) -> dict[str, Any]:
         execution_log = payload.setdefault("execution_log", [])

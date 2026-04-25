@@ -38,6 +38,11 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert payload["post_storage_result"]["version_record"]["status"] == "verified"
     assert payload["post_storage_result"]["version_record"]["frozen"] is True
     assert payload["post_storage_result"]["version_record"]["report_eligible"] is True
+    assert all(
+        item["status"] == "completed"
+        for plan in payload["agent_plans"].values()
+        for item in plan["plan_items"]
+    )
 
     document_path = Path(payload["document_artifact"]["path"])
     assert document_path.exists()

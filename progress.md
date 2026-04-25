@@ -997,6 +997,25 @@
 - 当前保守结论：
   - 默认异步任务现在必须经过用户确认计划后才会执行采集；旧同步 `/tasks` 仍可完成端到端回归。
 
+### 阶段 39：verified 任务计划进度收口修复
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 修复已 verified 任务前端仍显示部分计划项 `insufficient` 的问题
+  - 后端在任务成功 verified 持久化前，将三路 `agent_plans` 的计划项统一收口为 `completed`
+  - 前端在 successful terminal 状态下优先展示计划项完成态，避免旧执行日志覆盖最终状态
+  - 补充 workflow 回归断言，确认 verified 响应中的三路计划项均为 completed
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_workflow.py::test_task_workflow_writes_markdown tests/test_dashboard.py tests/test_engine_plans.py -q`：6 passed
+- 当前保守结论：
+  - verified 任务结束后，“计划进度”应显示全部完成，不再混入采集过程中的临时不足状态。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

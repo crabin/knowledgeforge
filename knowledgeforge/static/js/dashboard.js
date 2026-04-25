@@ -273,11 +273,19 @@ function renderAgentPlans(payload) {
 
 function buildAgentPlanItems(plans, payload) {
   const items = [];
+  const successful = isSuccessfulTerminalStatus(payload.task_status || payload.task?.task_status);
   Object.entries(plans || {}).forEach(([agentName, plan]) => {
     (plan.plan_items || []).forEach((item) => {
-      items.push({ ...item, agent_name: agentName });
+      items.push({
+        ...item,
+        status: successful ? "completed" : item.status,
+        agent_name: agentName,
+      });
     });
   });
+  if (successful) {
+    return items;
+  }
   const queryLogs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
   const queryItems = buildQueryPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "QueryEngine" }));
   queryItems.forEach((queryItem) => {
@@ -359,6 +367,10 @@ function renderExecutionLog(payload) {
 
 function isTerminalStatus(status) {
   return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed"].includes(status);
+}
+
+function isSuccessfulTerminalStatus(status) {
+  return status === "verified";
 }
 
 function stopTaskPolling() {

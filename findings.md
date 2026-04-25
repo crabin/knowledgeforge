@@ -161,6 +161,7 @@
 - InsightEngine 虽然当前仍是轻量本地上下文实现，也需要显式计划项，才能让三路采集在用户确认阶段保持一致体验。
 - `awaiting_plan_confirmation` 应允许修改或删除任务，但不能 resume；真正后台执行只从 `POST /tasks/{task_id}/plan/confirm` 启动。
 - Flow Map 使用 `WorkflowStepEvent` 比直接推断 `task_status` 更稳定，因为一个任务状态无法表达 planning、collecting、writing、governing 等细粒度前端焦点。
+- 计划进度展示应以最终任务状态为准：`verified` 表示三路计划已经完成执行，不能再让 QueryEngine 过程日志里的 `insufficient` 覆盖最终进度。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
