@@ -179,6 +179,13 @@
 - 三路计划不适合并发压同一个本地 LLM 服务；并发会让某一路排队到 timeout。计划阶段改为顺序调用更符合“先拿到可审查计划”的交互目标，真正执行采集阶段仍保持并行。
 - MediaEngine 计划阶段不能复用 execution client；否则即使全局 planning timeout 已放宽，Media 的归一化和计划仍会被 5 秒执行超时截断。
 
+## 补充模块 index 决策结论
+- 补充检索不应只从完整性评估的规则 query 出发；实时保存的领域 `README.md`、独立 query plan 文档和已保存文章能暴露更具体的结构缺口。
+- LLM 补充决策应位于 Orchestrator / Evaluator 附近，而不是塞进 QueryEngine 内部；QueryEngine 只负责执行“补什么”的事实检索，避免跨 Engine 决策耦合。
+- 补充决策输出需要结构化为缺陷、优先级、query、预期信息、fallback 和成功标准，才能被前端、audit、Markdown 后续动作稳定审计。
+- LLM 不可用时可以退回完整性评估生成的补查 query，但必须标记 `source=fallback_index_analysis`，不能伪装成 LLM index 分析。
+- 第二次完整性评估通过后仍应保留上一轮 `supplement_decision`，否则最终任务只能看到“已通过”，看不到为什么曾经补采、读了哪些 index 文件。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

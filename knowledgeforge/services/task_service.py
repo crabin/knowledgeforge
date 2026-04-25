@@ -12,6 +12,7 @@ from agent.QueryEngine.agent import QueryEngine
 from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.config import AppConfig
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
+from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
 from knowledgeforge.graph.client import Neo4jGraphClient
 from knowledgeforge.graph.neo4j_adapter import Neo4jPathMapper
 from knowledgeforge.intake.clarifier import IntakeClarifier
@@ -73,6 +74,10 @@ class TaskService:
                 crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
             ),
             evaluator=CompletenessEvaluator(),
+            supplement_planner=SupplementDecisionPlanner(
+                save_root=config.save_root,
+                chat_client=planning_chat_client,
+            ),
             writer=MarkdownKnowledgeWriter(config),
             post_storage_pipeline=PostStoragePipeline(
                 extractor=StructuredExtractor(),

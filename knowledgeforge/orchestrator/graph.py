@@ -10,7 +10,8 @@ from agent.InsightEngine.agent import InsightEngine
 from agent.MediaEngine.agent import MediaEngine
 from agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
-from knowledgeforge.models import AgentMessage, WorkflowStepEvent
+from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
+from knowledgeforge.models import AgentMessage, EngineRunResult, SourceRecord, WorkflowStepEvent
 from knowledgeforge.orchestrator.state import WorkflowState
 from knowledgeforge.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
@@ -24,6 +25,7 @@ class KnowledgeGraphWorkflow:
         query_engine: QueryEngine,
         media_engine: MediaEngine,
         evaluator: CompletenessEvaluator,
+        supplement_planner: SupplementDecisionPlanner,
         writer: MarkdownKnowledgeWriter,
         post_storage_pipeline: PostStoragePipeline,
         workflow_event_callback: Callable[[str, WorkflowStepEvent], None] | None = None,
@@ -32,6 +34,7 @@ class KnowledgeGraphWorkflow:
         self._query_engine = query_engine
         self._media_engine = media_engine
         self._evaluator = evaluator
+        self._supplement_planner = supplement_planner
         self._writer = writer
         self._post_storage_pipeline = post_storage_pipeline
         self._workflow_event_callback = workflow_event_callback
@@ -73,6 +76,7 @@ class KnowledgeGraphWorkflow:
         graph = StateGraph(WorkflowState)
         graph.add_node("collect_parallel", self._collect_parallel)
         graph.add_node("evaluate_completeness", self._evaluate_completeness)
+        graph.add_node("query_supplement", self._query_supplement)
         graph.add_node("write_markdown", self._write_markdown)
         graph.add_node("run_post_storage", self._run_post_storage)
         graph.add_node("finish_incomplete", self._finish_incomplete)
@@ -83,9 +87,11 @@ class KnowledgeGraphWorkflow:
             self._route_after_evaluation,
             {
                 "write_markdown": "write_markdown",
+                "query_supplement": "query_supplement",
                 "finish_incomplete": "finish_incomplete",
             },
         )
+        graph.add_edge("query_supplement", "evaluate_completeness")
         graph.add_edge("write_markdown", "run_post_storage")
         graph.add_edge("run_post_storage", END)
         graph.add_edge("finish_incomplete", END)
@@ -130,6 +136,9 @@ class KnowledgeGraphWorkflow:
             state["request_context"],
             state["agent_outputs"],
         )
+        previous_decision = state.get("completeness").supplement_decision if state.get("completeness") else {}
+        if previous_decision and not completeness.supplement_decision:
+            completeness.supplement_decision = previous_decision
         return {
             "completeness": completeness,
             "task_status": completeness.status,
@@ -166,6 +175,66 @@ class KnowledgeGraphWorkflow:
             "task_status": task_status,
             "current_step": "evaluating",
             "current_action": "完整性不足，等待补检索或恢复执行。",
+        }
+
+    def _query_supplement(self, state: WorkflowState) -> dict[str, Any]:
+        next_round = state.get("round_number", 1) + 1
+        self._emit_workflow_event(state, "supplementing", "补充决策与 QueryEngine 定向补采", "active")
+        plan = self._supplement_planner.plan(
+            context=state["request_context"],
+            completeness=state["completeness"],
+            outputs=state["agent_outputs"],
+            round_number=next_round,
+        )
+        if not plan.plan_items:
+            return {
+                "task_status": "supplement_required",
+                "current_step": "supplementing",
+                "current_action": "补充决策未生成可执行 QueryEngine 计划。",
+            }
+
+        supplement_output = self._query_engine.run(
+            state["request_context"],
+            next_round,
+            plan,
+        )
+        outputs = dict(state["agent_outputs"])
+        outputs["QueryEngine"] = self._merge_query_outputs(outputs.get("QueryEngine"), supplement_output)
+        agent_plans = dict(state.get("agent_plans", {}))
+        agent_plans["QueryEngineSupplement"] = plan
+        messages = list(state.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="assistant",
+                content="已根据实时知识 index 生成补充决策，并完成 QueryEngine 定向补采。",
+                metadata={
+                    "timestamp": now_iso(),
+                    "round": next_round,
+                    "supplement_plan_items": len(plan.plan_items),
+                },
+            )
+        )
+        return {
+            "agent_outputs": outputs,
+            "agent_plans": agent_plans,
+            "messages": messages,
+            "round_number": next_round,
+            "task_status": "supplement_collected",
+            "current_step": "supplementing",
+            "current_action": "QueryEngine 定向补采已完成，重新进行完整性评估。",
+            "workflow_events": [
+                *state.get("workflow_events", []),
+                self._make_workflow_event(
+                    "supplementing",
+                    "补充决策与 QueryEngine 定向补采",
+                    "completed",
+                    {
+                        "round": next_round,
+                        "plan_item_count": len(plan.plan_items),
+                        "queries": [item.query_or_action for item in plan.plan_items],
+                    },
+                ),
+            ],
         }
 
     def _run_post_storage(self, state: WorkflowState) -> dict[str, Any]:
@@ -237,4 +306,51 @@ class KnowledgeGraphWorkflow:
     def _route_after_evaluation(state: WorkflowState) -> str:
         if state["completeness"].status == "pass":
             return "write_markdown"
+        if state.get("round_number", 1) < state.get("max_rounds", 1):
+            return "query_supplement"
         return "finish_incomplete"
+
+    @staticmethod
+    def _merge_query_outputs(
+        previous: EngineRunResult | None,
+        supplement: EngineRunResult,
+    ) -> EngineRunResult:
+        if previous is None:
+            return supplement
+        return EngineRunResult(
+            agent_name=supplement.agent_name,
+            summary=supplement.summary,
+            key_points=KnowledgeGraphWorkflow._dedupe_strings([*previous.key_points, *supplement.key_points]),
+            raw_material=[*previous.raw_material, "补充检索结果：", *supplement.raw_material],
+            coverage_topics=KnowledgeGraphWorkflow._dedupe_strings(
+                [*previous.coverage_topics, *supplement.coverage_topics]
+            ),
+            sources=KnowledgeGraphWorkflow._dedupe_sources([*previous.sources, *supplement.sources]),
+            collected_at=supplement.collected_at,
+            round_number=supplement.round_number,
+            execution_log=[*previous.execution_log, *supplement.execution_log],
+        )
+
+    @staticmethod
+    def _dedupe_strings(items: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen = set()
+        for item in items:
+            key = item.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _dedupe_sources(sources: list[SourceRecord]) -> list[SourceRecord]:
+        deduped: list[SourceRecord] = []
+        seen = set()
+        for source in sources:
+            key = source.url.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(source)
+        return deduped

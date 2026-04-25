@@ -20,6 +20,11 @@
   - 已完成：计划阶段取消规则 fallback，任一路 LLM 计划生成失败时进入 `plan_failed` 并记录 logs。
   - 已完成：Flow Map 接入 AntV X6 画布展示实时流程图，保留原卡片作为 X6 未加载时的语义回退。
   - 已完成：MediaEngine 计划阶段改用 planning client，避免误用 5 秒 execution timeout 导致计划失败。
+- 补充模块决策优化
+  - 已完成：完整性不足时读取实时保存的领域 `README.md`、`*-query.md` 和已保存 Markdown 内容作为知识 index 上下文。
+  - 已完成：新增 LLM 补充决策器，分析当前 index 暴露的缺陷、优先级、补查 query、预期信息和成功标准。
+  - 已完成：补充决策只分发给 QueryEngine 执行权威事实补采，执行后合并 QueryEngine 输出并重新评估完整性。
+  - 已完成：补充决策结果进入 `CompletenessResult.supplement_decision`，最终通过后仍可审计读取的 index 路径和决策来源。
 - 质量流水线来源门禁
   - 已完成 `docs/superpowers/plans/2026-04-24-quality-pipeline-optimization.md`：多 provider 搜索、Wikipedia supplement、Bing redirect 解码、领域相关性过滤、source reliability 重判、Completeness / Quality 来源门禁、Writer 动态状态和 ML Weblio 回归测试。
 - Browser 抓取稳定性

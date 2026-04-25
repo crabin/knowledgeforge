@@ -1123,6 +1123,28 @@
 - 当前保守结论：
   - MediaEngine 计划失败不应再由 5 秒 execution timeout 触发；如果 LLM 在 `PLAN_LLM_TIMEOUT` 内仍失败，仍按 LLM-only 规则进入 `plan_failed`。
 
+### 阶段 45：基于实时知识 index 的补充决策优化
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 新增 `SupplementDecisionPlanner`，读取 `save/{领域}/README.md`、`*-query.md` 和领域下已保存 Markdown 内容作为实时知识 index 上下文
+  - 在完整性不足时调用 LLM 分析缺陷，生成 QueryEngine 专用补检索计划；LLM 不可用时回退到基于完整性结果的规则决策
+  - 将 LangGraph 的不完整分支改为“补充决策 -> QueryEngine 定向补采 -> 重新完整性评估”，并保留最大轮次保护
+  - 将补充决策写入 `CompletenessResult.supplement_decision`，通过后仍保留决策审计信息
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/evaluation/supplement_decision.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/models.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_supplement_decision.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+- 验证结果：
+  - `uv run pytest tests/test_supplement_decision.py tests/test_completeness_source_gate.py tests/test_engine_plans.py`：12 passed
+- 当前保守结论：
+  - 补充模块现在不再只依赖静态规则 query；它会优先读取实时保存的领域 index，并把 LLM 判断出的缺陷分发给 QueryEngine 做权威事实补采。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25
