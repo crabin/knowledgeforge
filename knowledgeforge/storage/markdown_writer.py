@@ -51,11 +51,197 @@ class MarkdownKnowledgeWriter:
 
         document_body = self._render_document(artifact, context, outputs, completeness, round_number)
         domain_readme = self._render_domain_readme(context, outputs)
+        query_plan_path = self._write_query_plan_document(
+            context=context,
+            query_output=outputs.get("QueryEngine"),
+            subdomain=subdomain,
+            subdomain_dir=subdomain_dir,
+            round_number=round_number,
+        )
+        if query_plan_path:
+            document_body = document_body.replace(
+                "## 后续动作\n\n",
+                f"## 后续动作\n\n- QueryEngine 查询计划已保存：{query_plan_path}\n",
+                1,
+            )
 
         ensure_directory(domain_dir)
         (domain_dir / "README.md").write_text(domain_readme, encoding="utf-8")
         document_path.write_text(document_body, encoding="utf-8")
         return artifact
+
+    def _write_query_plan_document(
+        self,
+        *,
+        context: RequestContext,
+        query_output: EngineRunResult | None,
+        subdomain: str,
+        subdomain_dir: Path,
+        round_number: int,
+    ) -> str | None:
+        if query_output is None:
+            return None
+        query_plan_lines = self._extract_query_plan_lines(query_output.raw_material)
+        execution_events = [
+            entry
+            for entry in query_output.execution_log
+            if str(entry.get("event", "")).startswith("query_")
+        ]
+        if not query_plan_lines and not execution_events:
+            return None
+
+        timestamp = now_iso()
+        document_id = f"query-plan-{uuid.uuid4().hex[:12]}"
+        title = f"{context.domain} QueryEngine 查询计划"
+        filename = f"{today_compact()}-{slugify_filename(title, document_id)}-query.md"
+        document_path = subdomain_dir / filename
+        relative_path = document_path.as_posix()
+        front_matter = {
+            "id": document_id,
+            "title": title,
+            "domain": context.domain,
+            "subdomain": subdomain,
+            "doc_type": "note",
+            "source_type": "query",
+            "agent": "QueryEngine",
+            "round": round_number,
+            "status": "draft",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "version": "v1",
+            "path": relative_path,
+            "tags": [*context.focus_points, "query-plan"],
+            "sources": [
+                {
+                    "title": "QueryEngine execution log",
+                    "url": "local://query-engine/execution-log",
+                    "publisher": "KnowledgeForge",
+                    "retrieved_at": timestamp,
+                    "reliability": "unknown",
+                }
+            ],
+        }
+        body = self._render_query_plan_document(
+            front_matter=front_matter,
+            title=title,
+            context=context,
+            query_plan_lines=query_plan_lines,
+            execution_events=execution_events,
+            timestamp=timestamp,
+        )
+        document_path.write_text(body, encoding="utf-8")
+        return relative_path
+
+    @staticmethod
+    def _extract_query_plan_lines(raw_material: list[str]) -> list[str]:
+        if "查询计划：" not in raw_material:
+            return []
+        start = raw_material.index("查询计划：") + 1
+        lines: list[str] = []
+        for item in raw_material[start:]:
+            if item in {"反思结论：", "官方文档优先：", "教程/补充资料："} or item.startswith("反思结论："):
+                break
+            if item.startswith("- Q") or item.startswith("  "):
+                lines.append(item)
+        return lines
+
+    @staticmethod
+    def _render_query_plan_document(
+        *,
+        front_matter: dict,
+        title: str,
+        context: RequestContext,
+        query_plan_lines: list[str],
+        execution_events: list[dict],
+        timestamp: str,
+    ) -> str:
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        event_rows = []
+        for index, entry in enumerate(execution_events, start=1):
+            details = entry.get("details", {})
+            event_rows.append(
+                "| E{index} | {event} | {node} | {query} | {status} |".format(
+                    index=index,
+                    event=entry.get("event", ""),
+                    node=entry.get("node", ""),
+                    query=str(details.get("query", details.get("question", ""))).replace("|", "\\|"),
+                    status=details.get("status", ""),
+                )
+            )
+        return "\n".join(
+            [
+                "---",
+                front_matter_text,
+                "---",
+                "",
+                f"# {title}",
+                "",
+                "## 摘要",
+                "",
+                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 QueryEngine 执行前生成的查询计划、预期信息和执行状态。",
+                "它用于审计查询决策，不等同于已验证知识结论。",
+                "",
+                "## 关键结论",
+                "",
+                "- QueryEngine 已在检索前生成结构化查询计划。",
+                "- 每个查询问题保留 Google 风格查询语句、预期信息、满足标准和补查查询。",
+                "- 执行事件可用于判断哪些问题已满足、哪些仍需补检索。",
+                "",
+                "## 背景与上下文",
+                "",
+                f"领域：{context.domain}",
+                f"子领域：{', '.join(context.subdomains)}",
+                f"时间范围：{context.time_window}",
+                f"生成时间：{timestamp}",
+                "",
+                "## 正文",
+                "",
+                "### 查询计划",
+                "",
+                *(query_plan_lines or ["- 暂无结构化查询计划。"]),
+                "",
+                "### 执行事件",
+                "",
+                "| 编号 | 事件 | 节点 | 查询或问题 | 状态 |",
+                "|---|---|---|---|---|",
+                *(event_rows or ["| E1 | none | QueryEngine | 暂无执行事件 | unknown |"]),
+                "",
+                "## 证据与来源",
+                "",
+                "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                "|---|---|---|---|---|",
+                "| S1 | QueryEngine execution log | 查询计划与执行事件 | unknown | 本地执行日志 |",
+                "",
+                "## 实体与关系候选",
+                "",
+                "### 实体候选",
+                "",
+                "| 实体 | 类型 | 描述 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | Domain | 目标领域 | S1 |",
+                "",
+                "### 关系候选",
+                "",
+                "| 主体 | 关系 | 客体 | 来源 |",
+                "|---|---|---|---|",
+                f"| QueryEngine | planned_query_for | {context.domain} | S1 |",
+                "",
+                "## 冲突与不确定性",
+                "",
+                "- 查询计划只代表检索决策，不能替代已验证事实。",
+                "",
+                "## 后续动作",
+                "",
+                "- 对 status=insufficient 的查询问题执行补检索或人工复核。",
+                "",
+                "## 变更记录",
+                "",
+                "| 版本 | 时间 | 变更说明 |",
+                "|---|---|---|",
+                f"| v1 | {timestamp[:10]} | 初始创建 |",
+                "",
+            ]
+        )
 
     def _render_document(
         self,

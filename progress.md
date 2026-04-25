@@ -764,10 +764,35 @@
   - 已保存任务可通过 `GET /tasks` 查看摘要列表
   - 前端可查看任务列表，并从列表项回填 Task ID 继续操作
 
+### 阶段 30：QueryEngine 查询计划文件落盘
+- **状态：** complete
+- **开始时间：** 2026-04-25
+- 执行的操作：
+  - 确认原 Writer 只写综述文档和领域 README，未保存 QueryEngine 中间查询计划文件
+  - 在 Markdown Writer 中新增 QueryEngine 查询计划文档生成逻辑
+  - 查询计划文档保存到 `save/{领域}/{子领域}/`，使用 `doc_type=note`、`source_type=query`
+  - 查询计划文档包含 YAML front matter、摘要、关键结论、背景、查询计划、执行事件、证据与来源、实体关系候选、不确定性、后续动作和变更记录
+  - 主综述文档的“后续动作”引用查询计划文件路径
+  - 实际生成验证 `save/Machine Learning/最新论文方向/20260425-machine-learning-queryengine-query.md`
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_writer_dynamic_status.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/task_plan.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 本地生成但不纳入 git 的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/save/Machine Learning/最新论文方向/20260425-machine-learning-queryengine-query.md
+- 验证结果：
+  - `uv run pytest tests/test_writer_dynamic_status.py tests/test_workflow.py`：22 个测试通过
+  - `uv run pytest tests/ -q --ignore=tests/test_agent_browser_live.py`：82 个测试通过
+- 当前保守结论：
+  - 后续 Machine Learning / 最新论文方向任务会在对应 save 子目录下生成查询计划 Markdown 文件
+  - `save/` 被 `.gitignore` 忽略，因此生成的知识文档保留在本地，不随代码提交
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|
-| 我在哪里？ | 阶段 29 已完成；任务列表已可从落盘状态恢复并在前端查看 |
+| 我在哪里？ | 阶段 30 已完成；QueryEngine 查询计划已能保存为同一子领域目录下的 Markdown 文件 |
 | 我要去哪里？ | 继续收敛真实联网抓取稳定性、query planning 超时治理、官方来源验证和 Media 观点源质量 |
 | 目标是什么？ | 在不改写阶段 1-8 基线的前提下，进一步提升真实查询成功率，并保证弱来源不能进入冻结或报告流程 |
 | 我学到了什么？ | 见 findings.md |

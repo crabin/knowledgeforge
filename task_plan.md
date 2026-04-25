@@ -32,6 +32,9 @@
 - 任务列表保存与查看
   - 已完成：基于已落盘的 task state JSON 生成持久化任务列表，新增 `GET /tasks`。
   - 已完成：前端新增“查看任务列表”和任务列表面板，点击列表项可回填 Task ID。
+- QueryEngine 查询计划文件落盘
+  - 已完成：Markdown Writer 会将 QueryEngine 查询计划保存为同一子领域目录下的 `*-query.md` 文档，并在综述文档后续动作中引用。
+  - 已验证：`save/Machine Learning/最新论文方向/20260425-machine-learning-queryengine-query.md` 已生成；`save/` 目录按仓库规则被 git ignore。
 - 技术领域社区优先策略
   - 技术领域默认采用中外技术社区混合来源，优先 `X / Reddit / Hacker News / GitHub Discussions / 技术博客`，同时补 `V2EX / 掘金 / 知乎`。
 - crawler 质量增强

@@ -124,6 +124,12 @@
 - `GET /tasks` 返回 `count` 与任务摘要数组，摘要包含 task_id、状态、领域、子领域、轮次、文档路径、版本、研报资格和更新时间。
 - 前端任务列表面板只展示摘要并支持点击回填 Task ID，避免把完整任务 JSON 塞进列表导致页面过重。
 
+## QueryEngine 查询计划文件落盘结论
+- 用户期望在 `save/{领域}/{子领域}` 目录下看到查询计划，因此仅存于 API / 前端 / audit log 不够；查询计划属于 Agent 中间产物文档，应按知识文档规范保存。
+- Markdown Writer 现在会为 QueryEngine 的 `查询计划：` raw material 与 `execution_log` 生成独立 `doc_type=note`、`source_type=query` 文档，文件名后缀为 `-query.md`。
+- 综述文档的“后续动作”会引用查询计划文件路径，方便从主文档追溯到查询决策。
+- `save/` 目录在 `.gitignore` 中被忽略，本地已生成的领域文档不会进入 git 提交。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
