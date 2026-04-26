@@ -17,6 +17,8 @@ const taskIdInput = document.querySelector("#task-id");
 const taskUpdateInput = document.querySelector("#task-update-payload");
 const agentPlanOutput = document.querySelector("#agent-plan-output");
 const planPanelHint = document.querySelector("#plan-panel-hint");
+const tokenUsageOutput = document.querySelector("#token-usage-output");
+const tokenPanelHint = document.querySelector("#token-panel-hint");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
@@ -75,6 +77,7 @@ function showPayload(payload) {
   renderSummary(payload);
   renderWorkflowMap(payload);
   renderAgentPlans(payload);
+  renderTokenUsage(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
 }
@@ -88,6 +91,7 @@ function mergeTaskPayload(payload) {
     ...payload,
     logs: payload.logs || base.logs,
     execution_log: payload.execution_log || base.execution_log,
+    token_usage: payload.token_usage || base.token_usage,
   };
 }
 
@@ -101,6 +105,7 @@ function showError(error) {
   renderSummary(payload);
   renderWorkflowMap(payload);
   renderAgentPlans(payload);
+  renderTokenUsage(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
 }
@@ -143,6 +148,7 @@ function renderSummary(payload) {
     ["错误", payload.error],
     ["计划进度", progress],
     ["实时保存", realtime],
+    ["Token", summarizeTokenUsageLabel(payload)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   if (!items.length) {
@@ -829,6 +835,72 @@ function summarizeRealtimeSaves(payload) {
   const savedCount = reviewed.reduce((count, entry) => count + ((entry.details?.saved_paths || []).length), 0);
   const skippedCount = reviewed.reduce((count, entry) => count + ((entry.details?.skipped_sources || []).length), 0);
   return `${savedCount} 个文件${skippedCount ? `，${skippedCount} 个来源跳过` : ""}`;
+}
+
+function summarizeTokenUsageLabel(payload) {
+  const usage = payload.token_usage || payload.task?.token_usage;
+  if (!usage || !usage.request_count) return "";
+  return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
+}
+
+function renderTokenUsage(payload) {
+  if (!tokenUsageOutput) return;
+  const usage = payload.token_usage || payload.task?.token_usage || {};
+  if (!usage.request_count) {
+    tokenUsageOutput.innerHTML = '<div class="empty-state">暂无 token 记录。</div>';
+    if (tokenPanelHint) tokenPanelHint.textContent = "";
+    return;
+  }
+
+  if (tokenPanelHint) {
+    tokenPanelHint.textContent = usage.failed_count ? `${usage.failed_count} 次调用未返回用量` : "实时记录中";
+  }
+
+  const kindRows = Object.entries(usage.by_kind || {})
+    .map(([kind, item]) => {
+      return `<div class="token-kind-row">
+        <span>${escapeHtml(formatTokenKind(kind))}</span>
+        <strong>${escapeHtml(formatNumber(item.total_tokens))}</strong>
+        <small>${escapeHtml(formatNumber(item.request_count))} 次</small>
+      </div>`;
+    })
+    .join("");
+  const recentRows = (usage.recent || [])
+    .slice(-6)
+    .reverse()
+    .map((item) => {
+      const status = item.status === "failed" ? "failed" : "ok";
+      return `<div class="token-call ${status}">
+        <div>
+          <strong>${escapeHtml(item.operation || item.kind || "model_call")}</strong>
+          <span>${escapeHtml([item.model, item.timestamp].filter(Boolean).join(" · "))}</span>
+        </div>
+        <code>${escapeHtml(formatNumber(item.prompt_tokens))} in / ${escapeHtml(formatNumber(item.completion_tokens))} out / ${escapeHtml(formatNumber(item.total_tokens))} total</code>
+      </div>`;
+    })
+    .join("");
+
+  tokenUsageOutput.innerHTML = `
+    <div class="token-metrics">
+      <div class="token-metric"><span>发送</span><strong>${escapeHtml(formatNumber(usage.prompt_tokens))}</strong></div>
+      <div class="token-metric"><span>接收</span><strong>${escapeHtml(formatNumber(usage.completion_tokens))}</strong></div>
+      <div class="token-metric"><span>总计</span><strong>${escapeHtml(formatNumber(usage.total_tokens))}</strong></div>
+      <div class="token-metric"><span>调用</span><strong>${escapeHtml(formatNumber(usage.request_count))}</strong></div>
+    </div>
+    <div class="token-kind-list">${kindRows || '<div class="empty-state">暂无分类汇总。</div>'}</div>
+    <div class="token-call-list">${recentRows || '<div class="empty-state">暂无调用明细。</div>'}</div>`;
+}
+
+function formatTokenKind(kind) {
+  return {
+    chat: "Chat",
+    embedding: "Embedding",
+  }[kind] || kind;
+}
+
+function formatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString("en-US") : "0";
 }
 
 function renderExecutionLog(payload) {

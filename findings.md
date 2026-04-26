@@ -207,6 +207,13 @@
 - 计划文档不是只读快照；用户在等待确认阶段 PATCH 或 DELETE 计划项后，task state 与对应 `*-plan.md` 必须同步更新，否则页面和后端文件会出现两个事实源。
 - 计划文档同步失败应写入 `plan_document_sync_failed` 审计事件，便于区分“状态更新成功但文件写入失败”和“接口整体失败”。
 
+## Token 记录与实时展示结论
+- Token 记录应接在 OpenAI-compatible client 封装层，而不是散落到 Engine / Node 内部；这样 planning、execution、intake 和 embedding 调用可以统一审计。
+- 当前任务或 intake session 需要通过运行期上下文传给 LLM client，否则并行线程和后台任务很难把一次模型调用稳定归属到正确任务。
+- Token 使用记录适合写入 audit jsonl，并由 `/tasks/{task_id}/logs` 汇总返回；前端已有实时轮询，不需要新增第二套推送机制。
+- Provider 未返回 usage 或调用失败时仍要记录一次调用事件，`source=unavailable`、`status=failed`，避免“没有用量数据”被误读成“没有调用”。
+- 前端 token 面板应该同时显示发送、接收、总量、调用次数、按 chat/embedding 分类和最近调用明细，才能支撑排障与成本观察。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

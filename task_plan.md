@@ -276,3 +276,4 @@
 - 任务管理功能需额外满足“可查看、修改和删除已保存任务；运行中任务拒绝改删；管理操作写入 audit；删除任务不误删 `save/` 下的知识文档正文”。
 - 单引擎真实联调日志需额外满足“记录每次 LLM / Embedding / browser / httpx 调用的 endpoint、耗时、状态或失败原因，并按时间保存到 `logs/`”。
 - Intake 收口阶段需额外满足“创建与追加都返回完整 intake session、confirm 返回 `{ intake_session, task }`、非知识采集 intent 不允许直接启动任务”。
+- Token 记录模块需额外满足“每次 tracked LLM / Embedding 调用写入可归属 task/session 的 token 使用审计，任务日志接口返回实时汇总，前端展示发送、接收、总量和最近调用明细”。

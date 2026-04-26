@@ -183,6 +183,15 @@
             <div class="empty-state">任务启动后会显示三路计划，确认后实时更新执行状态。</div>
           </div>
         </section>
+        <section class="token-panel trace-panel" aria-labelledby="token-panel-title">
+          <div class="plan-panel-head">
+            <h3 id="token-panel-title">Token 实时消耗</h3>
+            <span class="plan-panel-hint" id="token-panel-hint"></span>
+          </div>
+          <div id="token-usage-output" class="token-usage-grid">
+            <div class="empty-state">模型调用开始后会显示发送、接收和总 token。</div>
+          </div>
+        </section>
         <div class="trace-grid" aria-label="执行日志与任务列表">
           <section class="trace-panel">
             <h3>调用与执行日志</h3>

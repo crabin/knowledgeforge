@@ -1297,6 +1297,34 @@
 - 当前保守结论：
   - 首页实时流程图已由 X6 负责主展示，状态仍来自现有 workflow events，不改变后端执行链路。
 
+### 阶段 48：Token 记录模块与前端实时展示
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 新增 `knowledgeforge/runtime/token_usage.py`，提供任务上下文、token 使用记录、provider usage 归一化与审计汇总
+  - 在 OpenAI-compatible Chat / Embedding 客户端接入 token usage 回调，成功和失败调用都会生成结构化记录
+  - `TaskService` 为 planning、execution、intake clarify 和 query embeddings 注入 token 回调，并在任务/会话执行上下文内记录到 audit jsonl
+  - `/tasks/{task_id}` 与 `/tasks/{task_id}/logs` 返回 `token_usage` 汇总，前端复用现有轮询实时刷新
+  - 首页增加“Token 实时消耗”面板，展示发送、接收、总 token、调用次数、chat/embedding 分类和最近调用明细
+  - 增加 token 汇总与 dashboard 页面回归测试
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/token_usage.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/llms/openai_compatible.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_token_usage.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_token_usage.py tests/test_dashboard.py -q`：4 passed
+  - `python -m compileall knowledgeforge`：通过
+  - `uv run pytest tests/test_workflow.py tests/test_engine_plans.py tests/test_query_engine.py tests/test_media_engine.py -q`：47 passed
+- 当前保守结论：
+  - 模型与 embedding 调用现在会按任务写入 token 审计记录；前端在任务轮询期间可实时看到 token 总量和最近调用明细。若上游 provider 不返回 usage，系统会保留调用记录但 token 数为 0，并标记用量来源不可用。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

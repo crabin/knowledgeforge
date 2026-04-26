@@ -40,6 +40,11 @@ from knowledgeforge.runtime.audit import AuditLogger
 from knowledgeforge.runtime.frozen_store import FrozenVersionStore
 from knowledgeforge.runtime.intake_session_store import IntakeSessionStore
 from knowledgeforge.runtime.state_store import TaskStateStore
+from knowledgeforge.runtime.token_usage import (
+    TokenUsageRecord,
+    summarize_token_usage,
+    token_tracking_context,
+)
 from knowledgeforge.reporting.report_service import ReportService
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
 from knowledgeforge.storage.realtime_reviewer import (
@@ -62,10 +67,32 @@ class TaskService:
         self._report_service = ReportService()
         self._realtime_file_reviewer = RealtimeFileReviewer(config)
         self._writer = MarkdownKnowledgeWriter(config)
-        planning_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.plan_llm_timeout)
-        execution_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.execution_llm_timeout)
-        query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
-        self._intake_clarifier = IntakeClarifier(OpenAICompatibleChatClient(config.openai, timeout=1.0))
+        planning_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.plan_llm_timeout,
+            operation="planning.chat_json",
+            token_usage_callback=self._record_token_usage,
+        )
+        execution_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.execution_llm_timeout,
+            operation="execution.chat_json",
+            token_usage_callback=self._record_token_usage,
+        )
+        query_embedding_client = OpenAICompatibleEmbeddingClient(
+            config.openai,
+            timeout=2.0,
+            operation="query.embeddings",
+            token_usage_callback=self._record_token_usage,
+        )
+        self._intake_clarifier = IntakeClarifier(
+            OpenAICompatibleChatClient(
+                config.openai,
+                timeout=1.0,
+                operation="intake.clarify",
+                token_usage_callback=self._record_token_usage,
+            )
+        )
         graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
             insight_engine=InsightEngine(chat_client=planning_chat_client),
@@ -108,11 +135,13 @@ class TaskService:
         request_context = self._context_builder.build(payload)
         initial_state = self._create_initial_state(request_context, audit_source="api")
         try:
-            planned_state = self._workflow.generate_plans(initial_state)
+            with token_tracking_context(initial_state["task_id"]):
+                planned_state = self._workflow.generate_plans(initial_state)
         except Exception as exc:
             return self._persist_plan_failed(initial_state, exc)
         approved_state = self._approve_plans_in_state(planned_state)
-        final_state = self._workflow.run(approved_state)
+        with token_tracking_context(initial_state["task_id"]):
+            final_state = self._workflow.run(approved_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -122,7 +151,8 @@ class TaskService:
     def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
         try:
-            planned_state = self._workflow.generate_plans(initial_state)
+            with token_tracking_context(initial_state["task_id"]):
+                planned_state = self._workflow.generate_plans(initial_state)
         except Exception as exc:
             return self._persist_plan_failed(initial_state, exc)
         task_id = initial_state["task_id"]
@@ -135,7 +165,7 @@ class TaskService:
             "agent_plans_created",
             {"status": "awaiting_plan_confirmation", "source": "api_async", "round": planned_state.get("round_number", 1)},
         )
-        return self._attach_execution_log(payload_dict)
+        return self._attach_runtime_observability(payload_dict)
 
     def _persist_plan_failed(self, state: WorkflowState, exc: Exception) -> dict[str, Any]:
         task_id = state["task_id"]
@@ -161,7 +191,7 @@ class TaskService:
             {"status": "plan_failed", "error": message},
         )
         self._audit_logger.log(task_id, "workflow_step", event.to_dict())
-        return self._attach_execution_log(payload_dict)
+        return self._attach_runtime_observability(payload_dict)
 
     def get_task_plan(self, task_id: str) -> dict[str, Any] | None:
         task = self.get_task(task_id)
@@ -270,7 +300,7 @@ class TaskService:
         self._state_store.save(task_id, payload_dict)
         self._audit_logger.log(task_id, "agent_plans_confirmed", {"approved_at": state["plan_approved_at"]})
         Thread(target=self._run_started_task, args=(state,), daemon=True).start()
-        return self._attach_execution_log(payload_dict)
+        return self._attach_runtime_observability(payload_dict)
 
     def list_tasks(self) -> dict[str, Any]:
         tasks = self._state_store.list()
@@ -343,7 +373,7 @@ class TaskService:
                 self._tasks[task_id] = stored
             self._state_store.save(task_id, stored)
             self._audit_logger.log(task_id, "task_updated", {"changed_fields": sorted(changed.keys())})
-        return self._attach_execution_log(stored)
+        return self._attach_runtime_observability(stored)
 
     def delete_task(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
@@ -375,7 +405,8 @@ class TaskService:
         if not message:
             raise ValueError("`message` is required.")
         session_id = uuid.uuid4().hex
-        clarification = self._intake_clarifier.clarify([message])
+        with token_tracking_context(session_id):
+            clarification = self._intake_clarifier.clarify([message])
         now = now_iso()
         session = IntakeSession(
             session_id=session_id,
@@ -400,7 +431,7 @@ class TaskService:
                 "output_language": clarification.output_language,
             },
         )
-        return payload_dict
+        return self._attach_runtime_observability(payload_dict)
 
     def append_intake_message(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         stored = self._intake_store.load(session_id)
@@ -411,7 +442,8 @@ class TaskService:
             raise ValueError("`message` is required.")
         messages = self._deserialize_messages(stored.get("messages", []))
         messages.append(AgentMessage(role="user", content=message, metadata={"source": "api"}))
-        clarification = self._intake_clarifier.clarify([item.content for item in messages])
+        with token_tracking_context(session_id):
+            clarification = self._intake_clarifier.clarify([item.content for item in messages])
         stored["messages"] = [item.to_dict() for item in messages]
         stored["candidate_context"] = clarification.to_dict()
         stored["updated_at"] = now_iso()
@@ -425,7 +457,7 @@ class TaskService:
                 "output_language": clarification.output_language,
             },
         )
-        return stored
+        return self._attach_runtime_observability(stored)
 
     def confirm_intake_session(self, session_id: str) -> dict[str, Any] | None:
         stored = self._intake_store.load(session_id)
@@ -468,7 +500,8 @@ class TaskService:
 
     def _run_workflow(self, request_context: RequestContext, *, audit_source: str) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source=audit_source)
-        final_state = self._workflow.run(initial_state)
+        with token_tracking_context(initial_state["task_id"]):
+            final_state = self._workflow.run(initial_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def _approve_plans_in_state(self, state: WorkflowState) -> WorkflowState:
@@ -524,7 +557,8 @@ class TaskService:
     def _run_started_task(self, initial_state: WorkflowState) -> None:
         task_id = initial_state["task_id"]
         try:
-            final_state = self._workflow.run(initial_state)
+            with token_tracking_context(task_id):
+                final_state = self._workflow.run(initial_state)
         except Exception as exc:
             failed_state = dict(initial_state)
             failed_state["task_status"] = "failed"
@@ -563,8 +597,11 @@ class TaskService:
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         if task_id in self._tasks:
-            return self._attach_execution_log(self._serialize_state(self._tasks[task_id]))
-        return self._state_store.load(task_id)
+            return self._attach_runtime_observability(self._serialize_state(self._tasks[task_id]))
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        return self._attach_runtime_observability(stored)
 
     def get_frozen_version(self, task_id: str) -> dict[str, Any] | None:
         return self._frozen_store.load(task_id)
@@ -575,9 +612,11 @@ class TaskService:
             return None
         audit_logs = self._audit_logger.read(task_id)
         self._backfill_audit_logs_from_task(task_id, task, audit_logs)
+        refreshed_logs = self._audit_logger.read(task_id)
         return {
             "task_id": task_id,
-            "logs": self._audit_logger.read(task_id),
+            "logs": refreshed_logs,
+            "token_usage": summarize_token_usage(refreshed_logs),
         }
 
     def generate_report(self, task_id: str) -> dict[str, Any] | None:
@@ -635,7 +674,8 @@ class TaskService:
             "task_resumed",
             {"from_status": previous_status, "round": round_number + 1},
         )
-        final_state = self._workflow.run(resumed_state)
+        with token_tracking_context(task_id):
+            final_state = self._workflow.run(resumed_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
@@ -645,7 +685,7 @@ class TaskService:
             self._tasks[task_id] = state
         payload = self._serialize_state(state)
         self._freeze_version_if_eligible(task_id, payload)
-        self._attach_execution_log(payload)
+        self._attach_runtime_observability(payload)
         self._state_store.save(task_id, payload)
         self._log_agent_execution(task_id, payload)
         self._audit_logger.log(
@@ -656,6 +696,16 @@ class TaskService:
                 "round": payload.get("round_number"),
             },
         )
+        return payload
+
+    def _record_token_usage(self, record: TokenUsageRecord) -> None:
+        self._audit_logger.log(record.task_id, "token_usage_recorded", record.to_dict())
+
+    def _attach_runtime_observability(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._attach_execution_log(payload)
+        task_id = str(payload.get("task_id") or payload.get("session_id") or "")
+        if task_id:
+            payload["token_usage"] = summarize_token_usage(self._audit_logger.read(task_id))
         return payload
 
     @staticmethod
