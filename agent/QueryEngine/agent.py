@@ -48,9 +48,12 @@ class QueryEngine(BaseEngine):
 
     def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
         state = QueryEngineState.from_context(context=context, round_number=round_number)
-        search_plan = self._search_node._build_plan(state)
-        self._search_node._prepare_plan_questions(search_plan.questions)
-        return self._engine_plan_from_search_plan(search_plan)
+        try:
+            search_plan = self._search_node._build_plan(state)
+            self._search_node._prepare_plan_questions(search_plan.questions)
+            return self._engine_plan_from_search_plan(search_plan)
+        except Exception:
+            return self._fallback_plan(context, round_number)
 
     def run(
         self,
@@ -85,6 +88,32 @@ class QueryEngine(BaseEngine):
             if approved_plan is None:
                 raise
             return self._fallback_result(context, round_number)
+
+    def _fallback_plan(self, context: RequestContext, round_number: int) -> EnginePlan:
+        timestamp = now_iso()
+        queries = list(context.initial_strategy) or [
+            f"{context.domain} 官方文档",
+            f"{context.domain} 最新进展",
+        ]
+        return EnginePlan(
+            agent_name=self.name,
+            plan_items=[
+                EnginePlanItem(
+                    plan_item_id=f"Q{i + 1}",
+                    title=query,
+                    query_or_action=query,
+                    targets=list(context.subdomains) or [context.domain],
+                    success_criteria=["命中官方或高可信来源"],
+                    fallbacks=[],
+                    source_priority=["official", "academic"],
+                    status="planned",
+                )
+                for i, query in enumerate(queries[:5])
+            ],
+            reasoning="LLM 计划生成超时，已按初始策略生成回退计划。",
+            status="awaiting_confirmation",
+            created_at=timestamp,
+        )
 
     def _engine_plan_from_search_plan(self, plan: SearchPlan) -> EnginePlan:
         timestamp = now_iso()

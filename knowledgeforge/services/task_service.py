@@ -173,6 +173,60 @@ class TaskService:
             "plan_approved_at": task.get("plan_approved_at", ""),
         }
 
+    def update_plan_item(
+        self,
+        task_id: str,
+        agent_name: str,
+        plan_item_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") != "awaiting_plan_confirmation":
+            raise ValueError("计划项只能在等待确认阶段修改。")
+        plans = stored.get("agent_plans", {})
+        plan = plans.get(agent_name)
+        if plan is None:
+            raise ValueError(f"未找到 Agent '{agent_name}' 的计划。")
+        matched = next(
+            (item for item in plan.get("plan_items", []) if item.get("plan_item_id") == plan_item_id),
+            None,
+        )
+        if matched is None:
+            raise ValueError(f"未找到计划项 '{plan_item_id}'。")
+        allowed = {"title", "query_or_action", "targets", "success_criteria", "fallbacks", "source_priority"}
+        for key in allowed:
+            if key in payload:
+                matched[key] = payload[key]
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "plan_item_updated", {"agent": agent_name, "plan_item_id": plan_item_id})
+        return {"task_id": task_id, "task_status": stored["task_status"], "agent_plans": stored.get("agent_plans", {})}
+
+    def delete_plan_item(
+        self,
+        task_id: str,
+        agent_name: str,
+        plan_item_id: str,
+    ) -> dict[str, Any] | None:
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") != "awaiting_plan_confirmation":
+            raise ValueError("计划项只能在等待确认阶段删除。")
+        plans = stored.get("agent_plans", {})
+        plan = plans.get(agent_name)
+        if plan is None:
+            raise ValueError(f"未找到 Agent '{agent_name}' 的计划。")
+        items = plan.get("plan_items", [])
+        new_items = [item for item in items if item.get("plan_item_id") != plan_item_id]
+        if len(new_items) == len(items):
+            raise ValueError(f"未找到计划项 '{plan_item_id}'。")
+        plan["plan_items"] = new_items
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "plan_item_deleted", {"agent": agent_name, "plan_item_id": plan_item_id})
+        return {"task_id": task_id, "task_status": stored["task_status"], "agent_plans": stored.get("agent_plans", {})}
+
     def confirm_task_plan(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
         if stored is None:

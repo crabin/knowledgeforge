@@ -119,6 +119,27 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "task not found"}), 404
         return jsonify(plan), 200
 
+    @app.patch("/tasks/<task_id>/plan/items/<agent_name>/<plan_item_id>")
+    def update_plan_item(task_id: str, agent_name: str, plan_item_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.update_plan_item(task_id, agent_name, plan_item_id, payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
+    @app.delete("/tasks/<task_id>/plan/items/<agent_name>/<plan_item_id>")
+    def delete_plan_item(task_id: str, agent_name: str, plan_item_id: str):
+        try:
+            result = service.delete_plan_item(task_id, agent_name, plan_item_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
     @app.post("/tasks/<task_id>/plan/confirm")
     def confirm_task_plan(task_id: str):
         try:

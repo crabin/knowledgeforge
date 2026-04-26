@@ -16,6 +16,7 @@ const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
 const taskUpdateInput = document.querySelector("#task-update-payload");
 const agentPlanOutput = document.querySelector("#agent-plan-output");
+const planPanelHint = document.querySelector("#plan-panel-hint");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
@@ -126,6 +127,7 @@ function getNested(payload, path) {
 }
 
 function renderSummary(payload) {
+  if (!summaryStrip) return;
   const progress = summarizePlanProgress(payload);
   const realtime = summarizeRealtimeSaves(payload);
   const items = [
@@ -157,6 +159,7 @@ function renderSummary(payload) {
 }
 
 function renderConfig(payload) {
+  if (!configGrid) return;
   const entries = Object.entries(payload);
   if (!entries.length) {
     configGrid.innerHTML = '<div class="empty-state">未返回配置状态。</div>';
@@ -451,8 +454,17 @@ function isRealtimeFileEvent(event) {
 }
 
 function renderAgentPlans(payload) {
+  if (!agentPlanOutput) return;
   const plans = payload.agent_plans || payload.task?.agent_plans || {};
+  const taskStatus = payload.task_status || payload.task?.task_status || "";
   const planItems = buildAgentPlanItems(plans, payload);
+  const isEditable = taskStatus === "awaiting_plan_confirmation";
+
+  if (planPanelHint) {
+    planPanelHint.textContent = isEditable
+      ? "等待确认 — 可修改或删除各项查询计划"
+      : planItems.length ? "" : "";
+  }
 
   if (!planItems.length) {
     agentPlanOutput.innerHTML = '<div class="empty-state">暂无结构化执行计划。</div>';
@@ -470,7 +482,19 @@ function renderAgentPlans(payload) {
       const savedPaths = (item.saved_paths || []).map((path) => `<li>${escapeHtml(path)}</li>`).join("");
       const skippedCount = (item.skipped_sources || []).length;
       const realtimeStatus = item.realtime_status ? `<span class="realtime-status ${escapeHtml(item.realtime_status)}">${escapeHtml(formatRealtimeStatus(item.realtime_status, skippedCount))}</span>` : "";
-      return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
+      const itemData = escapeHtml(JSON.stringify({
+        title: item.title || item.question || "",
+        query_or_action: item.query_or_action || item.google_query || "",
+      }));
+      const actionButtons = isEditable ? `
+        <div class="plan-card-actions">
+          <button class="plan-action-btn edit-btn" type="button" data-action="edit">编辑</button>
+          <button class="plan-action-btn delete-btn" type="button" data-action="delete">删除</button>
+        </div>` : "";
+      return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}"
+          data-agent-name="${escapeHtml(item.agent_name)}"
+          data-plan-item-id="${escapeHtml(item.plan_item_id || "")}"
+          data-plan-item="${itemData}">
         <div class="plan-card-head">
           <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
           <div>
@@ -485,9 +509,84 @@ function renderAgentPlans(payload) {
         </div>
         ${attempts ? `<div class="plan-attempts"><b>执行记录</b><ul>${attempts}</ul></div>` : ""}
         ${savedPaths ? `<div class="plan-saves"><b>实时保存</b><ul>${savedPaths}</ul></div>` : ""}
+        ${actionButtons}
       </article>`;
     })
     .join("");
+
+  if (isEditable) {
+    attachPlanCardHandlers();
+  }
+}
+
+function attachPlanCardHandlers() {
+  agentPlanOutput.querySelectorAll("[data-action='edit']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const card = btn.closest("[data-plan-item-id]");
+      if (!card || card.querySelector(".plan-edit-form")) return;
+      let item;
+      try { item = JSON.parse(card.dataset.planItem); } catch { item = {}; }
+      const form = document.createElement("div");
+      form.className = "plan-edit-form";
+      form.innerHTML = `
+        <label>标题</label>
+        <input type="text" name="title" value="${escapeHtml(item.title || "")}">
+        <label>查询语句</label>
+        <textarea name="query_or_action" rows="2">${escapeHtml(item.query_or_action || "")}</textarea>
+        <div class="plan-edit-actions">
+          <button type="button" data-edit-action="save">保存</button>
+          <button type="button" class="ghost-button" data-edit-action="cancel">取消</button>
+        </div>`;
+      card.appendChild(form);
+      btn.disabled = true;
+
+      form.querySelector("[data-edit-action='cancel']").addEventListener("click", () => {
+        form.remove();
+        btn.disabled = false;
+      });
+
+      form.querySelector("[data-edit-action='save']").addEventListener("click", async () => {
+        const taskId = taskIdInput.value.trim();
+        const agentName = card.dataset.agentName;
+        const planItemId = card.dataset.planItemId;
+        const title = form.querySelector("[name='title']").value.trim();
+        const queryOrAction = form.querySelector("[name='query_or_action']").value.trim();
+        form.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+        try {
+          const result = await requestJson(
+            `/tasks/${encodeURIComponent(taskId)}/plan/items/${encodeURIComponent(agentName)}/${encodeURIComponent(planItemId)}`,
+            { method: "PATCH", body: JSON.stringify({ title, query_or_action: queryOrAction }) },
+          );
+          showPayload({ ...state.lastPayload, ...result });
+        } catch (error) {
+          showError(error);
+        }
+      });
+    });
+  });
+
+  agentPlanOutput.querySelectorAll("[data-action='delete']").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const card = btn.closest("[data-plan-item-id]");
+      if (!card) return;
+      const label = card.querySelector("strong")?.textContent || card.dataset.planItemId;
+      if (!window.confirm(`确认删除计划项「${label}」？`)) return;
+      const taskId = taskIdInput.value.trim();
+      const agentName = card.dataset.agentName;
+      const planItemId = card.dataset.planItemId;
+      btn.disabled = true;
+      try {
+        const result = await requestJson(
+          `/tasks/${encodeURIComponent(taskId)}/plan/items/${encodeURIComponent(agentName)}/${encodeURIComponent(planItemId)}`,
+          { method: "DELETE" },
+        );
+        showPayload({ ...state.lastPayload, ...result });
+      } catch (error) {
+        showError(error);
+        btn.disabled = false;
+      }
+    });
+  });
 }
 
 function buildAgentPlanItems(plans, payload) {
@@ -673,6 +772,7 @@ function summarizeRealtimeSaves(payload) {
 }
 
 function renderExecutionLog(payload) {
+  if (!executionLogOutput) return;
   const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
   if (!logs.length) {
     executionLogOutput.innerHTML = '<div class="empty-state">暂无调用或执行日志。</div>';
@@ -736,6 +836,7 @@ function startTaskPolling(taskId) {
 }
 
 function renderTaskList(payload) {
+  if (!taskListOutput) return;
   const tasks = payload.tasks || payload.task_list || [];
   if (!tasks.length) {
     taskListOutput.innerHTML = '<div class="empty-state">暂无已保存任务。</div>';
@@ -803,7 +904,7 @@ async function refreshStatus() {
   try {
     renderConfig(await requestJson("/config/status"));
   } catch (error) {
-    configGrid.innerHTML = `<div class="empty-state">配置状态读取失败：${escapeHtml(error.message)}</div>`;
+    if (configGrid) configGrid.innerHTML = `<div class="empty-state">配置状态读取失败：${escapeHtml(error.message)}</div>`;
   }
 }
 
@@ -876,7 +977,12 @@ document.querySelector("#direct-task-form").addEventListener("submit", async (ev
       body: JSON.stringify(payload),
     });
     showPayload(task);
-    stopTaskPolling();
+    const createdTaskId = task.task_id || task.task?.task_id;
+    if (createdTaskId) {
+      startTaskPolling(createdTaskId);
+    } else {
+      stopTaskPolling();
+    }
   } catch (error) {
     showError(error);
     stopTaskPolling();

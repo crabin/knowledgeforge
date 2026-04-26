@@ -62,6 +62,13 @@ class KnowledgeGraphWorkflow:
             )
             try:
                 plans[name] = engine.plan(context, round_number)
+                self._append_workflow_event(
+                    state,
+                    "planning",
+                    f"{name} 计划已生成",
+                    "completed",
+                    {"agent": name},
+                )
             except Exception as exc:
                 raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
         state["agent_plans"] = plans
