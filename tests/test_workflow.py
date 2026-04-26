@@ -526,6 +526,62 @@ def test_awaiting_plan_task_can_be_managed_but_not_resumed(tmp_path: Path) -> No
     assert deleted.status_code == 200
 
 
+def test_plan_item_patch_updates_saved_plan_markdown(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+    started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["计划同步"]}).get_json()
+    task_id = started["task_id"]
+    media_plan_path = Path(started["plan_document_paths"]["MediaEngine"])
+
+    assert media_plan_path.exists()
+    original_content = media_plan_path.read_text(encoding="utf-8")
+    assert "人工修正社交计划" not in original_content
+
+    updated = client.patch(
+        f"/tasks/{task_id}/plan/items/MediaEngine/M-S1",
+        json={
+            "title": "人工修正社交计划",
+            "query_or_action": "knowledge engineering manually revised social query",
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_payload = updated.get_json()
+    assert updated_payload["plan_document_paths"]["MediaEngine"] == str(media_plan_path)
+    synced_content = media_plan_path.read_text(encoding="utf-8")
+    assert "人工修正社交计划" in synced_content
+    assert "knowledge engineering manually revised social query" in synced_content
+
+
+def test_plan_item_delete_updates_saved_plan_markdown(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+    started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["计划删除同步"]}).get_json()
+    task_id = started["task_id"]
+    query_plan_path = Path(started["plan_document_paths"]["QueryEngine"])
+    first_title = started["agent_plans"]["QueryEngine"]["plan_items"][0]["title"]
+
+    assert first_title in query_plan_path.read_text(encoding="utf-8")
+
+    deleted = client.delete(f"/tasks/{task_id}/plan/items/QueryEngine/Q1")
+
+    assert deleted.status_code == 200
+    synced_content = query_plan_path.read_text(encoding="utf-8")
+    assert first_title not in synced_content
+
+
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

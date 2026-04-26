@@ -1247,6 +1247,28 @@
 - 当前保守结论：
   - 等待确认阶段现在会在 `save/{领域}/{子领域}` 看到生成计划文档；Query / Media 的重复计划项会在生成、执行转换和页面合并三层被抑制。
 
+### 阶段 47：计划项编辑后同步 Markdown 计划文档
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 确认 `PATCH /tasks/{task_id}/plan/items/{agent}/{item}` 此前只更新 task state 与 audit，不会重写已生成的 `*-plan.md`
+  - 为 `MarkdownKnowledgeWriter` 增加单个计划文档重写入口，复用生成计划文档的格式规范
+  - `TaskService.update_plan_item()` 与 `delete_plan_item()` 在状态变更后同步重写 `plan_document_paths[agent]` 指向的 Markdown 文件
+  - 同步失败时记录 `plan_document_sync_failed` audit 事件，避免静默丢失文件写入问题
+  - 增加回归测试覆盖 MediaEngine 计划项 PATCH 与 QueryEngine 计划项 DELETE 后的 md 文件同步
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_workflow.py::test_plan_item_patch_updates_saved_plan_markdown tests/test_workflow.py::test_plan_item_delete_updates_saved_plan_markdown tests/test_writer_dynamic_status.py::test_writer_saves_generated_query_and_media_plan_documents -q`：3 passed
+  - `python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/storage/markdown_writer.py`：通过
+  - `uv run pytest`：109 passed
+- 当前保守结论：
+  - 等待确认阶段编辑或删除计划项后，对应 `save/{领域}/{子领域}/*-plan.md` 会同步更新；如果用户仍看到旧内容，优先检查是否打开了修改前生成的旧计划文件或浏览器/编辑器缓存。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25

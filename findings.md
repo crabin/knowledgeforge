@@ -204,6 +204,8 @@
 - QueryEngine 计划按标准化 `google_query + search_targets + source_priority` 去重；MediaEngine 计划按平台类型和标准化 query 去重，避免同一查询项在确认页重复出现。
 - MediaEngine 执行日志必须携带原始 `plan_item_id`，前端不能只靠平台类型和 query 顺序猜测计划项，否则日志回填容易生成额外卡片。
 - 用户确认前生成的计划也是可审计中间产物，应在 `save/{领域}/{子领域}` 下立即保存为 `doc_type=note`、`source_type=agent_plan` 的 Markdown 文档，而不是等最终综述写入后才看到 Query 执行计划。
+- 计划文档不是只读快照；用户在等待确认阶段 PATCH 或 DELETE 计划项后，task state 与对应 `*-plan.md` 必须同步更新，否则页面和后端文件会出现两个事实源。
+- 计划文档同步失败应写入 `plan_document_sync_failed` 审计事件，便于区分“状态更新成功但文件写入失败”和“接口整体失败”。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*

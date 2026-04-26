@@ -38,49 +38,69 @@ class MarkdownKnowledgeWriter:
         for agent_name, plan in plans.items():
             if not plan.plan_items:
                 continue
-            document_id = f"{agent_name.lower()}-plan-{uuid.uuid4().hex[:12]}"
             title = f"{context.domain} {agent_name} 生成计划"
+            document_id = f"{agent_name.lower()}-plan-{uuid.uuid4().hex[:12]}"
             filename = f"{today_compact()}-{slugify_filename(title, document_id)}-plan.md"
             document_path = subdomain_dir / filename
-            relative_path = document_path.as_posix()
-            timestamp = now_iso()
-            front_matter = {
-                "id": document_id,
-                "title": title,
-                "domain": context.domain,
-                "subdomain": subdomain,
-                "doc_type": "note",
-                "source_type": "agent_plan",
-                "agent": agent_name,
-                "round": round_number,
-                "status": "draft",
-                "created_at": timestamp,
-                "updated_at": timestamp,
-                "version": "v1",
-                "path": relative_path,
-                "tags": [*context.focus_points, "agent-plan", agent_name],
-                "sources": [
-                    {
-                        "title": f"{agent_name} generated plan",
-                        "url": f"local://{agent_name.lower()}/generated-plan",
-                        "publisher": "KnowledgeForge",
-                        "retrieved_at": timestamp,
-                        "reliability": "unknown",
-                    }
-                ],
-            }
-            document_path.write_text(
-                self._render_agent_plan_document(
-                    front_matter=front_matter,
-                    title=title,
-                    context=context,
-                    plan=plan,
-                    timestamp=timestamp,
-                ),
-                encoding="utf-8",
+            saved_paths[agent_name] = self.write_agent_plan_document(
+                context=context,
+                plan=plan,
+                round_number=round_number,
+                document_path=document_path,
+                document_id=document_id,
             )
-            saved_paths[agent_name] = relative_path
         return saved_paths
+
+    def write_agent_plan_document(
+        self,
+        *,
+        context: RequestContext,
+        plan: EnginePlan,
+        round_number: int,
+        document_path: Path | str,
+        document_id: str | None = None,
+    ) -> str:
+        document_path = Path(document_path)
+        ensure_directory(document_path.parent)
+        relative_path = document_path.as_posix()
+        timestamp = now_iso()
+        title = f"{context.domain} {plan.agent_name} 生成计划"
+        front_matter = {
+            "id": document_id or document_path.stem,
+            "title": title,
+            "domain": context.domain,
+            "subdomain": context.subdomains[0] if context.subdomains else "通用",
+            "doc_type": "note",
+            "source_type": "agent_plan",
+            "agent": plan.agent_name,
+            "round": round_number,
+            "status": "draft",
+            "created_at": plan.created_at or timestamp,
+            "updated_at": timestamp,
+            "version": "v1",
+            "path": relative_path,
+            "tags": [*context.focus_points, "agent-plan", plan.agent_name],
+            "sources": [
+                {
+                    "title": f"{plan.agent_name} generated plan",
+                    "url": f"local://{plan.agent_name.lower()}/generated-plan",
+                    "publisher": "KnowledgeForge",
+                    "retrieved_at": timestamp,
+                    "reliability": "unknown",
+                }
+            ],
+        }
+        document_path.write_text(
+            self._render_agent_plan_document(
+                front_matter=front_matter,
+                title=title,
+                context=context,
+                plan=plan,
+                timestamp=timestamp,
+            ),
+            encoding="utf-8",
+        )
+        return relative_path
 
     def write(
         self,

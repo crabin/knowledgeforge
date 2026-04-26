@@ -61,6 +61,7 @@ class TaskService:
         self._frozen_store = FrozenVersionStore(config.frozen_root)
         self._report_service = ReportService()
         self._realtime_file_reviewer = RealtimeFileReviewer(config)
+        self._writer = MarkdownKnowledgeWriter(config)
         planning_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.plan_llm_timeout)
         execution_chat_client = OpenAICompatibleChatClient(config.openai, timeout=config.execution_llm_timeout)
         query_embedding_client = OpenAICompatibleEmbeddingClient(config.openai, timeout=2.0)
@@ -87,7 +88,7 @@ class TaskService:
                 save_root=config.save_root,
                 chat_client=planning_chat_client,
             ),
-            writer=MarkdownKnowledgeWriter(config),
+            writer=self._writer,
             post_storage_pipeline=PostStoragePipeline(
                 extractor=StructuredExtractor(),
                 graph_mapper=Neo4jPathMapper(client=graph_client),
@@ -199,9 +200,15 @@ class TaskService:
         for key in allowed:
             if key in payload:
                 matched[key] = payload[key]
+        self._sync_plan_document(stored, agent_name)
         self._state_store.save(task_id, stored)
         self._audit_logger.log(task_id, "plan_item_updated", {"agent": agent_name, "plan_item_id": plan_item_id})
-        return {"task_id": task_id, "task_status": stored["task_status"], "agent_plans": stored.get("agent_plans", {})}
+        return {
+            "task_id": task_id,
+            "task_status": stored["task_status"],
+            "agent_plans": stored.get("agent_plans", {}),
+            "plan_document_paths": stored.get("plan_document_paths", {}),
+        }
 
     def delete_plan_item(
         self,
@@ -223,9 +230,15 @@ class TaskService:
         if len(new_items) == len(items):
             raise ValueError(f"未找到计划项 '{plan_item_id}'。")
         plan["plan_items"] = new_items
+        self._sync_plan_document(stored, agent_name)
         self._state_store.save(task_id, stored)
         self._audit_logger.log(task_id, "plan_item_deleted", {"agent": agent_name, "plan_item_id": plan_item_id})
-        return {"task_id": task_id, "task_status": stored["task_status"], "agent_plans": stored.get("agent_plans", {})}
+        return {
+            "task_id": task_id,
+            "task_status": stored["task_status"],
+            "agent_plans": stored.get("agent_plans", {}),
+            "plan_document_paths": stored.get("plan_document_paths", {}),
+        }
 
     def confirm_task_plan(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
@@ -522,6 +535,31 @@ class TaskService:
             self._audit_logger.log(task_id, "task_failed", {"error": str(exc)})
             return
         self._persist_and_serialize(final_state, "task_completed")
+
+    def _sync_plan_document(self, stored: dict[str, Any], agent_name: str) -> None:
+        plan_path = (stored.get("plan_document_paths") or {}).get(agent_name)
+        if not plan_path:
+            return
+        plan_payload = (stored.get("agent_plans") or {}).get(agent_name)
+        if not isinstance(plan_payload, dict):
+            return
+        try:
+            context = self._deserialize_request_context(stored["request_context"])
+            plan = self._deserialize_engine_plans({agent_name: plan_payload})[agent_name]
+            synced_path = self._writer.write_agent_plan_document(
+                context=context,
+                plan=plan,
+                round_number=int(stored.get("round_number", 1)),
+                document_path=plan_path,
+            )
+        except Exception as exc:
+            self._audit_logger.log(
+                stored["task_id"],
+                "plan_document_sync_failed",
+                {"agent": agent_name, "path": plan_path, "error": str(exc)},
+            )
+            return
+        stored.setdefault("plan_document_paths", {})[agent_name] = synced_path
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         if task_id in self._tasks:
