@@ -199,6 +199,12 @@
 - Agent 计划卡片比原始日志更适合承载保存路径、跳过来源和失败状态，因为用户确认的是计划项，实时保存也按计划项发生。
 - MediaEngine 需要和 QueryEngine 一样从日志回填计划项执行状态，否则最终完成前只能看到静态 approved 计划。
 
+## 计划去重与生成计划落盘结论
+- Query / Media 计划重复既可能来自 LLM 输出本身，也可能来自前端把 `agent_plans` 与执行日志重新合成卡片；需要在后端生成、执行转换和前端展示三层都保持幂等去重。
+- QueryEngine 计划按标准化 `google_query + search_targets + source_priority` 去重；MediaEngine 计划按平台类型和标准化 query 去重，避免同一查询项在确认页重复出现。
+- MediaEngine 执行日志必须携带原始 `plan_item_id`，前端不能只靠平台类型和 query 顺序猜测计划项，否则日志回填容易生成额外卡片。
+- 用户确认前生成的计划也是可审计中间产物，应在 `save/{领域}/{子领域}` 下立即保存为 `doc_type=note`、`source_type=agent_plan` 的 Markdown 文档，而不是等最终综述写入后才看到 Query 执行计划。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*

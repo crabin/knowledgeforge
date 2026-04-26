@@ -21,6 +21,7 @@ class WorkflowState(TypedDict, total=False):
     round_number: int
     max_rounds: int
     agent_plans: dict[str, EnginePlan]
+    plan_document_paths: dict[str, str]
     workflow_events: list[WorkflowStepEvent]
     current_step: str
     current_action: str

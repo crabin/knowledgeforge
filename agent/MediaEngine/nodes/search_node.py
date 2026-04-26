@@ -144,7 +144,12 @@ class MediaSearchNode(BaseMediaNode):
         all_hits = list(state.search_hits)
         domain_phrases = self._domain_phrases(state)
         for index, query in enumerate(social_queries, start=1):
-            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "social"})
+            plan_item_id = f"M-S{index}"
+            self._record_event(
+                state,
+                "media_plan_item_started",
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "social"},
+            )
             hits = self._search(
                 query=query,
                 platform_type="social",
@@ -156,18 +161,23 @@ class MediaSearchNode(BaseMediaNode):
             self._record_event(
                 state,
                 "media_search_executed",
-                {"query": query, "platform_type": "social", "hits": len(hits)},
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "social", "hits": len(hits)},
             )
             all_hits.extend(hits)
             self._save_realtime_query_documents(
                 state,
-                plan_item_id=f"M-S{index}",
+                plan_item_id=plan_item_id,
                 query=query,
                 platform_type="social",
                 hits=hits,
             )
         for index, query in enumerate(community_queries, start=1):
-            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "community"})
+            plan_item_id = f"M-C{index}"
+            self._record_event(
+                state,
+                "media_plan_item_started",
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "community"},
+            )
             hits = self._search(
                 query=query,
                 platform_type="community",
@@ -179,18 +189,23 @@ class MediaSearchNode(BaseMediaNode):
             self._record_event(
                 state,
                 "media_search_executed",
-                {"query": query, "platform_type": "community", "hits": len(hits)},
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "community", "hits": len(hits)},
             )
             all_hits.extend(hits)
             self._save_realtime_query_documents(
                 state,
-                plan_item_id=f"M-C{index}",
+                plan_item_id=plan_item_id,
                 query=query,
                 platform_type="community",
                 hits=hits,
             )
         for index, query in enumerate(blog_queries, start=1):
-            self._record_event(state, "media_plan_item_started", {"query": query, "platform_type": "blog"})
+            plan_item_id = f"M-B{index}"
+            self._record_event(
+                state,
+                "media_plan_item_started",
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "blog"},
+            )
             hits = self._search(
                 query=query,
                 platform_type="blog",
@@ -202,12 +217,12 @@ class MediaSearchNode(BaseMediaNode):
             self._record_event(
                 state,
                 "media_search_executed",
-                {"query": query, "platform_type": "blog", "hits": len(hits)},
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": "blog", "hits": len(hits)},
             )
             all_hits.extend(hits)
             self._save_realtime_query_documents(
                 state,
-                plan_item_id=f"M-B{index}",
+                plan_item_id=plan_item_id,
                 query=query,
                 platform_type="blog",
                 hits=hits,

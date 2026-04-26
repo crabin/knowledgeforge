@@ -6,6 +6,8 @@ from pathlib import Path
 from knowledgeforge.config import AppConfig
 from knowledgeforge.models import (
     CompletenessResult,
+    EnginePlan,
+    EnginePlanItem,
     EngineRunResult,
     RequestContext,
     SourceRecord,
@@ -152,6 +154,63 @@ def test_writer_saves_query_plan_document_in_subdomain_directory() -> None:
     assert "Google 查询：Machine Learning latest papers official" in query_content
     assert "query_plan_created" in query_content
     assert str(query_docs[0]) in article_content
+
+
+def test_writer_saves_generated_query_and_media_plan_documents() -> None:
+    writer = MarkdownKnowledgeWriter(_make_config())
+    ctx = RequestContext(
+        domain="Machine Learning",
+        subdomains=["最新论文方向"],
+        time_window="2026",
+        focus_points=["papers"],
+        constraints=[],
+        initial_strategy=[],
+    )
+    plans = {
+        "QueryEngine": EnginePlan(
+            agent_name="QueryEngine",
+            plan_items=[
+                EnginePlanItem(
+                    plan_item_id="Q1",
+                    title="确认权威事实",
+                    query_or_action="machine learning official papers",
+                    targets=["权威事实"],
+                    success_criteria=["命中权威来源"],
+                    source_priority=["official"],
+                )
+            ],
+            reasoning="官方优先。",
+            status="awaiting_confirmation",
+            created_at="2026-04-25T00:00:00+09:00",
+        ),
+        "MediaEngine": EnginePlan(
+            agent_name="MediaEngine",
+            plan_items=[
+                EnginePlanItem(
+                    plan_item_id="M-C1",
+                    title="社区讨论",
+                    query_or_action="machine learning community discussion",
+                    targets=["社区观点"],
+                    success_criteria=["命中社区来源"],
+                    source_priority=["community"],
+                )
+            ],
+            reasoning="社区观点补充。",
+            status="awaiting_confirmation",
+            created_at="2026-04-25T00:00:00+09:00",
+        ),
+    }
+
+    saved_paths = writer.write_agent_plan_documents(context=ctx, plans=plans, round_number=1)
+
+    assert set(saved_paths) == {"QueryEngine", "MediaEngine"}
+    for path in saved_paths.values():
+        content = Path(path).read_text(encoding="utf-8")
+        assert "doc_type: note" in content
+        assert "source_type: agent_plan" in content
+        assert "计划清单" in content
+    assert "machine learning official papers" in Path(saved_paths["QueryEngine"]).read_text(encoding="utf-8")
+    assert "machine learning community discussion" in Path(saved_paths["MediaEngine"]).read_text(encoding="utf-8")
 
 
 def test_writer_keeps_query_plan_detail_out_of_main_document() -> None:

@@ -72,10 +72,22 @@ class KnowledgeGraphWorkflow:
             except Exception as exc:
                 raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
         state["agent_plans"] = plans
+        plan_document_paths = self._writer.write_agent_plan_documents(
+            context=context,
+            plans=plans,
+            round_number=round_number,
+        )
+        state["plan_document_paths"] = plan_document_paths
         state["task_status"] = "awaiting_plan_confirmation"
         state["current_step"] = "awaiting_confirmation"
-        state["current_action"] = "三路 Agent 执行计划已生成，等待用户确认。"
-        self._append_workflow_event(state, "planning", "三路计划生成", "completed", {"agents": sorted(plans)})
+        state["current_action"] = "三路 Agent 执行计划已生成并保存，等待用户确认。"
+        self._append_workflow_event(
+            state,
+            "planning",
+            "三路计划生成",
+            "completed",
+            {"agents": sorted(plans), "plan_document_paths": plan_document_paths},
+        )
         self._append_workflow_event(state, "awaiting_confirmation", "等待用户确认计划", "active")
         return state
 

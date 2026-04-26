@@ -9,6 +9,7 @@ from knowledgeforge.config import AppConfig
 from knowledgeforge.models import (
     CompletenessResult,
     DocumentArtifact,
+    EnginePlan,
     EngineRunResult,
     RequestContext,
 )
@@ -20,6 +21,66 @@ from knowledgeforge.utils.time import now_iso, today_compact
 class MarkdownKnowledgeWriter:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+
+    def write_agent_plan_documents(
+        self,
+        *,
+        context: RequestContext,
+        plans: dict[str, EnginePlan],
+        round_number: int,
+    ) -> dict[str, str]:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        subdomain = context.subdomains[0] if context.subdomains else "通用"
+        subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
+        ensure_directory(subdomain_dir)
+
+        saved_paths: dict[str, str] = {}
+        for agent_name, plan in plans.items():
+            if not plan.plan_items:
+                continue
+            document_id = f"{agent_name.lower()}-plan-{uuid.uuid4().hex[:12]}"
+            title = f"{context.domain} {agent_name} 生成计划"
+            filename = f"{today_compact()}-{slugify_filename(title, document_id)}-plan.md"
+            document_path = subdomain_dir / filename
+            relative_path = document_path.as_posix()
+            timestamp = now_iso()
+            front_matter = {
+                "id": document_id,
+                "title": title,
+                "domain": context.domain,
+                "subdomain": subdomain,
+                "doc_type": "note",
+                "source_type": "agent_plan",
+                "agent": agent_name,
+                "round": round_number,
+                "status": "draft",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "version": "v1",
+                "path": relative_path,
+                "tags": [*context.focus_points, "agent-plan", agent_name],
+                "sources": [
+                    {
+                        "title": f"{agent_name} generated plan",
+                        "url": f"local://{agent_name.lower()}/generated-plan",
+                        "publisher": "KnowledgeForge",
+                        "retrieved_at": timestamp,
+                        "reliability": "unknown",
+                    }
+                ],
+            }
+            document_path.write_text(
+                self._render_agent_plan_document(
+                    front_matter=front_matter,
+                    title=title,
+                    context=context,
+                    plan=plan,
+                    timestamp=timestamp,
+                ),
+                encoding="utf-8",
+            )
+            saved_paths[agent_name] = relative_path
+        return saved_paths
 
     def write(
         self,
@@ -132,6 +193,120 @@ class MarkdownKnowledgeWriter:
         )
         document_path.write_text(body, encoding="utf-8")
         return relative_path
+
+    @staticmethod
+    def _render_agent_plan_document(
+        *,
+        front_matter: dict,
+        title: str,
+        context: RequestContext,
+        plan: EnginePlan,
+        timestamp: str,
+    ) -> str:
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        plan_rows = [
+            "| {id} | {title} | {query} | {targets} | {criteria} | {fallbacks} | {status} |".format(
+                id=item.plan_item_id.replace("|", "\\|"),
+                title=item.title.replace("|", "\\|"),
+                query=item.query_or_action.replace("|", "\\|"),
+                targets="; ".join(item.targets).replace("|", "\\|"),
+                criteria="; ".join(item.success_criteria).replace("|", "\\|"),
+                fallbacks="; ".join(item.fallbacks).replace("|", "\\|"),
+                status=item.status,
+            )
+            for item in plan.plan_items
+        ]
+        plan_lines: list[str] = []
+        for item in plan.plan_items:
+            marker = "☑" if item.status == "completed" else "☐"
+            plan_lines.extend(
+                [
+                    f"- {marker} {item.plan_item_id} [{item.status}] {item.title}",
+                    f"  查询/动作：{item.query_or_action}",
+                    f"  查询内容：{'; '.join(item.targets) if item.targets else '未指定'}",
+                    f"  满足标准：{'; '.join(item.success_criteria) if item.success_criteria else '未指定'}",
+                ]
+            )
+            if item.fallbacks:
+                plan_lines.append(f"  补查查询：{'; '.join(item.fallbacks)}")
+        return "\n".join(
+            [
+                "---",
+                front_matter_text,
+                "---",
+                "",
+                f"# {title}",
+                "",
+                "## 摘要",
+                "",
+                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 {plan.agent_name} 执行前生成的计划。",
+                "它用于用户确认、执行审计和后续质量回溯，不等同于已验证知识结论。",
+                "",
+                "## 关键结论",
+                "",
+                f"- {plan.agent_name} 生成 {len(plan.plan_items)} 个计划项。",
+                f"- 计划状态：{plan.status}。",
+                "- 每个计划项保留查询/动作、查询内容、满足标准和补查路径。",
+                "",
+                "## 背景与上下文",
+                "",
+                f"领域：{context.domain}",
+                f"子领域：{', '.join(context.subdomains)}",
+                f"时间范围：{context.time_window}",
+                f"生成时间：{timestamp}",
+                "",
+                "## 正文",
+                "",
+                "### 生成理由",
+                "",
+                plan.reasoning or "无",
+                "",
+                "### 计划清单",
+                "",
+                *plan_lines,
+                "",
+                "### 结构化表格",
+                "",
+                "| 编号 | 标题 | 查询/动作 | 查询内容 | 满足标准 | 补查路径 | 状态 |",
+                "|---|---|---|---|---|---|---|",
+                *plan_rows,
+                "",
+                "## 证据与来源",
+                "",
+                "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                "|---|---|---|---|---|",
+                f"| S1 | {plan.agent_name} generated plan | 用户确认前生成的执行计划 | unknown | 本地计划文档 |",
+                "",
+                "## 实体与关系候选",
+                "",
+                "### 实体候选",
+                "",
+                "| 实体 | 类型 | 描述 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | Domain | 目标领域 | S1 |",
+                "",
+                "### 关系候选",
+                "",
+                "| 主体 | 关系 | 客体 | 来源 |",
+                "|---|---|---|---|",
+                f"| {plan.agent_name} | planned_for | {context.domain} | S1 |",
+                "",
+                "## 冲突与不确定性",
+                "",
+                "- 计划项只代表待执行的查询或动作，需要通过后续采集与质量检查验证。",
+                "",
+                "## 后续动作",
+                "",
+                "- 用户确认计划后再进入并行采集。",
+                "",
+                "## 变更记录",
+                "",
+                "| 版本 | 时间 | 变更说明 |",
+                "|---|---|---|",
+                f"| v1 | {timestamp[:10]} | 初始创建 |",
+                "",
+            ]
+        )
 
     @staticmethod
     def _extract_query_plan_lines(raw_material: list[str]) -> list[str]:

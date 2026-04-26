@@ -85,7 +85,7 @@ class MediaEngine(BaseEngine):
             ("M-B", "博客与长文趋势检索", plan.blog_queries, "blog", ["趋势分析", "落地案例", "未来方向"]),
         ]
         for prefix, title, queries, platform_type, targets in groups:
-            for index, query in enumerate(queries, start=1):
+            for index, query in enumerate(self._dedupe_queries(queries), start=1):
                 items.append(
                     EnginePlanItem(
                         plan_item_id=f"{prefix}{index}",
@@ -109,9 +109,10 @@ class MediaEngine(BaseEngine):
     def _search_plan_from_engine_plan(plan: EnginePlan):
         from agent.MediaEngine.state.state import MediaSearchPlan
 
-        social_queries = [item.query_or_action for item in plan.plan_items if "social" in item.source_priority]
-        community_queries = [item.query_or_action for item in plan.plan_items if "community" in item.source_priority]
-        blog_queries = [item.query_or_action for item in plan.plan_items if "blog" in item.source_priority]
+        deduped_items = MediaEngine._dedupe_plan_items(plan.plan_items)
+        social_queries = [item.query_or_action for item in deduped_items if "social" in item.source_priority]
+        community_queries = [item.query_or_action for item in deduped_items if "community" in item.source_priority]
+        blog_queries = [item.query_or_action for item in deduped_items if "blog" in item.source_priority]
         return MediaSearchPlan(
             social_queries=social_queries,
             community_queries=community_queries,
@@ -119,6 +120,33 @@ class MediaEngine(BaseEngine):
             reasoning=plan.reasoning,
             is_technical=True,
         )
+
+    @staticmethod
+    def _dedupe_queries(queries: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for query in queries:
+            key = " ".join(query.lower().split())
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(query)
+        return deduped
+
+    @staticmethod
+    def _dedupe_plan_items(items: list[EnginePlanItem]) -> list[EnginePlanItem]:
+        deduped: list[EnginePlanItem] = []
+        seen: set[tuple[str, str]] = set()
+        for item in items:
+            key = (
+                " ".join(item.query_or_action.lower().split()),
+                "|".join(sorted(" ".join(priority.lower().split()) for priority in item.source_priority)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     def _fallback_result(self, context: RequestContext, round_number: int) -> EngineRunResult:
         timestamp = now_iso()

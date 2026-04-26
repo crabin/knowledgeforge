@@ -602,7 +602,7 @@ function buildAgentPlanItems(plans, payload) {
     });
   });
   if (successful) {
-    return items;
+    return dedupePlanItems(items);
   }
   const queryLogs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
   const queryItems = buildQueryPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "QueryEngine" }));
@@ -611,6 +611,8 @@ function buildAgentPlanItems(plans, payload) {
     const index = items.findIndex((item) => item.agent_name === "QueryEngine" && item.plan_item_id === queryItem.plan_item_id);
     if (index >= 0) {
       items[index] = { ...items[index], ...queryItem, title: items[index].title || queryItem.question };
+    } else {
+      items.push(queryItem);
     }
   });
   mediaItems.forEach((mediaItem) => {
@@ -621,7 +623,65 @@ function buildAgentPlanItems(plans, payload) {
       items.push(mediaItem);
     }
   });
-  return items;
+  return dedupePlanItems(items);
+}
+
+function dedupePlanItems(items) {
+  const deduped = new Map();
+  items.forEach((item) => {
+    const key = planItemDedupeKey(item);
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, item);
+      return;
+    }
+    deduped.set(key, {
+      ...existing,
+      ...item,
+      title: existing.title || item.title || item.question,
+      query_or_action: existing.query_or_action || item.query_or_action || item.google_query,
+      targets: mergeUnique(existing.targets, item.targets || item.search_targets || item.expected_info),
+      success_criteria: mergeUnique(existing.success_criteria, item.success_criteria),
+      attempts: mergeAttempts(existing.attempts, item.attempts),
+      saved_paths: mergeUnique(existing.saved_paths, item.saved_paths),
+      skipped_sources: mergeUnique(existing.skipped_sources, item.skipped_sources),
+    });
+  });
+  return Array.from(deduped.values());
+}
+
+function planItemDedupeKey(item) {
+  const agent = item.agent_name || "";
+  if (item.plan_item_id) return `${agent}:${item.plan_item_id}`;
+  const query = normalizePlanText(item.query_or_action || item.google_query || item.query || item.question || "");
+  const targets = (item.targets || item.search_targets || item.expected_info || []).map(normalizePlanText).sort().join("|");
+  return `${agent}:${query}:${targets}`;
+}
+
+function normalizePlanText(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function mergeUnique(a, b) {
+  const values = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = normalizePlanText(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function mergeAttempts(a, b) {
+  const attempts = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
+  const seen = new Set();
+  return attempts.filter((attempt) => {
+    const key = `${normalizePlanText(attempt.query)}:${attempt.hits}:${attempt.status}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function buildQueryPlanItems(logs) {

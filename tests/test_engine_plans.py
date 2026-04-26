@@ -121,6 +121,33 @@ def test_three_engines_generate_plans_without_execution() -> None:
     assert all(plan.status == "awaiting_confirmation" for plan in [insight_plan, query_plan, media_plan])
 
 
+def test_query_and_media_plans_dedupe_repeated_queries() -> None:
+    context = _context()
+
+    class DuplicatePlanChatClient(FakePlanChatClient):
+        def complete_json(self, *, system_prompt: str, user_prompt: str):
+            payload = super().complete_json(system_prompt=system_prompt, user_prompt=user_prompt)
+            if "QueryEngine 搜索规划器" in system_prompt:
+                payload["questions"] = [payload["questions"][0], dict(payload["questions"][0])]
+            elif "MediaEngine" in system_prompt:
+                payload["community_queries"] = [
+                    "knowledge engineering community discussion",
+                    "knowledge engineering community discussion",
+                ]
+            return payload
+
+    chat_client = DuplicatePlanChatClient()
+    query_plan = QueryEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+
+    assert len(query_plan.plan_items) == 1
+    assert [
+        item.query_or_action
+        for item in media_plan.plan_items
+        if "community" in item.source_priority
+    ] == ["knowledge engineering community discussion"]
+
+
 def test_plan_generation_requires_llm() -> None:
     context = _context()
 
@@ -282,6 +309,11 @@ def test_media_engine_executes_approved_plan() -> None:
     assert crawler.queries[0] == ("community", "custom community query")
     assert result.agent_name == "MediaEngine"
     assert any(entry["event"] == "media_search_executed" for entry in result.execution_log)
+    assert any(
+        entry["event"] == "media_search_executed"
+        and entry["details"].get("plan_item_id") == "M-C1"
+        for entry in result.execution_log
+    )
 
 
 def test_media_engine_reviews_files_after_query_item_completion() -> None:

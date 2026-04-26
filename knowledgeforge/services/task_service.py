@@ -243,6 +243,7 @@ class TaskService:
             "max_rounds": int(stored.get("max_rounds", self._config.max_rounds)),
             "task_status": "running",
             "agent_plans": self._deserialize_engine_plans(stored.get("agent_plans", {})),
+            "plan_document_paths": stored.get("plan_document_paths", {}),
             "workflow_events": [
                 WorkflowStepEvent(**event)
                 for event in stored.get("workflow_events", [])

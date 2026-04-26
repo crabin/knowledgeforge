@@ -48,12 +48,10 @@ class QueryEngine(BaseEngine):
 
     def plan(self, context: RequestContext, round_number: int) -> EnginePlan:
         state = QueryEngineState.from_context(context=context, round_number=round_number)
-        try:
-            search_plan = self._search_node._build_plan(state)
-            self._search_node._prepare_plan_questions(search_plan.questions)
-            return self._engine_plan_from_search_plan(search_plan)
-        except Exception:
-            return self._fallback_plan(context, round_number)
+        search_plan = self._search_node._build_plan(state)
+        search_plan.questions = self._dedupe_search_questions(search_plan.questions)
+        self._search_node._prepare_plan_questions(search_plan.questions)
+        return self._engine_plan_from_search_plan(search_plan)
 
     def run(
         self,
@@ -117,6 +115,7 @@ class QueryEngine(BaseEngine):
 
     def _engine_plan_from_search_plan(self, plan: SearchPlan) -> EnginePlan:
         timestamp = now_iso()
+        questions = self._dedupe_search_questions(plan.questions)
         return EnginePlan(
             agent_name=self.name,
             plan_items=[
@@ -130,7 +129,7 @@ class QueryEngine(BaseEngine):
                     source_priority=question.source_priority,
                     status="planned",
                 )
-                for question in plan.questions
+                for question in questions
             ],
             reasoning=plan.reasoning,
             status="awaiting_confirmation",
@@ -139,6 +138,7 @@ class QueryEngine(BaseEngine):
 
     @staticmethod
     def _search_plan_from_engine_plan(plan: EnginePlan) -> SearchPlan:
+        deduped_items = QueryEngine._dedupe_plan_items(plan.plan_items)
         questions = [
             SearchQuestion(
                 question=item.title,
@@ -151,16 +151,16 @@ class QueryEngine(BaseEngine):
                 status="planned",
                 plan_item_id=item.plan_item_id,
             )
-            for item in plan.plan_items
+            for item in deduped_items
         ]
         official_queries = [
             item.query_or_action
-            for item in plan.plan_items
+            for item in deduped_items
             if not any(token in " ".join(item.source_priority).lower() for token in ["tutorial", "blog", "guide"])
         ]
         tutorial_queries = [
             item.query_or_action
-            for item in plan.plan_items
+            for item in deduped_items
             if any(token in " ".join(item.source_priority).lower() for token in ["tutorial", "blog", "guide"])
         ]
         return SearchPlan(
@@ -170,6 +170,37 @@ class QueryEngine(BaseEngine):
             reasoning=plan.reasoning,
             questions=questions,
         )
+
+    @staticmethod
+    def _dedupe_search_questions(questions: list[SearchQuestion]) -> list[SearchQuestion]:
+        deduped: list[SearchQuestion] = []
+        seen: set[tuple[str, str]] = set()
+        for question in questions:
+            key = (
+                " ".join(question.google_query.lower().split()),
+                "|".join(sorted(" ".join(item.lower().split()) for item in question.search_targets)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(question)
+        return deduped
+
+    @staticmethod
+    def _dedupe_plan_items(items: list[EnginePlanItem]) -> list[EnginePlanItem]:
+        deduped: list[EnginePlanItem] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in items:
+            key = (
+                " ".join(item.query_or_action.lower().split()),
+                "|".join(sorted(" ".join(target.lower().split()) for target in item.targets)),
+                "|".join(sorted(" ".join(priority.lower().split()) for priority in item.source_priority)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     def _fallback_result(self, context: RequestContext, round_number: int) -> EngineRunResult:
         timestamp = now_iso()

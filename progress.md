@@ -1219,6 +1219,34 @@
 - 当前保守结论：
   - 补充模块现在不再只依赖静态规则 query；它会优先读取实时保存的领域 index，并把 LLM 判断出的缺陷分发给 QueryEngine 做权威事实补采。
 
+### 阶段 46：Query / Media 计划去重与生成计划落盘
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - QueryEngine 计划生成与批准计划执行前增加标准化去重，避免重复问题/重复 query 出现在确认页面
+  - MediaEngine 按平台类型和 query 去重，并在执行日志中写入稳定 `plan_item_id`
+  - Markdown Writer 新增 `write_agent_plan_documents`，在计划生成阶段把 Agent 计划保存为 `doc_type=note`、`source_type=agent_plan` 文档
+  - Workflow 在三路计划生成后立即保存计划文档，并把 `plan_document_paths` 写入任务状态和 workflow event
+  - 前端计划卡片合并增加去重与 attempts/saved_paths 合并，避免 `agent_plans` 与执行日志回填重复展示
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/QueryEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/storage/markdown_writer.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_writer_dynamic_status.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_engine_plans.py tests/test_writer_dynamic_status.py tests/test_workflow.py tests/test_dashboard.py`：40 passed
+  - `uv run pytest`：107 passed
+- 当前保守结论：
+  - 等待确认阶段现在会在 `save/{领域}/{子领域}` 看到生成计划文档；Query / Media 的重复计划项会在生成、执行转换和页面合并三层被抑制。
+
 ### 阶段 41：前端实时流程图 X6 优化
 - **状态：** complete
 - **开始时间：** 2026-04-25
