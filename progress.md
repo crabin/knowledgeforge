@@ -2,6 +2,27 @@
 
 ## 会话：2026-04-24
 
+### 阶段 48：结果区页面展示修复与收拢
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 修复结果区模板中的错误引号，恢复“执行计划 / 执行日志 / 任务列表”面板样式与 DOM 绑定
+  - 将原始响应 JSON 收拢为默认折叠的 `details` 面板，避免大段 JSON 挤压主界面
+  - 保留执行计划为全宽区域，下方维持日志与任务列表双栏布局
+  - 补充 dashboard 回归断言，覆盖 `plan-full-panel`、`trace-grid` 和“原始响应 JSON”入口
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `PYTHONPATH=. pytest tests/test_dashboard.py -q`：2 passed
+  - in-app browser 本地检查：结果区已恢复卡片布局，新增“原始响应 JSON”折叠面板
+  - `PYTHONPATH=. pytest -q`：当前工作树下存在 2 个非本次改动导致的失败
+- 当前保守结论：
+  - 页面展示问题已修复；全量测试失败来自当前工作树中与前端展示无关的计划生成改动，需要与本次 UI 调整分开处理。
+
 ### 阶段 47：前端流程步骤显示优化
 - **状态：** complete
 - **开始时间：** 2026-04-25

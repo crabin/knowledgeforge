@@ -29,9 +29,12 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "workflow-x6" in body
     assert "https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" in body
     assert "三路 Agent 执行计划" in body
+    assert "plan-full-panel" in body
+    assert "trace-grid" in body
     assert "确认计划" in body
     assert "调用与执行日志" in body
     assert "任务列表" in body
+    assert "原始响应 JSON" in body
     assert "查看任务列表" in body
     assert "/static/css/dashboard.css" in body
     assert "/static/js/dashboard.js" in body

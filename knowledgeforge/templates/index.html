@@ -174,13 +174,16 @@
         <div class="summary-strip" id="summary-strip">
           <div class="empty-state">执行操作后会显示 task_id、状态、文档路径、质量检查与版本信息。</div>
         </div>
-        <div class="trace-grid" aria-label="查询计划与执行日志">
-          <section class="trace-panel">
-            <h3>三路 Agent 执行计划</h3>
-            <div id="agent-plan-output" class="trace-list">
-              <div class="empty-state">任务启动后会显示三路计划，确认后实时更新执行状态。</div>
-            </div>
-          </section>
+        <section class="plan-full-panel trace-panel" aria-labelledby="plan-panel-title">
+          <div class="plan-panel-head">
+            <h3 id="plan-panel-title">三路 Agent 执行计划</h3>
+            <span class="plan-panel-hint" id="plan-panel-hint"></span>
+          </div>
+          <div id="agent-plan-output" class="plan-full-list">
+            <div class="empty-state">任务启动后会显示三路计划，确认后实时更新执行状态。</div>
+          </div>
+        </section>
+        <div class="trace-grid" aria-label="执行日志与任务列表">
           <section class="trace-panel">
             <h3>调用与执行日志</h3>
             <div id="execution-log-output" class="trace-list">
@@ -194,7 +197,13 @@
             </div>
           </section>
         </div>
-        <pre id="response-output" aria-live="polite">{}</pre>
+        <details class="raw-json-panel">
+          <summary class="raw-json-summary">
+            <span>原始响应 JSON</span>
+            <span class="raw-json-hint">排查时再展开</span>
+          </summary>
+          <pre id="response-output" aria-live="polite">{}</pre>
+        </details>
       </section>
     </main>
 
