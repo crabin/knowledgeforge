@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from json import JSONDecodeError
+from threading import Lock
 from typing import Any
 
 import httpx
@@ -11,6 +13,8 @@ from knowledgeforge.runtime.token_usage import TokenUsageStatus, build_token_usa
 
 
 class OpenAICompatibleChatClient:
+    _request_lock = Lock()
+
     def __init__(
         self,
         config: OpenAIConfig,
@@ -18,14 +22,15 @@ class OpenAICompatibleChatClient:
         *,
         operation: str = "chat.completions",
         token_usage_callback: Any | None = None,
+        max_retries: int = 2,
     ) -> None:
         self._config = config
         self._timeout = timeout
         self._operation = operation
         self._token_usage_callback = token_usage_callback
+        self._max_retries = max(0, max_retries)
 
     def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
-        request_id = uuid.uuid4().hex
         payload = {
             "model": self._config.model,
             "messages": [
@@ -39,37 +44,57 @@ class OpenAICompatibleChatClient:
             "Authorization": f"Bearer {self._config.api_key}",
             "Content-Type": "application/json",
         }
-        usage_payload: dict[str, Any] | None = None
         prompt_text = json.dumps(payload["messages"], ensure_ascii=False)
-        content = ""
-        with httpx.Client(timeout=self._timeout) as client:
+        attempts = self._max_retries + 1
+        last_exc: Exception | None = None
+
+        for attempt in range(1, attempts + 1):
+            request_id = uuid.uuid4().hex
+            usage_payload: dict[str, Any] | None = None
+            content = ""
             try:
-                response = client.post(
-                    f"{self._config.base_url.rstrip('/')}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-                response.raise_for_status()
-                response_payload = response.json()
-                usage_payload = response_payload.get("usage")
-                content = response_payload["choices"][0]["message"]["content"]
-            except Exception as exc:
+                with self._request_lock:
+                    with httpx.Client(timeout=self._timeout) as client:
+                        response = client.post(
+                            f"{self._config.base_url.rstrip('/')}/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        )
+                        response.raise_for_status()
+                        response_payload = response.json()
+                        usage_payload = response_payload.get("usage")
+                        content = response_payload["choices"][0]["message"]["content"]
+                        parsed = json.loads(content)
                 self._emit_token_usage(
                     request_id=request_id,
-                    usage=None,
-                    status="failed",
-                    error=str(exc),
+                    usage=usage_payload,
+                    status="completed",
                     estimated_prompt_text=prompt_text,
+                    estimated_completion_text=content,
                 )
-                raise
-        self._emit_token_usage(
-            request_id=request_id,
-            usage=usage_payload,
-            status="completed",
-            estimated_prompt_text=prompt_text,
-            estimated_completion_text=content,
-        )
-        return json.loads(content)
+                return parsed
+            except Exception as exc:
+                last_exc = exc
+                error_message = str(exc)
+                if attempt < attempts:
+                    error_message = f"{error_message} (attempt {attempt}/{attempts})"
+                self._emit_token_usage(
+                    request_id=request_id,
+                    usage=usage_payload,
+                    status="failed",
+                    error=error_message,
+                    estimated_prompt_text=prompt_text,
+                    estimated_completion_text=content,
+                )
+                if not self._should_retry(exc) or attempt >= attempts:
+                    raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("LLM JSON completion failed without an explicit exception.")
+
+    @staticmethod
+    def _should_retry(exc: Exception) -> bool:
+        return isinstance(exc, (JSONDecodeError, httpx.HTTPError, KeyError, TypeError, ValueError))
 
     def _emit_token_usage(
         self,

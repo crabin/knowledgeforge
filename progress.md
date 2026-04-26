@@ -2,6 +2,24 @@
 
 ## 会话：2026-04-24
 
+### 阶段 49：LLM 计划生成重试与串行保护
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 为 `OpenAICompatibleChatClient.complete_json()` 增加受控重试，重点兜住 provider 返回坏 JSON、HTTP 异常和结构缺失等可恢复失败。
+  - 在 chat client 层加入全局串行锁，确保同一时间只发起一个聊天类 LLM 请求，避免三路 Engine 并发压同一本地 LLM 服务导致计划生成或总结解析失败。
+  - 新增独立回归测试，覆盖“首次返回非法 JSON 后自动重试成功”和“并发调用被串行化”的行为。
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/llms/openai_compatible.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_openai_compatible.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `python -m compileall knowledgeforge/llms/openai_compatible.py tests/test_openai_compatible.py`：通过
+  - `PYTHONPATH=. pytest tests/test_openai_compatible.py tests/test_engine_plans.py tests/test_workflow.py -q`：36 passed
+  - `PYTHONPATH=. pytest tests/test_query_engine.py -q`：7 passed
+- 当前保守结论：
+  - `QueryEngine plan generation failed` 这类由 LLM 返回坏 JSON 触发的失败现在会自动重试；同时聊天类 LLM 请求已改为串行受控，降低本地模型并发拥塞导致的解析异常和超时风险。
+
 ### 阶段 48：结果区页面展示修复与收拢
 - **状态：** complete
 - **开始时间：** 2026-04-26
