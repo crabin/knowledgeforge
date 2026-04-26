@@ -5,6 +5,8 @@ from pathlib import Path
 from knowledgeforge.config import AppConfig
 from knowledgeforge.runtime.token_usage import (
     TokenUsageRecord,
+    build_token_usage_record,
+    estimate_text_tokens,
     summarize_token_usage,
     token_tracking_context,
 )
@@ -44,6 +46,27 @@ def test_token_usage_summary_counts_prompt_completion_and_total_tokens() -> None
     assert summary["total_tokens"] == 25
     assert summary["by_kind"]["chat"]["total_tokens"] == 20
     assert summary["by_kind"]["embedding"]["request_count"] == 1
+
+
+def test_token_usage_record_estimates_tokens_when_provider_usage_missing() -> None:
+    with token_tracking_context("token-task"):
+        record = build_token_usage_record(
+            request_id="req-estimated",
+            kind="chat",
+            operation="planning.chat_json",
+            model="gpt-5.2",
+            usage=None,
+            status="completed",
+            source="unavailable",
+            estimated_prompt_text="发送 token 测试 prompt",
+            estimated_completion_text="接收 token 测试 completion",
+        )
+
+    assert record is not None
+    assert record.source == "estimated"
+    assert record.prompt_tokens == estimate_text_tokens("发送 token 测试 prompt")
+    assert record.completion_tokens == estimate_text_tokens("接收 token 测试 completion")
+    assert record.total_tokens == record.prompt_tokens + record.completion_tokens
 
 
 def test_task_logs_include_realtime_token_usage_summary(tmp_path: Path) -> None:

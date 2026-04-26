@@ -34,6 +34,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "确认计划" in body
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
+    assert "token-float collapsed" in body
+    assert "token-float-toggle" in body
     assert "任务列表" in body
     assert "原始响应 JSON" in body
     assert "查看任务列表" in body

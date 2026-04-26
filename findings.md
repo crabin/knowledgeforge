@@ -212,7 +212,8 @@
 - 当前任务或 intake session 需要通过运行期上下文传给 LLM client，否则并行线程和后台任务很难把一次模型调用稳定归属到正确任务。
 - Token 使用记录适合写入 audit jsonl，并由 `/tasks/{task_id}/logs` 汇总返回；前端已有实时轮询，不需要新增第二套推送机制。
 - Provider 未返回 usage 或调用失败时仍要记录一次调用事件，`source=unavailable`、`status=failed`，避免“没有用量数据”被误读成“没有调用”。
-- 前端 token 面板应该同时显示发送、接收、总量、调用次数、按 chat/embedding 分类和最近调用明细，才能支撑排障与成本观察。
+- 前端 token 展示更适合做左下角悬浮窗，默认收起，不占用主流程和计划展示空间；展开后只保留发送、接收、总计和调用次数四项，降低噪音。
+- Provider 未返回 usage 时，Chat 调用按发送 prompt 与接收 content 估算；Embedding 调用按 input 文本估算发送 token，接收 token 记为 0。记录需标记 `source=estimated`，避免和 provider 精确 usage 混淆。
 
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*

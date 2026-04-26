@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -57,11 +58,18 @@ def build_token_usage_record(
     status: TokenUsageStatus,
     source: str = "provider",
     error: str = "",
+    estimated_prompt_text: str = "",
+    estimated_completion_text: str = "",
 ) -> TokenUsageRecord | None:
     task_id = current_token_task_id()
     if not task_id:
         return None
     prompt_tokens, completion_tokens, total_tokens = normalize_usage(usage or {})
+    if total_tokens == 0 and (estimated_prompt_text or estimated_completion_text):
+        prompt_tokens = estimate_text_tokens(estimated_prompt_text)
+        completion_tokens = estimate_text_tokens(estimated_completion_text)
+        total_tokens = prompt_tokens + completion_tokens
+        source = "estimated"
     return TokenUsageRecord(
         task_id=task_id,
         request_id=request_id,
@@ -93,6 +101,31 @@ def normalize_usage(usage: dict[str, Any]) -> tuple[int, int, int]:
     if total_tokens == 0:
         total_tokens = prompt_tokens + completion_tokens
     return prompt_tokens, completion_tokens, total_tokens
+
+
+def estimate_text_tokens(text: str) -> int:
+    if not text:
+        return 0
+    try:
+        import tiktoken  # type: ignore[import-not-found]
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception:
+        return _estimate_text_tokens_without_tiktoken(text)
+
+
+def _estimate_text_tokens_without_tiktoken(text: str) -> int:
+    cjk_chars = re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text)
+    non_cjk = re.sub(r"[\u3400-\u9fff\uf900-\ufaff]", " ", text)
+    pieces = re.findall(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]", non_cjk)
+    ascii_estimate = sum(
+        max(1, (len(piece) + 3) // 4)
+        if piece.isascii() and re.fullmatch(r"[A-Za-z0-9_]+", piece)
+        else 1
+        for piece in pieces
+    )
+    return len(cjk_chars) + ascii_estimate
 
 
 def summarize_token_usage(records: list[dict[str, Any]]) -> dict[str, Any]:

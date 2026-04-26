@@ -1325,6 +1325,33 @@
 - 当前保守结论：
   - 模型与 embedding 调用现在会按任务写入 token 审计记录；前端在任务轮询期间可实时看到 token 总量和最近调用明细。若上游 provider 不返回 usage，系统会保留调用记录但 token 数为 0，并标记用量来源不可用。
 
+### 阶段 49：Token 悬浮窗与 usage 缺失估算
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 将结果区内嵌 Token 面板改为左下角 `token-float` 悬浮窗，默认收起，点击可展开/收起
+  - 展开内容收敛为四项：发送、接收、总计、调用
+  - provider 返回 usage 时继续使用真实 usage；未返回 usage 或调用失败时，Chat 按 prompt/content 估算，Embedding 按 input 估算
+  - token 使用记录在估算时标记 `source=estimated`，避免和 provider usage 混淆
+  - 增加估算逻辑回归测试，并补充 dashboard 浮窗结构断言
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/runtime/token_usage.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/llms/openai_compatible.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/templates/index.html
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_token_usage.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_dashboard.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `node --check knowledgeforge/static/js/dashboard.js`：通过
+  - `uv run pytest tests/test_token_usage.py tests/test_dashboard.py -q`：5 passed
+  - `python -m compileall knowledgeforge`：通过
+  - 浏览器检查 `http://127.0.0.1:5001`：左下角浮窗存在，默认收起；点击展开后可见四项 token 指标；本地 LLM 不可用时仍显示估算发送 token
+- 当前保守结论：
+  - Token 统计不再挤占主面板空间；真实 usage 优先，缺失时用估算兜底，前端只展示用户关注的四个总量指标。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

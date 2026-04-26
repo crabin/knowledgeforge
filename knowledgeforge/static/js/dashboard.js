@@ -18,7 +18,9 @@ const taskUpdateInput = document.querySelector("#task-update-payload");
 const agentPlanOutput = document.querySelector("#agent-plan-output");
 const planPanelHint = document.querySelector("#plan-panel-hint");
 const tokenUsageOutput = document.querySelector("#token-usage-output");
-const tokenPanelHint = document.querySelector("#token-panel-hint");
+const tokenFloat = document.querySelector("#token-float");
+const tokenFloatToggle = document.querySelector("#token-float-toggle");
+const tokenFloatTotal = document.querySelector("#token-float-total");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
@@ -846,39 +848,12 @@ function summarizeTokenUsageLabel(payload) {
 function renderTokenUsage(payload) {
   if (!tokenUsageOutput) return;
   const usage = payload.token_usage || payload.task?.token_usage || {};
+  const totalTokens = usage.total_tokens || 0;
+  if (tokenFloatTotal) tokenFloatTotal.textContent = formatNumber(totalTokens);
   if (!usage.request_count) {
     tokenUsageOutput.innerHTML = '<div class="empty-state">暂无 token 记录。</div>';
-    if (tokenPanelHint) tokenPanelHint.textContent = "";
     return;
   }
-
-  if (tokenPanelHint) {
-    tokenPanelHint.textContent = usage.failed_count ? `${usage.failed_count} 次调用未返回用量` : "实时记录中";
-  }
-
-  const kindRows = Object.entries(usage.by_kind || {})
-    .map(([kind, item]) => {
-      return `<div class="token-kind-row">
-        <span>${escapeHtml(formatTokenKind(kind))}</span>
-        <strong>${escapeHtml(formatNumber(item.total_tokens))}</strong>
-        <small>${escapeHtml(formatNumber(item.request_count))} 次</small>
-      </div>`;
-    })
-    .join("");
-  const recentRows = (usage.recent || [])
-    .slice(-6)
-    .reverse()
-    .map((item) => {
-      const status = item.status === "failed" ? "failed" : "ok";
-      return `<div class="token-call ${status}">
-        <div>
-          <strong>${escapeHtml(item.operation || item.kind || "model_call")}</strong>
-          <span>${escapeHtml([item.model, item.timestamp].filter(Boolean).join(" · "))}</span>
-        </div>
-        <code>${escapeHtml(formatNumber(item.prompt_tokens))} in / ${escapeHtml(formatNumber(item.completion_tokens))} out / ${escapeHtml(formatNumber(item.total_tokens))} total</code>
-      </div>`;
-    })
-    .join("");
 
   tokenUsageOutput.innerHTML = `
     <div class="token-metrics">
@@ -886,16 +861,7 @@ function renderTokenUsage(payload) {
       <div class="token-metric"><span>接收</span><strong>${escapeHtml(formatNumber(usage.completion_tokens))}</strong></div>
       <div class="token-metric"><span>总计</span><strong>${escapeHtml(formatNumber(usage.total_tokens))}</strong></div>
       <div class="token-metric"><span>调用</span><strong>${escapeHtml(formatNumber(usage.request_count))}</strong></div>
-    </div>
-    <div class="token-kind-list">${kindRows || '<div class="empty-state">暂无分类汇总。</div>'}</div>
-    <div class="token-call-list">${recentRows || '<div class="empty-state">暂无调用明细。</div>'}</div>`;
-}
-
-function formatTokenKind(kind) {
-  return {
-    chat: "Chat",
-    embedding: "Embedding",
-  }[kind] || kind;
+    </div>`;
 }
 
 function formatNumber(value) {
@@ -1041,6 +1007,13 @@ async function refreshStatus() {
 }
 
 document.querySelector("#refresh-status").addEventListener("click", refreshStatus);
+
+if (tokenFloatToggle && tokenFloat) {
+  tokenFloatToggle.addEventListener("click", () => {
+    const collapsed = tokenFloat.classList.toggle("collapsed");
+    tokenFloatToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  });
+}
 
 document.querySelector("#create-intake-form").addEventListener("submit", async (event) => {
   event.preventDefault();

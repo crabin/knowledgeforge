@@ -40,6 +40,8 @@ class OpenAICompatibleChatClient:
             "Content-Type": "application/json",
         }
         usage_payload: dict[str, Any] | None = None
+        prompt_text = json.dumps(payload["messages"], ensure_ascii=False)
+        content = ""
         with httpx.Client(timeout=self._timeout) as client:
             try:
                 response = client.post(
@@ -57,9 +59,16 @@ class OpenAICompatibleChatClient:
                     usage=None,
                     status="failed",
                     error=str(exc),
+                    estimated_prompt_text=prompt_text,
                 )
                 raise
-        self._emit_token_usage(request_id=request_id, usage=usage_payload, status="completed")
+        self._emit_token_usage(
+            request_id=request_id,
+            usage=usage_payload,
+            status="completed",
+            estimated_prompt_text=prompt_text,
+            estimated_completion_text=content,
+        )
         return json.loads(content)
 
     def _emit_token_usage(
@@ -69,6 +78,8 @@ class OpenAICompatibleChatClient:
         usage: dict[str, Any] | None,
         status: TokenUsageStatus,
         error: str = "",
+        estimated_prompt_text: str = "",
+        estimated_completion_text: str = "",
     ) -> None:
         record = build_token_usage_record(
             request_id=request_id,
@@ -79,6 +90,8 @@ class OpenAICompatibleChatClient:
             status=status,
             source="provider" if usage else "unavailable",
             error=error,
+            estimated_prompt_text=estimated_prompt_text,
+            estimated_completion_text=estimated_completion_text,
         )
         if record and self._token_usage_callback:
             self._token_usage_callback(record)
@@ -111,6 +124,7 @@ class OpenAICompatibleEmbeddingClient:
             "Content-Type": "application/json",
         }
         usage_payload: dict[str, Any] | None = None
+        prompt_text = "\n".join(texts)
         with httpx.Client(timeout=self._timeout) as client:
             try:
                 response = client.post(
@@ -128,9 +142,15 @@ class OpenAICompatibleEmbeddingClient:
                     usage=None,
                     status="failed",
                     error=str(exc),
+                    estimated_prompt_text=prompt_text,
                 )
                 raise
-        self._emit_token_usage(request_id=request_id, usage=usage_payload, status="completed")
+        self._emit_token_usage(
+            request_id=request_id,
+            usage=usage_payload,
+            status="completed",
+            estimated_prompt_text=prompt_text,
+        )
         return [item["embedding"] for item in data]
 
     def _should_send_dimensions(self) -> bool:
@@ -145,6 +165,7 @@ class OpenAICompatibleEmbeddingClient:
         usage: dict[str, Any] | None,
         status: TokenUsageStatus,
         error: str = "",
+        estimated_prompt_text: str = "",
     ) -> None:
         record = build_token_usage_record(
             request_id=request_id,
@@ -155,6 +176,7 @@ class OpenAICompatibleEmbeddingClient:
             status=status,
             source="provider" if usage else "unavailable",
             error=error,
+            estimated_prompt_text=estimated_prompt_text,
         )
         if record and self._token_usage_callback:
             self._token_usage_callback(record)
