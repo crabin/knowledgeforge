@@ -159,6 +159,9 @@ def test_probe_source_url_uses_browser_fallback_for_zh_wikipedia_http_403() -> N
         browser_fetcher=lambda url: "搜索结果 生成对抗网络 Generative Adversarial Network 共 6 条结果",
     )
     assert result.available is True
+    assert result.status_code is None
+    assert result.http_status_code == 403
+    assert result.probe_method == "browser_fallback"
     assert result.reason == "browser_fallback_ok"
 
 
@@ -179,6 +182,9 @@ def test_probe_source_url_keeps_zhihu_unavailable_on_http_403_without_browser_fa
         browser_fetcher=lambda url: "系统监测到您的网络环境存在异常",
     )
     assert result.available is False
+    assert result.status_code == 403
+    assert result.http_status_code == 403
+    assert result.probe_method == "http"
     assert result.reason == "http_403"
 
 

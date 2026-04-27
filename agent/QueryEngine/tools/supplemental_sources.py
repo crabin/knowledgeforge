@@ -34,7 +34,9 @@ class SourceProbeResult:
     url: str
     available: bool
     status_code: int | None
+    http_status_code: int | None
     final_url: str
+    probe_method: str
     reason: str
     content_chars: int
 
@@ -80,7 +82,9 @@ def probe_source_url(
         *,
         available: bool,
         status_code: int | None,
+        http_status_code: int | None,
         final_url: str,
+        probe_method: str,
         reason: str,
         content_chars: int,
     ) -> SourceProbeResult:
@@ -89,7 +93,9 @@ def probe_source_url(
             url=target.url,
             available=available,
             status_code=status_code,
+            http_status_code=http_status_code,
             final_url=final_url,
+            probe_method=probe_method,
             reason=reason,
             content_chars=content_chars,
         )
@@ -113,7 +119,9 @@ def probe_source_url(
         return build_result(
             available=False,
             status_code=None,
+            http_status_code=None,
             final_url=target.url,
+            probe_method="http",
             reason=f"request_failed:{exc.__class__.__name__}",
             content_chars=0,
         )
@@ -134,7 +142,9 @@ def probe_source_url(
         return build_result(
             available=False,
             status_code=response.status_code,
+            http_status_code=response.status_code,
             final_url=final_url,
+            probe_method="http",
             reason=f"http_{response.status_code}",
             content_chars=len(compact_text),
         )
@@ -142,7 +152,9 @@ def probe_source_url(
         return build_result(
             available=False,
             status_code=response.status_code,
+            http_status_code=response.status_code,
             final_url=final_url,
+            probe_method="http",
             reason="blocked_marker_detected",
             content_chars=len(compact_text),
         )
@@ -150,14 +162,18 @@ def probe_source_url(
         return build_result(
             available=False,
             status_code=response.status_code,
+            http_status_code=response.status_code,
             final_url=final_url,
+            probe_method="http",
             reason="content_too_short",
             content_chars=len(compact_text),
         )
     return build_result(
         available=True,
         status_code=response.status_code,
+        http_status_code=response.status_code,
         final_url=final_url,
+        probe_method="http",
         reason="ok",
         content_chars=len(compact_text),
     )
@@ -181,8 +197,10 @@ def _probe_with_browser_fallback(
             key=target.key,
             url=target.url,
             available=False,
-            status_code=status_code,
+            status_code=None,
+            http_status_code=status_code,
             final_url=final_url,
+            probe_method="browser_fallback",
             reason=f"http_{status_code}_browser_failed:{exc.__class__.__name__}",
             content_chars=0,
         )
@@ -192,8 +210,10 @@ def _probe_with_browser_fallback(
             key=target.key,
             url=target.url,
             available=False,
-            status_code=status_code,
+            status_code=None,
+            http_status_code=status_code,
             final_url=final_url,
+            probe_method="browser_fallback",
             reason="browser_blocked_marker_detected",
             content_chars=len(compact_text),
         )
@@ -202,8 +222,10 @@ def _probe_with_browser_fallback(
             key=target.key,
             url=target.url,
             available=False,
-            status_code=status_code,
+            status_code=None,
+            http_status_code=status_code,
             final_url=final_url,
+            probe_method="browser_fallback",
             reason=f"http_{status_code}_browser_content_too_short",
             content_chars=len(compact_text),
         )
@@ -211,8 +233,10 @@ def _probe_with_browser_fallback(
         key=target.key,
         url=target.url,
         available=True,
-        status_code=status_code,
+        status_code=None,
+        http_status_code=status_code,
         final_url=target.url,
+        probe_method="browser_fallback",
         reason="browser_fallback_ok",
         content_chars=len(compact_text),
     )

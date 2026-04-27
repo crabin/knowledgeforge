@@ -14,6 +14,7 @@
 - 为 QueryEngine 增加“补充查询源”机制：当结果不足或命中知乎问题页等高风险来源时，自动补充 `腾讯云开发者社区搜索`、`知乎搜索`、`中文维基百科搜索` 三个备用 URL。
 - 新增通用 URL 探测模块 `agent/QueryEngine/tools/supplemental_sources.py`，对备用源执行 HTTP 可用性检测，并识别知乎 403/封禁提示等阻断信号。
 - 为 `zh.wikipedia` 增加 browser fallback 探测：当 `httpx` 返回 403 时，允许通过 browser 文本抓取二次确认该搜索页是否仍可用。
+- 优化补源探测返回结构：把 `status_code` 与 `http_status_code` 分离，并新增 `probe_method`，明确区分“HTTP 首探结果”和“最终可用性判定来源”。
 - 新增 3 个独立检测脚本：`scripts/check_tencent_cloud_source.py`、`scripts/check_zhihu_search_source.py`、`scripts/check_zh_wikipedia_source.py`，可直接验证每个补源 URL 当前是否可用。
 - 补充 pytest 回归，覆盖备用源 URL 生成、知乎封禁识别、Query 补源合并，以及 3 个检测脚本的退出码行为。
 
@@ -30,9 +31,9 @@
 - 运行 `python scripts/check_zh_wikipedia_source.py GAN`
 - 结果：`available=false, status=403`
 - 运行 `uv run scripts/check_zh_wikipedia_source.py`
-- 结果：`available=true, status=403, reason=browser_fallback_ok`
+- 结果：`available=true, status_code=null, http_status_code=403, probe_method=browser_fallback, reason=browser_fallback_ok`
 - 运行 `uv run scripts/check_zhihu_search_source.py`
-- 结果：`available=false, status=403, reason=http_403`
+- 结果：`available=false, status_code=403, http_status_code=403, probe_method=http, reason=http_403`
 
 ## Follow-up
 
