@@ -40,6 +40,7 @@ from knowledgeforge.runtime.audit import AuditLogger
 from knowledgeforge.runtime.frozen_store import FrozenVersionStore
 from knowledgeforge.runtime.intake_session_store import IntakeSessionStore
 from knowledgeforge.runtime.state_store import TaskStateStore
+from knowledgeforge.runtime.task_queue import RetrievalTaskQueue
 from knowledgeforge.runtime.token_usage import (
     TokenUsageRecord,
     summarize_token_usage,
@@ -52,6 +53,7 @@ from knowledgeforge.storage.realtime_reviewer import (
     RealtimeReviewCandidate,
     RealtimeReviewResult,
 )
+from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
 from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
@@ -67,6 +69,16 @@ class TaskService:
         self._report_service = ReportService()
         self._realtime_file_reviewer = RealtimeFileReviewer(config)
         self._writer = MarkdownKnowledgeWriter(config)
+        self._retrieval_task_queue = RetrievalTaskQueue(
+            max_network_concurrency=config.max_network_task_concurrency,
+            max_llm_concurrency=config.max_llm_task_concurrency,
+        )
+        crawl4ai_adapter = Crawl4AIAdapter(
+            enabled=config.enable_crawl4ai,
+            headless=config.crawl4ai_headless,
+            verbose=config.crawl4ai_verbose,
+            page_timeout_ms=config.crawl4ai_page_timeout_ms,
+        )
         planning_chat_client = OpenAICompatibleChatClient(
             config.openai,
             timeout=config.plan_llm_timeout,
@@ -99,17 +111,28 @@ class TaskService:
             query_engine=QueryEngine(
                 chat_client=planning_chat_client,
                 embedding_client=query_embedding_client,
-                crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
+                crawler=(
+                    DomainKnowledgeCrawler(crawl4ai_adapter=crawl4ai_adapter)
+                    if config.enable_live_crawlers
+                    else _NoopQueryCrawler()
+                ),
                 event_callback=self._log_realtime_query_event,
                 realtime_file_callback=self._review_realtime_file,
                 max_concurrent_network_tasks=config.max_query_network_concurrency,
+                task_queue=self._retrieval_task_queue,
             ),
             media_engine=MediaEngine(
                 chat_client=execution_chat_client,
                 planning_chat_client=planning_chat_client,
-                crawler=MediaPerspectiveCrawler() if config.enable_live_crawlers else _NoopMediaCrawler(),
+                crawler=(
+                    MediaPerspectiveCrawler(crawl4ai_adapter=crawl4ai_adapter)
+                    if config.enable_live_crawlers
+                    else _NoopMediaCrawler()
+                ),
                 event_callback=self._log_realtime_media_event,
                 realtime_file_callback=self._review_realtime_file,
+                max_concurrent_network_tasks=config.max_network_task_concurrency,
+                task_queue=self._retrieval_task_queue,
             ),
             evaluator=CompletenessEvaluator(),
             supplement_planner=SupplementDecisionPlanner(

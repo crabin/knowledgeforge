@@ -90,10 +90,16 @@ class AppConfig:
     plan_llm_timeout: float = 45.0
     execution_llm_timeout: float = 5.0
     max_query_network_concurrency: int = 5
+    max_network_task_concurrency: int = 5
+    max_llm_task_concurrency: int = 2
+    enable_crawl4ai: bool = True
+    crawl4ai_headless: bool = True
+    crawl4ai_verbose: bool = False
+    crawl4ai_page_timeout_ms: int = 15000
 
     @classmethod
     def from_env(cls, env_file: str | Path = ".env") -> AppConfig:
-        load_dotenv(env_file, override=False)
+        load_dotenv(env_file, override=True)
         return cls(
             llm_provider=_get_required("LLM_PROVIDER"),
             openai=OpenAIConfig(
@@ -125,6 +131,12 @@ class AppConfig:
             plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 45.0),
             execution_llm_timeout=_get_float("EXECUTION_LLM_TIMEOUT", 5.0),
             max_query_network_concurrency=_get_int("MAX_QUERY_NETWORK_CONCURRENCY", 5),
+            max_network_task_concurrency=_get_int("MAX_NETWORK_TASK_CONCURRENCY", 5),
+            max_llm_task_concurrency=_get_int("MAX_LLM_TASK_CONCURRENCY", 2),
+            enable_crawl4ai=_get_bool("ENABLE_CRAWL4AI", True),
+            crawl4ai_headless=_get_bool("CRAWL4AI_HEADLESS", True),
+            crawl4ai_verbose=_get_bool("CRAWL4AI_VERBOSE", False),
+            crawl4ai_page_timeout_ms=_get_int("CRAWL4AI_PAGE_TIMEOUT_MS", 15000),
         )
 
     def show_config_status(self) -> dict[str, Any]:
@@ -182,6 +194,14 @@ class AppConfig:
                 "plan_llm_timeout": self.plan_llm_timeout,
                 "execution_llm_timeout": self.execution_llm_timeout,
                 "max_query_network_concurrency": self.max_query_network_concurrency,
+                "max_network_task_concurrency": self.max_network_task_concurrency,
+                "max_llm_task_concurrency": self.max_llm_task_concurrency,
+            },
+            "crawl": {
+                "crawl4ai_enabled": self.enable_crawl4ai,
+                "crawl4ai_headless": self.crawl4ai_headless,
+                "crawl4ai_verbose": self.crawl4ai_verbose,
+                "crawl4ai_page_timeout_ms": self.crawl4ai_page_timeout_ms,
             },
             "legacy": {
                 "llm_provider": self.llm_provider,

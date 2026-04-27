@@ -9,6 +9,7 @@ from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.runtime.task_queue import RetrievalTaskQueue
 from knowledgeforge.utils.time import now_iso
 
 
@@ -22,6 +23,8 @@ class MediaEngine(BaseEngine):
         crawler: MediaPerspectiveCrawler | None = None,
         event_callback: MediaEventCallback | None = None,
         realtime_file_callback: MediaRealtimeFileCallback | None = None,
+        max_concurrent_network_tasks: int = 5,
+        task_queue: RetrievalTaskQueue | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._planning_chat_client = planning_chat_client or chat_client
@@ -31,6 +34,8 @@ class MediaEngine(BaseEngine):
             crawler=self._crawler,
             event_callback=event_callback,
             realtime_file_callback=realtime_file_callback,
+            max_concurrent_network_tasks=max_concurrent_network_tasks,
+            task_queue=task_queue,
         )
         self._reflection_node = MediaReflectionNode(chat_client=self._chat_client)
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)

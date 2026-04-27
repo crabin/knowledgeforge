@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 
 from collections.abc import Callable
 from typing import Any
@@ -12,12 +14,23 @@ from agent.MediaEngine.state.state import MediaEngineState, MediaSearchPlan
 from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.query_normalization import normalize_query_term
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
 from knowledgeforge.utils.time import now_iso
 
 MediaEventCallback = Callable[[str, dict[str, Any]], None]
 MediaRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
+
+
+@dataclass(slots=True)
+class MediaQueryTaskResult:
+    plan_item_id: str
+    query: str
+    platform_type: str
+    hits: list[Any]
+    status: str
+    error: str = ""
 
 
 class MediaSearchNode(BaseMediaNode):
@@ -81,11 +94,15 @@ class MediaSearchNode(BaseMediaNode):
         crawler: MediaPerspectiveCrawler,
         event_callback: MediaEventCallback | None = None,
         realtime_file_callback: MediaRealtimeFileCallback | None = None,
+        max_concurrent_network_tasks: int = 5,
+        task_queue: RetrievalTaskQueue | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._crawler = crawler
         self._event_callback = event_callback
         self._realtime_file_callback = realtime_file_callback
+        self._max_concurrent_network_tasks = max(1, max_concurrent_network_tasks)
+        self._task_queue = task_queue
 
     def run(self, state: MediaEngineState, **kwargs) -> MediaEngineState:
         plan = self._build_plan(state)
@@ -219,89 +236,52 @@ class MediaSearchNode(BaseMediaNode):
             limit=self.MAX_BLOG_QUERIES,
             existing_queries=self._history_queries(state, platform_type="blog"),
         )
-        for index, query in enumerate(social_queries, start=1):
-            plan_item_id = f"M-S{index}"
+        task_specs: list[tuple[str, str, str, int]] = []
+        task_specs.extend((f"M-S{index}", query, "social", 3) for index, query in enumerate(social_queries, start=1))
+        task_specs.extend(
+            (f"M-C{index}", query, "community", 4) for index, query in enumerate(community_queries, start=1)
+        )
+        task_specs.extend((f"M-B{index}", query, "blog", 3) for index, query in enumerate(blog_queries, start=1))
+        for plan_item_id, query, platform_type, _ in task_specs:
             self._record_event(
                 state,
                 "media_plan_item_started",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "social"},
+                {"plan_item_id": plan_item_id, "query": query, "platform_type": platform_type},
             )
-            hits = self._search(
-                query=query,
-                platform_type="social",
-                is_technical=is_technical,
-                max_results=3,
-                domain_phrases=domain_phrases,
+        for task_result in self._run_media_tasks(
+            state,
+            task_specs=task_specs,
+            is_technical=is_technical,
+            domain_phrases=domain_phrases,
+        ):
+            state.search_history.append(
+                {
+                    "query": task_result.query,
+                    "platform_type": task_result.platform_type,
+                    "hits": len(task_result.hits),
+                    "status": task_result.status,
+                    "error": task_result.error,
+                }
             )
-            state.search_history.append({"query": query, "platform_type": "social", "hits": len(hits)})
-            self._record_event(
-                state,
-                "media_search_executed",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "social", "hits": len(hits)},
-            )
-            all_hits.extend(hits)
+            event_name = "media_search_failed" if task_result.status == "failed" else "media_search_executed"
+            details = {
+                "plan_item_id": task_result.plan_item_id,
+                "query": task_result.query,
+                "platform_type": task_result.platform_type,
+                "hits": len(task_result.hits),
+                "status": task_result.status,
+            }
+            if task_result.error:
+                details["error"] = task_result.error
+                details["failure_category"] = "network_query_failed"
+            self._record_event(state, event_name, details)
+            all_hits.extend(task_result.hits)
             self._save_realtime_query_documents(
                 state,
-                plan_item_id=plan_item_id,
-                query=query,
-                platform_type="social",
-                hits=hits,
-            )
-        for index, query in enumerate(community_queries, start=1):
-            plan_item_id = f"M-C{index}"
-            self._record_event(
-                state,
-                "media_plan_item_started",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "community"},
-            )
-            hits = self._search(
-                query=query,
-                platform_type="community",
-                is_technical=is_technical,
-                max_results=4,
-                domain_phrases=domain_phrases,
-            )
-            state.search_history.append({"query": query, "platform_type": "community", "hits": len(hits)})
-            self._record_event(
-                state,
-                "media_search_executed",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "community", "hits": len(hits)},
-            )
-            all_hits.extend(hits)
-            self._save_realtime_query_documents(
-                state,
-                plan_item_id=plan_item_id,
-                query=query,
-                platform_type="community",
-                hits=hits,
-            )
-        for index, query in enumerate(blog_queries, start=1):
-            plan_item_id = f"M-B{index}"
-            self._record_event(
-                state,
-                "media_plan_item_started",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "blog"},
-            )
-            hits = self._search(
-                query=query,
-                platform_type="blog",
-                is_technical=is_technical,
-                max_results=3,
-                domain_phrases=domain_phrases,
-            )
-            state.search_history.append({"query": query, "platform_type": "blog", "hits": len(hits)})
-            self._record_event(
-                state,
-                "media_search_executed",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": "blog", "hits": len(hits)},
-            )
-            all_hits.extend(hits)
-            self._save_realtime_query_documents(
-                state,
-                plan_item_id=plan_item_id,
-                query=query,
-                platform_type="blog",
-                hits=hits,
+                plan_item_id=task_result.plan_item_id,
+                query=task_result.query,
+                platform_type=task_result.platform_type,
+                hits=task_result.hits,
             )
 
         state.search_hits = self._dedupe_hits(all_hits)
@@ -310,6 +290,104 @@ class MediaSearchNode(BaseMediaNode):
             state,
             "media_documents_fetched",
             {"hit_count": len(state.search_hits), "document_count": len(state.crawled_documents)},
+        )
+
+    def _run_media_tasks(
+        self,
+        state: MediaEngineState,
+        *,
+        task_specs: list[tuple[str, str, str, int]],
+        is_technical: bool,
+        domain_phrases: list[str],
+    ) -> list[MediaQueryTaskResult]:
+        if self._task_queue is None:
+            max_workers = min(self._max_concurrent_network_tasks, len(task_specs))
+            futures = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for plan_item_id, query, platform_type, max_results in task_specs:
+                    futures.append(
+                        executor.submit(
+                            self._run_media_task,
+                            plan_item_id=plan_item_id,
+                            query=query,
+                            platform_type=platform_type,
+                            max_results=max_results,
+                            is_technical=is_technical,
+                            domain_phrases=domain_phrases,
+                        )
+                    )
+                return [future.result() for future in as_completed(futures)]
+
+        queued_tasks = [
+            QueuedTaskSpec[MediaQueryTaskResult, None](
+                task_id=plan_item_id,
+                task_type="network_query_and_optional_llm_summary",
+                payload={
+                    "agent": "MediaEngine",
+                    "query": query,
+                    "platform_type": platform_type,
+                    "round": state.round_number,
+                },
+                network_call=lambda plan_item_id=plan_item_id, query=query, platform_type=platform_type, max_results=max_results: self._run_media_task(
+                    plan_item_id=plan_item_id,
+                    query=query,
+                    platform_type=platform_type,
+                    max_results=max_results,
+                    is_technical=is_technical,
+                    domain_phrases=domain_phrases,
+                ),
+            )
+            for plan_item_id, query, platform_type, max_results in task_specs
+        ]
+        queued_results = self._task_queue.run_tasks(queued_tasks)
+        return [
+            result.network_result
+            if result.network_result is not None
+            else MediaQueryTaskResult(
+                plan_item_id=result.task_id,
+                query=str(result.payload.get("query", "")),
+                platform_type=str(result.payload.get("platform_type", "")),
+                hits=[],
+                status="failed",
+                error=result.error or f"Media task {result.task_id} failed",
+            )
+            for result in queued_results
+        ]
+
+    def _run_media_task(
+        self,
+        *,
+        plan_item_id: str,
+        query: str,
+        platform_type: str,
+        max_results: int,
+        is_technical: bool,
+        domain_phrases: list[str],
+    ) -> MediaQueryTaskResult:
+        try:
+            hits = self._search(
+                query=query,
+                platform_type=platform_type,
+                is_technical=is_technical,
+                max_results=max_results,
+                domain_phrases=domain_phrases,
+            )
+        except Exception as exc:
+            return MediaQueryTaskResult(
+                plan_item_id=plan_item_id,
+                query=query,
+                platform_type=platform_type,
+                hits=[],
+                status="failed",
+                error=str(exc),
+            )
+        status = "completed" if hits else "insufficient"
+        return MediaQueryTaskResult(
+            plan_item_id=plan_item_id,
+            query=query,
+            platform_type=platform_type,
+            hits=hits,
+            status=status,
         )
 
     def _record_event(self, state: MediaEngineState, event: str, details: dict[str, object]) -> None:

@@ -9,10 +9,11 @@ import httpx
 from bs4 import BeautifulSoup
 
 from agent.QueryEngine.state.state import CrawledDocument, SearchHit
-from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
 from agent.QueryEngine.utils.ranking import is_result_relevant, score_url
 from agent.QueryEngine.utils.text_processing import extract_main_text
+from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
 
 
 SEARCH_PROVIDERS: list[tuple[str, str]] = [
@@ -88,12 +89,14 @@ class DomainKnowledgeCrawler:
         timeout: float = 3.0,
         user_agent: str = "KnowledgeForgeBot/0.1",
         trace: Callable[[str], None] | None = None,
+        crawl4ai_adapter: Crawl4AIAdapter | None = None,
     ) -> None:
         self._timeout = timeout
         self._headers = {"User-Agent": user_agent}
         self._trace = trace
         self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0), trace=trace)
         self._wiki = WikipediaFetcher(timeout=max(timeout * 2, 8.0))
+        self._crawl4ai = crawl4ai_adapter or Crawl4AIAdapter(enabled=False)
 
     def search(
         self,
@@ -161,6 +164,20 @@ class DomainKnowledgeCrawler:
         documents: list[CrawledDocument] = []
         with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
             for hit in hits[:max_documents]:
+                crawl4ai_content = self._fetch_with_crawl4ai(hit.url)
+                if crawl4ai_content:
+                    documents.append(
+                        CrawledDocument(
+                            title=hit.title,
+                            url=hit.url,
+                            snippet=hit.snippet,
+                            content=crawl4ai_content,
+                            source_type=hit.source_type,
+                            publisher=urlparse(hit.url).netloc or "unknown",
+                            score=hit.score,
+                        )
+                    )
+                    continue
                 browser_content = self._browser.fetch_text(hit.url)
                 if browser_content:
                     documents.append(
@@ -196,6 +213,15 @@ class DomainKnowledgeCrawler:
                     )
                 )
         return documents
+
+    def _fetch_with_crawl4ai(self, url: str) -> str:
+        result = self._crawl4ai.fetch_markdown(url)
+        if result.success:
+            self._log(f"[QUERY-FETCH][crawl4ai] success url={url}")
+            return result.markdown
+        if result.error:
+            self._log(f"[QUERY-FETCH][crawl4ai] failed url={url} error={result.error}")
+        return ""
 
     def _search_with_browser(
         self,

@@ -23,6 +23,7 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleEmbeddingClient,
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.time import now_iso
 
 QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
@@ -53,12 +54,14 @@ class QuerySearchNode(BaseQueryNode):
         event_callback: QueryEventCallback | None = None,
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
+        task_queue: RetrievalTaskQueue | None = None,
     ) -> None:
         super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
         self._crawler = crawler
         self._realtime_file_callback = realtime_file_callback
         self._max_concurrent_network_tasks = max(1, max_concurrent_network_tasks)
+        self._task_queue = task_queue
 
     def run(
         self,
@@ -215,8 +218,6 @@ class QuerySearchNode(BaseQueryNode):
         )
         if not plan_questions:
             return
-        max_workers = min(self._max_concurrent_network_tasks, len(plan_questions))
-        futures = {}
         for question in plan_questions:
             question.status = "in_progress"
             source_type = self._question_source_type(question)
@@ -225,20 +226,8 @@ class QuerySearchNode(BaseQueryNode):
                 "query_plan_item_started",
                 self._question_log_details(question, status=question.status),
             )
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for question in plan_questions:
-                source_type = self._question_source_type(question)
-                futures[
-                    executor.submit(
-                        self._run_question_task,
-                        state,
-                        question=question,
-                        source_type=source_type,
-                        domain_phrases=domain_phrases,
-                    )
-                ] = question
-            for future in as_completed(futures):
-                task_result = future.result()
+        task_results = self._run_question_tasks(state, plan_questions, domain_phrases)
+        for task_result in task_results:
                 question = task_result.question
                 question_hits = task_result.hits
                 for attempt in task_result.attempts:
@@ -334,6 +323,56 @@ class QuerySearchNode(BaseQueryNode):
                     "query_embeddings_failed",
                     {"document_count": len(state.crawled_documents)},
                 )
+
+    def _run_question_tasks(
+        self,
+        state: QueryEngineState,
+        questions: list[SearchQuestion],
+        domain_phrases: list[str],
+    ) -> list[QuestionTaskResult]:
+        if self._task_queue is None:
+            max_workers = min(self._max_concurrent_network_tasks, len(questions))
+            futures = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for question in questions:
+                    source_type = self._question_source_type(question)
+                    futures[
+                        executor.submit(
+                            self._run_question_task,
+                            state,
+                            question=question,
+                            source_type=source_type,
+                            domain_phrases=domain_phrases,
+                        )
+                    ] = question.plan_item_id
+                return [future.result() for future in as_completed(futures)]
+
+        queued_tasks = [
+            QueuedTaskSpec[QuestionTaskResult, None](
+                task_id=question.plan_item_id,
+                task_type="network_query_and_optional_llm_summary",
+                payload={
+                    "agent": "QueryEngine",
+                    "question": question.question,
+                    "query": question.google_query,
+                    "round": state.round_number,
+                },
+                network_call=lambda question=question, source_type=self._question_source_type(question): self._run_question_task(
+                    state,
+                    question=question,
+                    source_type=source_type,
+                    domain_phrases=domain_phrases,
+                ),
+            )
+            for question in questions
+        ]
+        queued_results = self._task_queue.run_tasks(queued_tasks)
+        ordered_results: list[QuestionTaskResult] = []
+        for queued_result in queued_results:
+            if queued_result.network_result is None:
+                raise RuntimeError(queued_result.error or f"Query task {queued_result.task_id} failed")
+            ordered_results.append(queued_result.network_result)
+        return ordered_results
 
     @staticmethod
     def _parse_questions(items: object) -> list[SearchQuestion]:

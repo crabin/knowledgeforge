@@ -18,6 +18,7 @@ from agent.QueryEngine.tools.crawler import (
 )
 from agent.QueryEngine.utils.ranking import is_result_relevant
 from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
 
 
 class MediaPerspectiveCrawler:
@@ -26,11 +27,13 @@ class MediaPerspectiveCrawler:
         timeout: float = 3.0,
         user_agent: str = "KnowledgeForgeMediaBot/0.1",
         trace: Callable[[str], None] | None = None,
+        crawl4ai_adapter: Crawl4AIAdapter | None = None,
     ) -> None:
         self._timeout = timeout
         self._headers = {"User-Agent": user_agent}
         self._trace = trace
         self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0), trace=trace)
+        self._crawl4ai = crawl4ai_adapter or Crawl4AIAdapter(enabled=False)
 
     def search(
         self,
@@ -69,6 +72,20 @@ class MediaPerspectiveCrawler:
         documents: list[MediaCrawledDocument] = []
         with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
             for hit in hits[:max_documents]:
+                crawl4ai_content = self._fetch_with_crawl4ai(hit.url)
+                if crawl4ai_content:
+                    documents.append(
+                        MediaCrawledDocument(
+                            title=hit.title,
+                            url=hit.url,
+                            snippet=hit.snippet,
+                            content=crawl4ai_content,
+                            platform_type=hit.platform_type,
+                            publisher=urlparse(hit.url).netloc or "unknown",
+                            score=hit.score,
+                        )
+                    )
+                    continue
                 browser_content = self._browser.fetch_text(hit.url)
                 if browser_content:
                     documents.append(
@@ -104,6 +121,15 @@ class MediaPerspectiveCrawler:
                     )
                 )
         return documents
+
+    def _fetch_with_crawl4ai(self, url: str) -> str:
+        result = self._crawl4ai.fetch_markdown(url)
+        if result.success:
+            self._log(f"[MEDIA-FETCH][crawl4ai] success url={url}")
+            return result.markdown
+        if result.error:
+            self._log(f"[MEDIA-FETCH][crawl4ai] failed url={url} error={result.error}")
+        return ""
 
     def _search_with_browser(
         self,

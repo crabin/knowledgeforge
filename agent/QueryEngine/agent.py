@@ -13,6 +13,7 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleEmbeddingClient,
 )
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.runtime.task_queue import RetrievalTaskQueue
 from knowledgeforge.utils.time import now_iso
 
 
@@ -27,6 +28,7 @@ class QueryEngine(BaseEngine):
         event_callback: QueryEventCallback | None = None,
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
+        task_queue: RetrievalTaskQueue | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._embedding_client = embedding_client
@@ -37,6 +39,7 @@ class QueryEngine(BaseEngine):
             event_callback=event_callback,
             realtime_file_callback=realtime_file_callback,
             max_concurrent_network_tasks=max_concurrent_network_tasks,
+            task_queue=task_queue,
         )
         self._reflection_node = QueryReflectionNode(
             chat_client=self._chat_client,
