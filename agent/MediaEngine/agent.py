@@ -12,6 +12,7 @@ from agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.runtime.task_queue import RetrievalTaskQueue
+from knowledgeforge.utils.paths import sanitize_path_segment
 from knowledgeforge.utils.time import now_iso
 
 
@@ -120,6 +121,8 @@ class MediaEngine(BaseEngine):
                         "module_label": item.module_label,
                         "source_kind": item.source_kind,
                         "planned_path": item.planned_path,
+                        "target_file_path": item.planned_path,
+                        "target_section": "正文",
                         "article_title": item.article_title,
                         "skip_reason": item.skip_reason,
                         "existing_path": item.existing_path,
@@ -209,6 +212,7 @@ class MediaEngine(BaseEngine):
             ],
             collected_at=timestamp,
             round_number=round_number,
+            artifacts=self._build_fallback_artifacts(context),
         )
 
     @staticmethod
@@ -218,3 +222,22 @@ class MediaEngine(BaseEngine):
         if platform_type == "community":
             return ["社区共识", "争议点", "实践反馈"]
         return ["趋势分析", "落地案例", "未来方向"]
+
+    @staticmethod
+    def _build_fallback_artifacts(context: RequestContext) -> list[dict[str, object]]:
+        artifacts: list[dict[str, object]] = []
+        domain_segment = sanitize_path_segment(context.domain, "domain")
+        for blueprint in context.knowledge_blueprint:
+            owners = [str(item) for item in blueprint.get("owner_engine_candidates", [])]
+            if "MediaEngine" not in owners:
+                continue
+            artifacts.append(
+                {
+                    "target_file_path": (Path("save") / domain_segment / str(blueprint.get("relative_path", ""))).as_posix(),
+                    "target_section": "正文",
+                    "state": "generated",
+                    "content": f"MediaEngine 为 {blueprint.get('title', '')} 保留趋势、社区观点或案例补充位。",
+                    "task_updates": [],
+                }
+            )
+        return artifacts

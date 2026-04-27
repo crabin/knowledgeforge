@@ -24,6 +24,7 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleEmbeddingClient,
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.utils.file_contract import parse_contract_block
 from knowledgeforge.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
@@ -124,6 +125,15 @@ class QuerySearchNode(BaseQueryNode):
     def _build_plan(self, state: QueryEngineState) -> SearchPlan:
         context = state.request_context
         self._normalize_domain(state)
+        blueprint_questions = self._questions_from_file_contracts(state)
+        if blueprint_questions:
+            return SearchPlan(
+                official_queries=[question.google_query for question in blueprint_questions],
+                tutorial_queries=[],
+                official_domains=[],
+                reasoning="优先读取知识文件骨架中的 query_tasks，按文件级证据槽位执行查询。",
+                questions=blueprint_questions,
+            )
         if self._chat_client is None:
             raise RuntimeError("QueryEngine plan generation requires an LLM chat client.")
         user_prompt = json.dumps(
@@ -179,6 +189,62 @@ class QuerySearchNode(BaseQueryNode):
             reasoning=str(payload.get("reasoning", "")).strip() or "官方优先，教程补充。",
             questions=questions,
         )
+
+    def _questions_from_file_contracts(self, state: QueryEngineState) -> list[SearchQuestion]:
+        if self._save_root is None:
+            return []
+        context = state.request_context
+        questions: list[SearchQuestion] = []
+        counter = 0
+        for blueprint in context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            file_path = self._save_root / sanitize_path_segment(context.domain, "domain") / relative_path
+            if not file_path.exists():
+                continue
+            contract = parse_contract_block(file_path.read_text(encoding="utf-8"))
+            if contract is None:
+                continue
+            for task in contract.get("query_tasks", []):
+                if str(task.get("status", "")).strip() == "completed":
+                    continue
+                question = str(task.get("claim_or_gap", "")).strip() or str(blueprint.get("title", file_path.stem))
+                query = str(task.get("query_intent", "")).strip()
+                if not query:
+                    continue
+                counter += 1
+                expected_info = [
+                    str(item).strip() for item in task.get("expected_evidence", []) if str(item).strip()
+                ]
+                source_priority = [
+                    str(item).strip() for item in task.get("preferred_source_types", []) if str(item).strip()
+                ] or ["official documentation", "standard"]
+                success_criteria = [
+                    str(item).strip() for item in task.get("acceptance_criteria", []) if str(item).strip()
+                ] or ["补齐可追溯来源"]
+                questions.append(
+                    SearchQuestion(
+                        question=question,
+                        google_query=query,
+                        expected_info=expected_info,
+                        source_priority=source_priority,
+                        success_criteria=success_criteria,
+                        fallback_queries=[],
+                        status="planned",
+                        plan_item_id=f"Q{counter}",
+                        search_targets=expected_info,
+                        subdomain=str(blueprint.get("subdomain", "")),
+                        doc_type=str(blueprint.get("doc_type", "article")),
+                        doc_role=str(blueprint.get("doc_role", "topic_article")),
+                        module_id=str(blueprint.get("module_id", "core_topics")),
+                        module_label=str(blueprint.get("module_label", "Core Topics")),
+                        article_title=str(blueprint.get("title", question)),
+                        planned_path=file_path.as_posix(),
+                        existing_path=str(task.get("task_id", "")),
+                    )
+                )
+        return questions
 
     @staticmethod
     def _dedupe_hits(hits):

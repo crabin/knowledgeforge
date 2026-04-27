@@ -218,6 +218,12 @@
 ## 实时文件审查保存结论
 - Query / Media 的合格资料不应等完整性评估后才落盘；按计划项实时保存能让补充决策读取更真实的领域 index。
 - 保存粒度采用“每个计划项一篇 Markdown”，比逐来源保存更可控，同时仍在 front matter 和证据表中保留每个 URL 的追溯信息。
+
+## 文件级知识库闭环结论
+- 仅用 `planned_path` 还不足以表达“整个知识领域应生成哪些文件、哪些文件必须完成、哪些证据还缺失”；需要把知识树提升为显式蓝图对象。
+- 把待查询信息写进 Markdown 固定 JSON 合同区块，比散落在 prompt 或 execution log 里更稳定，代码也能直接提取 `query_tasks` 做后续检索。
+- file-level 模式下，完整性评估不应继续强依赖旧的模块执行日志门禁；更稳的做法是优先看统一 artifact 状态，再把旧日志逻辑退回兼容兜底。
+- 三路 Engine 若不统一输出 `target_file_path` / `target_section`，Writer 就无法把背景、事实和趋势稳定地合并回同一知识文件，最终会重新回到“结果散落”的旧问题。
 - 领域索引继续使用 `save/{领域}/README.md`，不新增平行 `index.md`；每次实时保存后刷新“实时保存文档”区块。
 - 实时保存文档只能是 `draft`，不能替代最终综合文档、结构化治理、Neo4j 路径关联和质量检测。
 - 文件写入失败属于 `file_write_failed`，应进入 audit / execution log，但默认不打断 Query / Media 的采集线程。

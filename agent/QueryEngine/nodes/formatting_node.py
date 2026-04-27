@@ -80,6 +80,7 @@ class QueryFormattingNode(BaseQueryNode):
         tutorial_findings = [str(item) for item in payload.get("tutorial_findings", []) if str(item).strip()]
         key_points.extend([f"官方文档：{item}" for item in official_findings[:2]])
         key_points.extend([f"教程补充：{item}" for item in tutorial_findings[:1]])
+        artifacts = self._build_file_artifacts(state)
 
         return EngineRunResult(
             agent_name="QueryEngine",
@@ -97,6 +98,7 @@ class QueryFormattingNode(BaseQueryNode):
             collected_at=state.collected_at,
             round_number=state.round_number,
             execution_log=state.execution_log,
+            artifacts=artifacts,
         )
 
     @staticmethod
@@ -160,3 +162,42 @@ class QueryFormattingNode(BaseQueryNode):
                 snippet=tutorial_query,
             ),
         ]
+
+    @staticmethod
+    def _build_file_artifacts(state: QueryEngineState) -> list[dict[str, object]]:
+        by_path: dict[str, list] = {}
+        for question in (state.search_plan.questions if state.search_plan else []):
+            if not question.planned_path:
+                continue
+            by_path.setdefault(question.planned_path, []).append(question)
+        artifacts: list[dict[str, object]] = []
+        for path, questions in by_path.items():
+            completed = [question for question in questions if question.status == "completed"]
+            pending = [question for question in questions if question.status != "completed"]
+            task_updates = []
+            for question in questions:
+                citation = None
+                for doc in state.crawled_documents:
+                    if doc.plan_item_id == question.plan_item_id or doc.planned_path == question.planned_path:
+                        citation = {"title": doc.title, "url": doc.url, "publisher": doc.publisher}
+                        break
+                task_updates.append(
+                    {
+                        "task_id": question.existing_path or question.plan_item_id,
+                        "status": question.status,
+                        "citation": citation,
+                    }
+                )
+            artifacts.append(
+                {
+                    "target_file_path": path,
+                    "target_section": "证据与来源",
+                    "state": "completed" if questions and not pending else ("partially_completed" if completed else "insufficient"),
+                    "task_updates": task_updates,
+                    "resolved_claims": [question.question for question in completed],
+                    "remaining_gaps": [question.question for question in pending],
+                    "content": "；".join([question.question for question in completed[:3]]) or "待继续补充权威来源。",
+                    "query_hint": pending[0].google_query if pending else (questions[0].google_query if questions else ""),
+                }
+            )
+        return artifacts

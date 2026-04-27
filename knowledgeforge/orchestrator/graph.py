@@ -49,6 +49,10 @@ class KnowledgeGraphWorkflow:
         context = state["request_context"]
         round_number = state.get("round_number", 1)
         self._append_workflow_event(state, "planning", "三路计划生成", "active")
+        state["knowledge_file_states"] = self._writer.materialize_knowledge_base(
+            context=context,
+            round_number=round_number,
+        )
         plans = {}
         for name, engine in (
             ("InsightEngine", self._insight_engine),
@@ -88,7 +92,11 @@ class KnowledgeGraphWorkflow:
             "planning",
             "三路计划生成",
             "completed",
-            {"agents": sorted(plans), "plan_document_paths": plan_document_paths},
+            {
+                "agents": sorted(plans),
+                "plan_document_paths": plan_document_paths,
+                "knowledge_file_count": len(state.get("knowledge_file_states", [])),
+            },
         )
         self._append_workflow_event(state, "awaiting_confirmation", "等待用户确认计划", "active")
         return state

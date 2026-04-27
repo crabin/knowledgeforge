@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from knowledgeforge.models import CompletenessResult, EngineRunResult, RequestContext
 
 
@@ -17,7 +19,8 @@ class CompletenessEvaluator:
         expected_topics = context.core_topics or context.subdomains
         missing_topics = [topic for topic in expected_topics if topic not in covered_topics]
         completed_structure = self._completed_structure_nodes(outputs)
-        if completed_structure["modules"] or completed_structure["topic_overviews"]:
+        use_legacy_structure_gate = context.completion_mode != "file_level"
+        if use_legacy_structure_gate and (completed_structure["modules"] or completed_structure["topic_overviews"]):
             required_modules = {"overview", "foundations", "papers"}
             missing_modules = sorted(required_modules - completed_structure["modules"])
             missing_topic_roles = [
@@ -35,6 +38,9 @@ class CompletenessEvaluator:
         ]
         has_authoritative_sources = bool(authoritative_sources)
 
+        file_gaps = self._file_level_gaps(context, outputs)
+        if context.required_files and not file_gaps:
+            missing_topics = []
         reasons: list[str] = []
         failure_categories: list[str] = []
         if not all_sources:
@@ -56,6 +62,9 @@ class CompletenessEvaluator:
         if insufficient_plan_items:
             reasons.append("QueryEngine 查询计划仍存在未完成项，不能进入最终入库。")
             failure_categories.append("query_plan_incomplete")
+        if file_gaps:
+            reasons.append("文件级知识骨架仍存在未完成项。")
+            failure_categories.append("file_completion_incomplete")
 
         if reasons:
             if missing_topics:
@@ -78,6 +87,8 @@ class CompletenessEvaluator:
                     item.get("query", item.get("question", "补充查询"))
                     for item in insufficient_plan_items[:5]
                 ]
+            elif file_gaps:
+                supplement_queries = [item["query"] for item in file_gaps[:5] if item.get("query")]
             else:
                 supplement_queries = [
                     f"{context.domain} official introduction authoritative source",
@@ -135,3 +146,35 @@ class CompletenessEvaluator:
                 if doc_role in {"topic_overview", "topic_article"} and subdomain:
                     topic_overviews.add(subdomain)
         return {"modules": modules, "topic_overviews": topic_overviews}
+
+    @staticmethod
+    def _file_level_gaps(context: RequestContext, outputs: dict[str, EngineRunResult]) -> list[dict[str, str]]:
+        if not context.required_files:
+            return []
+        artifact_statuses: dict[str, str] = {}
+        artifact_queries: dict[str, str] = {}
+        for output in outputs.values():
+            for artifact in output.artifacts:
+                path = CompletenessEvaluator._canonical_file_key(str(artifact.get("target_file_path", "")).strip())
+                if not path:
+                    continue
+                artifact_statuses[path] = str(artifact.get("state", "generated"))
+                if artifact.get("query_hint"):
+                    artifact_queries[path] = str(artifact.get("query_hint"))
+        gaps: list[dict[str, str]] = []
+        for file_path in context.required_files:
+            key = CompletenessEvaluator._canonical_file_key(file_path)
+            status = artifact_statuses.get(key)
+            if status in {None, "completed", "generated"}:
+                continue
+            path = Path(file_path)
+            query_hint = artifact_queries.get(key, f"{context.domain} {path.stem} 官方资料")
+            gaps.append({"file_path": file_path, "query": query_hint})
+        return gaps
+
+    @staticmethod
+    def _canonical_file_key(path: str) -> str:
+        normalized = path.replace("\\", "/").strip()
+        if "/save/" in normalized:
+            return normalized[normalized.index("/save/") + 1 :]
+        return normalized

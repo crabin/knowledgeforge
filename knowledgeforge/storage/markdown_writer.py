@@ -11,9 +11,11 @@ from knowledgeforge.models import (
     DocumentArtifact,
     EnginePlan,
     EngineRunResult,
+    KnowledgeFileState,
     RequestContext,
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeFileReviewer
+from knowledgeforge.utils.file_contract import parse_contract_block, render_contract_block, replace_contract_block
 from knowledgeforge.utils.knowledge_tree import module_directory, module_labels_by_id, plan_path_for_role
 from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso, today_compact
@@ -22,6 +24,56 @@ from knowledgeforge.utils.time import now_iso, today_compact
 class MarkdownKnowledgeWriter:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+
+    def materialize_knowledge_base(
+        self,
+        *,
+        context: RequestContext,
+        round_number: int,
+    ) -> list[dict[str, object]]:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        ensure_directory(domain_dir)
+        states: list[dict[str, object]] = []
+        timestamp = now_iso()
+        for blueprint in context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            file_path = domain_dir / relative_path
+            ensure_directory(file_path.parent)
+            if not file_path.exists():
+                file_path.write_text(
+                    self._render_blueprint_skeleton(
+                        context=context,
+                        blueprint=blueprint,
+                        round_number=round_number,
+                        file_path=file_path,
+                        timestamp=timestamp,
+                    ),
+                    encoding="utf-8",
+                )
+            contract = parse_contract_block(file_path.read_text(encoding="utf-8"))
+            states.append(
+                KnowledgeFileState(
+                    file_id=str(blueprint.get("file_id", file_path.stem)),
+                    file_path=file_path.as_posix(),
+                    module_id=str(blueprint.get("module_id", "")),
+                    subdomain=str(blueprint.get("subdomain", "")),
+                    status=str((contract or {}).get("completion_status", {}).get("state", "generated")),  # type: ignore[arg-type]
+                    owner_engines=[str(item) for item in blueprint.get("owner_engine_candidates", [])],
+                    pending_task_ids=[
+                        str(item.get("task_id", ""))
+                        for item in (contract or {}).get("query_tasks", [])
+                        if str(item.get("status", "")).strip() != "completed"
+                    ],
+                    completed_task_ids=[
+                        str(item.get("task_id", ""))
+                        for item in (contract or {}).get("query_tasks", [])
+                        if str(item.get("status", "")).strip() == "completed"
+                    ],
+                ).to_dict()
+            )
+        return states
 
     def write_agent_plan_documents(
         self,
@@ -112,6 +164,8 @@ class MarkdownKnowledgeWriter:
         round_number: int,
     ) -> DocumentArtifact:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        generated_files = [item["file_path"] for item in self.materialize_knowledge_base(context=context, round_number=round_number)]
+        self._apply_output_artifacts(context, outputs)
         subdomain = context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用")
         subdomain_dir = domain_dir / "02_core_topics" / sanitize_path_segment(subdomain, "general")
         ensure_directory(subdomain_dir)
@@ -134,6 +188,7 @@ class MarkdownKnowledgeWriter:
             module_id="core_topics",
             module_label="Core Topics",
             doc_role="topic_article",
+            generated_files=generated_files,
         )
 
         document_body = self._render_document(artifact, context, outputs, completeness, round_number)
@@ -156,6 +211,214 @@ class MarkdownKnowledgeWriter:
         ensure_directory(domain_dir)
         document_path.write_text(document_body, encoding="utf-8")
         return artifact
+
+    def _render_blueprint_skeleton(
+        self,
+        *,
+        context: RequestContext,
+        blueprint: dict[str, object],
+        round_number: int,
+        file_path: Path,
+        timestamp: str,
+    ) -> str:
+        title = str(blueprint.get("title", file_path.stem))
+        subdomain = str(blueprint.get("subdomain", ""))
+        source_type = "mixed" if "QueryEngine" in blueprint.get("owner_engine_candidates", []) else "insight"
+        front_matter = {
+            "id": str(blueprint.get("file_id", file_path.stem)),
+            "title": title,
+            "domain": context.domain,
+            "subdomain": subdomain,
+            "doc_type": str(blueprint.get("doc_type", "article")),
+            "source_type": source_type,
+            "agent": "KnowledgeForge",
+            "round": round_number,
+            "status": "draft",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "version": "v1",
+            "path": file_path.as_posix(),
+            "tags": [str(blueprint.get("module_id", "")), *(context.focus_points or [])],
+            "sources": [
+                {
+                    "title": "Knowledge blueprint scaffold",
+                    "url": "local://knowledge-blueprint",
+                    "publisher": "KnowledgeForge",
+                    "retrieved_at": timestamp,
+                    "reliability": "unknown",
+                }
+            ],
+        }
+        contract = self._initial_contract(context, blueprint, file_path)
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        body_title = f"# {title}"
+        return "\n".join(
+            [
+                "---",
+                front_matter_text,
+                "---",
+                "",
+                body_title,
+                "",
+                "## 摘要",
+                "",
+                "该文件是根据知识库蓝图自动生成的骨架文档，后续会由对应 Engine 按职责逐步补全。",
+                "",
+                "## 关键结论",
+                "",
+                "- 当前为骨架状态。",
+                "- 需要结合来源与查询任务补齐证据。",
+                "",
+                "## 背景与上下文",
+                "",
+                f"- 模块：{blueprint.get('module_label', blueprint.get('module_id', ''))}",
+                f"- 子领域：{subdomain or '通用'}",
+                f"- 负责 Engine：{', '.join(str(item) for item in blueprint.get('owner_engine_candidates', [])) or '未指定'}",
+                "",
+                "## 正文",
+                "",
+                f"### {title}",
+                "",
+                "待补充。",
+                "",
+                "## 证据与来源",
+                "",
+                "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                "|---|---|---|---|---|",
+                "| S0 | Blueprint scaffold | 初始骨架生成 | unknown | 待补充真实来源 |",
+                "",
+                "## 实体与关系候选",
+                "",
+                "### 实体候选",
+                "",
+                "| 实体 | 类型 | 描述 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | Domain | 目标领域 | S0 |",
+                "",
+                "### 关系候选",
+                "",
+                "| 主体 | 关系 | 客体 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | contains | {title} | S0 |",
+                "",
+                "## 冲突与不确定性",
+                "",
+                "- 待补充。",
+                "",
+                "## 后续动作",
+                "",
+                "- 根据 JSON 合同中的 query_tasks 补证据。",
+                "",
+                render_contract_block(contract),
+                "",
+                "## 变更记录",
+                "",
+                "| 版本 | 时间 | 变更说明 |",
+                "|---|---|---|",
+                f"| v1 | {timestamp[:10]} | 初始骨架创建 |",
+                "",
+            ]
+        )
+
+    def _initial_contract(
+        self,
+        context: RequestContext,
+        blueprint: dict[str, object],
+        file_path: Path,
+    ) -> dict[str, object]:
+        section_plan = ["摘要", "关键结论", "背景与上下文", "正文", "证据与来源", "冲突与不确定性", "后续动作"]
+        query_tasks: list[dict[str, object]] = []
+        requirements = blueprint.get("completion_requirements", {})
+        query_task_count = 0
+        if isinstance(requirements, dict):
+            query_task_count = int(requirements.get("required_query_tasks", 0) or 0)
+        if query_task_count > 0:
+            query_tasks.append(
+                {
+                    "task_id": f"{blueprint.get('file_id', file_path.stem)}-query-1",
+                    "file_path": file_path.as_posix(),
+                    "section": "证据与来源",
+                    "claim_or_gap": f"为 {blueprint.get('title', file_path.stem)} 补充可追溯权威依据",
+                    "query_intent": f"{context.domain} {blueprint.get('subdomain') or blueprint.get('title')} 官方资料",
+                    "expected_evidence": ["官方定义", "权威说明", "来源链接"],
+                    "preferred_source_types": ["official documentation", "standard", "vendor docs"],
+                    "acceptance_criteria": ["至少命中一个中高可信来源", "结论可回写到文档证据表"],
+                    "status": "planned",
+                }
+            )
+        return {
+            "file_id": str(blueprint.get("file_id", file_path.stem)),
+            "file_path": file_path.as_posix(),
+            "section_plan": section_plan,
+            "claims": [f"{blueprint.get('title', file_path.stem)} 需要形成清晰、可追溯的知识说明。"],
+            "evidence_needed": ["权威定义", "关键结论对应来源", "必要时补充案例或趋势背景"],
+            "query_tasks": query_tasks,
+            "engine_contributions": {
+                "InsightEngine": "负责背景、结构骨架和本地知识线索",
+                "QueryEngine": "负责权威事实和证据闭环",
+                "MediaEngine": "负责趋势、社区观点和案例语境",
+            },
+            "completion_status": {
+                "state": "generated",
+                "required": bool(isinstance(requirements, dict) and requirements.get("required")),
+                "completed_task_ids": [],
+                "pending_task_ids": [str(item["task_id"]) for item in query_tasks],
+            },
+        }
+
+    def _apply_output_artifacts(self, context: RequestContext, outputs: dict[str, EngineRunResult]) -> None:
+        for agent_name, output in outputs.items():
+            for artifact in output.artifacts:
+                file_path = self._resolve_artifact_path(str(artifact.get("target_file_path", "")).strip())
+                if not file_path.exists():
+                    continue
+                text = file_path.read_text(encoding="utf-8")
+                contract = parse_contract_block(text)
+                if contract is None:
+                    continue
+                task_updates = {str(item.get("task_id", "")): item for item in artifact.get("task_updates", [])}
+                for task in contract.get("query_tasks", []):
+                    task_id = str(task.get("task_id", ""))
+                    update = task_updates.get(task_id)
+                    if update:
+                        task["status"] = update.get("status", task.get("status", "planned"))
+                        if update.get("citation"):
+                            task["citation"] = update["citation"]
+                status = str(artifact.get("state", contract.get("completion_status", {}).get("state", "generated")))
+                completed = [str(item.get("task_id", "")) for item in contract.get("query_tasks", []) if str(item.get("status", "")) == "completed"]
+                pending = [str(item.get("task_id", "")) for item in contract.get("query_tasks", []) if str(item.get("status", "")) != "completed"]
+                contract["completion_status"] = {
+                    **contract.get("completion_status", {}),
+                    "state": status,
+                    "completed_task_ids": completed,
+                    "pending_task_ids": pending,
+                    "updated_by": agent_name,
+                }
+                updated_text = replace_contract_block(text, contract)
+                contribution = str(artifact.get("content", "")).strip()
+                if contribution:
+                    updated_text = self._append_agent_contribution(updated_text, agent_name, contribution)
+                file_path.write_text(updated_text, encoding="utf-8")
+
+    def _resolve_artifact_path(self, path: str) -> Path:
+        candidate = Path(path)
+        if candidate.exists():
+            return candidate
+        normalized = path.replace("\\", "/").strip()
+        if normalized.startswith("save/"):
+            return self._config.save_root / normalized[len("save/") :]
+        return candidate
+
+    @staticmethod
+    def _append_agent_contribution(text: str, agent_name: str, contribution: str) -> str:
+        marker = f"### {agent_name} 贡献"
+        if marker in text:
+            return text
+        insert_at = "## 证据与来源"
+        block = "\n".join([marker, "", contribution, ""])
+        if insert_at in text:
+            return text.replace(insert_at, f"{block}\n{insert_at}", 1)
+        return f"{text}\n{block}\n"
 
     def _write_query_plan_document(
         self,
@@ -707,40 +970,45 @@ class MarkdownKnowledgeWriter:
     ) -> list[str]:
         ensure_directory(domain_dir)
         paths: list[str] = []
-        domain_readme = self._render_domain_readme(context, outputs, domain_dir)
         readme_path = domain_dir / "README.md"
-        readme_path.write_text(domain_readme, encoding="utf-8")
+        if not readme_path.exists():
+            readme_path.write_text(self._render_domain_readme(context, outputs, domain_dir), encoding="utf-8")
         paths.append(readme_path.as_posix())
         domain_index_path = domain_dir / "index.md"
-        domain_index_path.write_text(RealtimeFileReviewer.render_domain_navigation(context, domain_dir), encoding="utf-8")
+        if not domain_index_path.exists():
+            domain_index_path.write_text(RealtimeFileReviewer.render_domain_navigation(context, domain_dir), encoding="utf-8")
         paths.append(domain_index_path.as_posix())
         for module in context.knowledge_modules:
             module_dir = domain_dir / module["directory"]
             ensure_directory(module_dir)
             module_readme = module_dir / "README.md"
             module_index = module_dir / "index.md"
-            module_readme.write_text(
-                RealtimeFileReviewer.render_module_overview(context, module["module_id"], module_dir),
-                encoding="utf-8",
-            )
-            module_index.write_text(
-                RealtimeFileReviewer.render_module_index(context, module["module_id"], module_dir),
-                encoding="utf-8",
-            )
+            if not module_readme.exists():
+                module_readme.write_text(
+                    RealtimeFileReviewer.render_module_overview(context, module["module_id"], module_dir),
+                    encoding="utf-8",
+                )
+            if not module_index.exists():
+                module_index.write_text(
+                    RealtimeFileReviewer.render_module_index(context, module["module_id"], module_dir),
+                    encoding="utf-8",
+                )
             paths.extend([module_readme.as_posix(), module_index.as_posix()])
         for topic in (context.core_topics or context.subdomains):
             topic_dir = domain_dir / "02_core_topics" / sanitize_path_segment(topic, "topic")
             ensure_directory(topic_dir)
             topic_readme = topic_dir / "README.md"
             topic_index = topic_dir / "index.md"
-            topic_readme.write_text(
-                RealtimeFileReviewer.render_subdomain_overview(context, topic_dir, topic),
-                encoding="utf-8",
-            )
-            topic_index.write_text(
-                RealtimeFileReviewer.render_subdomain_index(context, topic_dir, topic),
-                encoding="utf-8",
-            )
+            if not topic_readme.exists():
+                topic_readme.write_text(
+                    RealtimeFileReviewer.render_subdomain_overview(context, topic_dir, topic),
+                    encoding="utf-8",
+                )
+            if not topic_index.exists():
+                topic_index.write_text(
+                    RealtimeFileReviewer.render_subdomain_index(context, topic_dir, topic),
+                    encoding="utf-8",
+                )
             paths.extend([topic_readme.as_posix(), topic_index.as_posix()])
         return paths
 

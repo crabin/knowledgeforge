@@ -89,6 +89,7 @@ class MediaFormattingNode(BaseMediaNode):
             collected_at=state.collected_at,
             round_number=state.round_number,
             execution_log=state.execution_log,
+            artifacts=self._build_file_artifacts(state),
         )
 
     @staticmethod
@@ -159,3 +160,22 @@ class MediaFormattingNode(BaseMediaNode):
                 snippet=blog_query,
             ),
         ]
+
+    @staticmethod
+    def _build_file_artifacts(state: MediaEngineState) -> list[dict[str, object]]:
+        artifacts: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in (state.search_plan.items if state.search_plan else []):
+            if not item.planned_path or item.planned_path in seen:
+                continue
+            seen.add(item.planned_path)
+            artifacts.append(
+                {
+                    "target_file_path": item.planned_path,
+                    "target_section": "正文",
+                    "state": "generated" if item.status != "completed" else "partially_completed",
+                    "content": f"MediaEngine 已补充 {item.platform_type} 侧的观点、趋势或案例语境。",
+                    "task_updates": [],
+                }
+            )
+        return artifacts

@@ -9,6 +9,7 @@ TaskIntent = Literal["knowledge_collection", "concept_explanation", "qa"]
 CompletenessStatus = Literal["pass", "supplement_required"]
 GovernanceStatus = Literal["passed", "failed"]
 RemediationFlow = Literal["repair_flow", "research_flow"]
+FileCompletionState = Literal["planned", "generated", "querying", "partially_completed", "completed", "insufficient", "blocked"]
 FailureCategory = Literal[
     "file_write_failed",
     "graph_write_failed",
@@ -64,6 +65,9 @@ class RequestContext:
     core_topics: list[str] = field(default_factory=list)
     structure_mode: str = "layered_knowledge_tree"
     navigation_targets: list[dict[str, str]] = field(default_factory=list)
+    knowledge_blueprint: list[dict[str, Any]] = field(default_factory=list)
+    required_files: list[str] = field(default_factory=list)
+    completion_mode: str = "file_level"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,6 +119,7 @@ class EngineRunResult:
     collected_at: str
     round_number: int
     execution_log: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -197,6 +202,68 @@ class DocumentArtifact:
     module_label: str = ""
     doc_role: str = "topic_article"
     navigation_paths: list[str] = field(default_factory=list)
+    generated_files: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class KnowledgeFileBlueprint:
+    file_id: str
+    title: str
+    module_id: str
+    module_label: str
+    doc_role: str
+    relative_path: str
+    subdomain: str
+    doc_type: str
+    owner_engine_candidates: list[str] = field(default_factory=list)
+    completion_requirements: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class EvidenceTask:
+    task_id: str
+    file_path: str
+    section: str
+    claim_or_gap: str
+    query_intent: str
+    expected_evidence: list[str]
+    preferred_source_types: list[str]
+    acceptance_criteria: list[str]
+    status: FileCompletionState | Literal["planned", "completed", "insufficient"] = "planned"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class EvidenceResolution:
+    task_id: str
+    file_path: str
+    resolved_claims: list[str]
+    citations: list[dict[str, str]]
+    remaining_gaps: list[str]
+    task_status: FileCompletionState | Literal["completed", "insufficient"] = "completed"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class KnowledgeFileState:
+    file_id: str
+    file_path: str
+    module_id: str
+    subdomain: str
+    status: FileCompletionState = "planned"
+    owner_engines: list[str] = field(default_factory=list)
+    pending_task_ids: list[str] = field(default_factory=list)
+    completed_task_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

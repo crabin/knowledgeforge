@@ -7,6 +7,7 @@ from agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.utils.knowledge_tree import plan_path_for_role
+from knowledgeforge.utils.paths import sanitize_path_segment
 from knowledgeforge.utils.time import now_iso
 
 
@@ -80,6 +81,16 @@ class InsightEngine(BaseEngine):
                     "module_label": "Overview",
                     "subdomain": "领域总览",
                     "doc_role": "domain_overview",
+                    "target_file_path": plan_path_for_role(
+                        save_root=Path("save"),
+                        domain=context.domain,
+                        module_id="overview",
+                        subdomain="",
+                        doc_role="domain_overview",
+                        title=f"{context.domain} Overview",
+                        suffix="insight",
+                    ),
+                    "target_section": "背景与上下文",
                     "planned_path": plan_path_for_role(
                         save_root=Path("save"),
                         domain=context.domain,
@@ -105,6 +116,16 @@ class InsightEngine(BaseEngine):
                     "module_label": "Overview",
                     "subdomain": "领域导航",
                     "doc_role": "domain_index",
+                    "target_file_path": plan_path_for_role(
+                        save_root=Path("save"),
+                        domain=context.domain,
+                        module_id="overview",
+                        subdomain="",
+                        doc_role="domain_index",
+                        title=f"{context.domain} Index",
+                        suffix="insight",
+                    ),
+                    "target_section": "正文",
                     "planned_path": plan_path_for_role(
                         save_root=Path("save"),
                         domain=context.domain,
@@ -138,6 +159,16 @@ class InsightEngine(BaseEngine):
                         "module_label": "Overview",
                         "subdomain": context.core_topics[min(index - 1, len(context.core_topics) - 1)] if context.core_topics else "领域概览",
                         "doc_role": "module_doc",
+                        "target_file_path": plan_path_for_role(
+                            save_root=Path("save"),
+                            domain=context.domain,
+                            module_id="overview",
+                            subdomain="",
+                            doc_role="module_doc",
+                            title=str(item.get("title", "")).strip() or f"{context.domain} insight",
+                            suffix="insight",
+                        ),
+                        "target_section": "正文",
                         "planned_path": plan_path_for_role(
                             save_root=Path("save"),
                             domain=context.domain,
@@ -178,6 +209,7 @@ class InsightEngine(BaseEngine):
                     },
                 }
             )
+        artifacts = self._build_artifacts(context)
         return EngineRunResult(
             agent_name=self.name,
             summary=f"基于已有规划，整理 {context.domain} 的内部知识框架与关键背景。",
@@ -204,4 +236,29 @@ class InsightEngine(BaseEngine):
             collected_at=timestamp,
             round_number=round_number,
             execution_log=execution_log,
+            artifacts=artifacts,
         )
+
+    @staticmethod
+    def _build_artifacts(context: RequestContext) -> list[dict[str, object]]:
+        artifacts: list[dict[str, object]] = []
+        domain_segment = sanitize_path_segment(context.domain, "domain")
+        for blueprint in context.knowledge_blueprint:
+            owners = [str(item) for item in blueprint.get("owner_engine_candidates", [])]
+            if "InsightEngine" not in owners:
+                continue
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            path = (Path("save") / domain_segment / relative_path).as_posix()
+            state = "completed" if blueprint.get("doc_role") in {"domain_overview", "domain_index", "module_overview", "module_index", "topic_index"} else "generated"
+            artifacts.append(
+                {
+                    "target_file_path": path,
+                    "target_section": "背景与上下文",
+                    "state": state,
+                    "content": f"InsightEngine 已为 {blueprint.get('title', '')} 提供结构背景与本地知识线索。",
+                    "task_updates": [],
+                }
+            )
+        return artifacts

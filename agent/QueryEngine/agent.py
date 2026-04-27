@@ -147,6 +147,8 @@ class QueryEngine(BaseEngine):
                         "publisher": question.publisher,
                         "source_kind": question.source_kind,
                         "planned_path": question.planned_path,
+                        "target_file_path": question.planned_path,
+                        "target_section": "证据与来源",
                         "article_title": question.article_title,
                         "review_status": question.review_status,
                         "skip_reason": question.skip_reason,

@@ -4,7 +4,9 @@ from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS
 from knowledgeforge.utils.knowledge_tree import (
     build_default_modules,
+    build_knowledge_blueprint,
     build_navigation_targets,
+    build_required_file_paths,
     normalize_core_topics,
 )
 
@@ -34,6 +36,8 @@ class ContextBuilder:
         knowledge_modules = build_default_modules()
         core_topics = normalize_core_topics(subdomains, domain)
         navigation_targets = build_navigation_targets(domain, core_topics)
+        knowledge_blueprint = build_knowledge_blueprint(domain, core_topics)
+        required_files = build_required_file_paths(domain, knowledge_blueprint)
 
         initial_strategy = [
             f"围绕 {normalized_domain} 的 {topic} 收集可追溯资料"
@@ -58,6 +62,8 @@ class ContextBuilder:
             knowledge_modules=knowledge_modules,
             core_topics=core_topics,
             navigation_targets=navigation_targets,
+            knowledge_blueprint=knowledge_blueprint,
+            required_files=required_files,
         )
 
     @staticmethod

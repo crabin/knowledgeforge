@@ -7,6 +7,12 @@
 阶段 8：版本冻结与研报分支已完成
 
 ## 下一轮增强 / 当前进行中的补充工作
+- 文件级知识库架构落地
+  - 已完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode=file_level`，把知识树从纯路径工具升级为可执行蓝图。
+  - 已完成：Writer 在计划阶段前先全量物化知识库骨架文件，并为每个文件写入 front matter + 固定 JSON 合同。
+  - 已完成：QueryEngine 优先从知识文件 JSON 合同提取 `query_tasks`，按文件级证据槽位执行检索。
+  - 已完成：三路 Engine 输出统一携带 `target_file_path` / `target_section` / `artifacts`，可回写到同一文件树。
+  - 已完成：完整性评估切入 file-level 模式，优先依据文件级 artifact 状态判断，而不是只看旧的 topic/module 执行痕迹。
 - 前端动作实时展示修复
   - 已完成：统一直接创建任务与 intake 确认任务的异步启动路径，避免确认时同步阻塞页面。
   - 已完成：QueryEngine 实时事件写入 audit log 的同时刷新任务快照，让前端轮询任务详情时能看到当前动作、更新时间和中间日志。
