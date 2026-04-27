@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from agent.MediaEngine.nodes.base_node import BaseMediaNode
+from agent.MediaEngine.nodes.search_node import MediaSearchNode
 from agent.MediaEngine.prompts.prompts import MEDIA_REFLECTION_SYSTEM_PROMPT
 from agent.MediaEngine.state.state import MediaEngineState, MediaReflectionPlan
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
@@ -48,23 +49,30 @@ class MediaReflectionNode(BaseMediaNode):
                 system_prompt=MEDIA_REFLECTION_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
+            existing_social = list(state.search_plan.social_queries) if state.search_plan else []
+            existing_community = list(state.search_plan.community_queries) if state.search_plan else []
+            existing_blog = list(state.search_plan.blog_queries) if state.search_plan else []
             return MediaReflectionPlan(
                 missing_aspects=[str(item).strip() for item in payload.get("missing_aspects", []) if str(item).strip()],
-                supplementary_social_queries=[
-                    str(item).strip()
-                    for item in payload.get("supplementary_social_queries", [])
-                    if str(item).strip()
-                ],
-                supplementary_community_queries=[
-                    str(item).strip()
-                    for item in payload.get("supplementary_community_queries", [])
-                    if str(item).strip()
-                ],
-                supplementary_blog_queries=[
-                    str(item).strip()
-                    for item in payload.get("supplementary_blog_queries", [])
-                    if str(item).strip()
-                ],
+                supplementary_social_queries=MediaSearchNode._dedupe_queries(
+                    [str(item).strip() for item in payload.get("supplementary_social_queries", []) if str(item).strip()],
+                    limit=1,
+                    existing_queries=existing_social,
+                ),
+                supplementary_community_queries=MediaSearchNode._dedupe_queries(
+                    [
+                        str(item).strip()
+                        for item in payload.get("supplementary_community_queries", [])
+                        if str(item).strip()
+                    ],
+                    limit=2,
+                    existing_queries=existing_community,
+                ),
+                supplementary_blog_queries=MediaSearchNode._dedupe_queries(
+                    [str(item).strip() for item in payload.get("supplementary_blog_queries", []) if str(item).strip()],
+                    limit=1,
+                    existing_queries=existing_blog,
+                ),
                 reasoning=str(payload.get("reasoning", "")).strip() or "已完成首轮趋势反思。",
             )
         except Exception:

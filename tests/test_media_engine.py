@@ -150,6 +150,49 @@ class FakeMediaPlanningOnlyChatClient:
         }
 
 
+class DuplicateSupplementMediaChatClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "normalized_domain": "deep learning",
+                "aliases": ["deep learning"],
+                "search_terms": ["deep learning"],
+                "reasoning": "术语已归一化。",
+            }
+        if self.calls == 2:
+            return {
+                "social_queries": ['site:reddit.com/r/MachineLearning "deep learning" discussion'],
+                "community_queries": ['site:news.ycombinator.com "deep learning" discussion'],
+                "blog_queries": ['"deep learning" engineering blog trend'],
+                "reasoning": "先做首轮查询。",
+                "is_technical": True,
+            }
+        if self.calls == 3:
+            return {
+                "missing_aspects": ["补充社区反馈"],
+                "supplementary_social_queries": [],
+                "supplementary_community_queries": [
+                    'site:github.com/discussions "deep learning" community discussion',
+                    'site:v2ex.com "deep learning" discussion',
+                ],
+                "supplementary_blog_queries": [],
+                "reasoning": "尝试补社区反馈。",
+            }
+        return {
+            "summary": "趋势总结已生成。",
+            "current_sentiment": "整体积极。",
+            "mainstream_views": [],
+            "debates": [],
+            "adoption_signals": [],
+            "future_directions": [],
+            "coverage_topics": ["基础概览"],
+        }
+
+
 class FailingExecutionChatClient:
     def complete_json(self, *, system_prompt: str, user_prompt: str):
         raise AssertionError("MediaEngine.plan() must not use the execution chat client")
@@ -227,6 +270,27 @@ def test_media_engine_returns_trend_oriented_summary_for_technical_domain() -> N
     assert any("反思结论：" in item for item in result.raw_material)
     assert any("检索轨迹：" in item for item in result.raw_material)
     assert any(query == "LangGraph production engineering blog adoption" for _, query in crawler.queries)
+
+
+def test_media_engine_skips_semantically_duplicate_supplement_queries() -> None:
+    crawler = FakeMediaCrawler()
+    engine = MediaEngine(
+        chat_client=DuplicateSupplementMediaChatClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="deep learning",
+        subdomains=["模型训练"],
+        time_window="近 12 个月",
+        focus_points=["社区观点"],
+        constraints=[],
+        initial_strategy=["deep learning community trend"],
+    )
+
+    engine.run(context, round_number=1)
+
+    community_queries = [query for platform, query in crawler.queries if platform == "community"]
+    assert community_queries == ['site:news.ycombinator.com "deep learning" discussion']
 
 
 def test_media_engine_run_without_llm_plan_fails_early() -> None:

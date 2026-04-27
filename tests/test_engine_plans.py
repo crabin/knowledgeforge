@@ -131,8 +131,10 @@ def test_query_and_media_plans_dedupe_repeated_queries() -> None:
                 payload["questions"] = [payload["questions"][0], dict(payload["questions"][0])]
             elif "MediaEngine" in system_prompt:
                 payload["community_queries"] = [
-                    "knowledge engineering community discussion",
-                    "knowledge engineering community discussion",
+                    'site:news.ycombinator.com "knowledge engineering" discussion',
+                    'site:github.com/discussions "knowledge engineering" community discussion',
+                    'site:v2ex.com "knowledge engineering" forum discussion',
+                    'site:reddit.com "knowledge engineering" community discussion',
                 ]
             return payload
 
@@ -145,7 +147,7 @@ def test_query_and_media_plans_dedupe_repeated_queries() -> None:
         item.query_or_action
         for item in media_plan.plan_items
         if "community" in item.source_priority
-    ] == ["knowledge engineering community discussion"]
+    ] == ['site:news.ycombinator.com "knowledge engineering" discussion']
 
 
 def test_plan_generation_requires_llm() -> None:

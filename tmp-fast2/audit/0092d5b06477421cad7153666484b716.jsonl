@@ -1,3 +1,0 @@
-{"task_id": "0092d5b06477421cad7153666484b716", "event": "task_created", "timestamp": "2026-04-24T02:20:33+09:00", "details": {"domain": "知识工程", "round": 1}}
-{"task_id": "0092d5b06477421cad7153666484b716", "event": "version_frozen", "timestamp": "2026-04-24T02:20:33+09:00", "details": {"version": "v1", "document_id": "article-e05ee7bc8ae0"}}
-{"task_id": "0092d5b06477421cad7153666484b716", "event": "task_completed", "timestamp": "2026-04-24T02:20:33+09:00", "details": {"status": "verified", "round": 1}}

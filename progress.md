@@ -2,6 +2,28 @@
 
 ## 会话：2026-04-24
 
+### 阶段 52：MediaEngine 查询收口发布准备
+- **状态：** complete
+- **开始时间：** 2026-04-27
+- 执行的操作：
+  - 确认 `MediaEngine` 查询计划去重、补检索去重和数量上限改动与对应测试保持一致，作为本次待发布的核心行为变更。
+  - 将 `app.py` 启动入口收口为读取 `HOST` / `PORT` 环境变量，避免本地运行端口只能写死在代码里。
+  - 清理仓库中已失效的 `tmp-fast/`、`tmp-fast2/` 任务与审计快照文件，避免把临时运行产物继续作为受管源码保留。
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/app.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `python -m compileall agent/MediaEngine tests/test_engine_plans.py tests/test_media_engine.py app.py`：通过
+  - `uv run pytest tests/test_engine_plans.py tests/test_media_engine.py -q`：15 passed
+- 当前保守结论：
+  - 本次待发布内容已经覆盖 MediaEngine 查询收敛的核心回归验证；`app.py` 启动配置更适合本地与部署环境复用，临时快照文件也已从版本管理范围中清理。
+
 ### 阶段 51：执行进度快照与补检索轮次门禁修复
 - **状态：** complete
 - **开始时间：** 2026-04-27

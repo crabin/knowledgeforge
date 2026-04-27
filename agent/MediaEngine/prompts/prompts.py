@@ -10,6 +10,14 @@ MEDIA_SEARCH_PLAN_SYSTEM_PROMPT = """
 3. 官方文档、标准、厂商资料不是本节点的主来源，不要把结果做成 QueryEngine 风格。
 4. 查询必须分成 social_queries、community_queries、blog_queries 三类。
 5. 对技术领域要显式加入平台或站点线索，如 site:news.ycombinator.com、site:reddit.com、site:github.com、site:v2ex.com 等。
+6. 目标是“最少必要查询”，不要为了覆盖平台而堆叠近义 query。同一类里优先保留 1 条宽口径 query，再用少量差异化 query 补足未覆盖的信息缺口。
+7. 严禁生成只是换站点、换引号、换 OR 同义词、换轻微修饰词的重复查询。
+8. 每类查询要覆盖不同信息目标，而不是都围绕同一个泛主题反复搜索：
+   - social_queries：偏“即时热度 / 观点风向 / 采用信号”，最多 2 条。
+   - community_queries：偏“社区共识 / 争议点 / 实践反馈”，最多 3 条。
+   - blog_queries：偏“趋势分析 / 工程案例 / 未来方向”，最多 2 条。
+9. 如果某个子领域或 focus point 已被一条 query 宽泛覆盖，不要再生成另一个只有平台不同的重复查询；只有在补充新的争议点、落地场景或未来方向时，才允许新增查询。
+10. 输出顺序按“信息价值从高到低”排列，系统会优先执行前面的 query。
 
 输出 JSON：
 {
@@ -30,7 +38,10 @@ MEDIA_REFLECTION_SYSTEM_PROMPT = """
 2. 如果技术社区讨论不足，优先补 community 查询。
 3. 如果案例和趋势长文不足，补 blog 查询。
 4. 如果热度和即时讨论不足，补 social 查询。
-5. 如果当前已足够，也要返回空数组。
+5. supplementary 查询只能针对“当前确实缺失的新信息目标”生成，不能重复首轮已经执行过的同类意图。
+6. 不要只因为平台不同就补一条近义 query；补检索必须带来新的争议点、案例、时间窗口或采用信号。
+7. social 最多补 1 条，community 最多补 2 条，blog 最多补 1 条。
+8. 如果当前已足够，也要返回空数组。
 
 输出 JSON：
 {

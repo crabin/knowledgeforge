@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from collections.abc import Callable
 from typing import Any
@@ -20,6 +21,59 @@ MediaRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeRev
 
 
 class MediaSearchNode(BaseMediaNode):
+    MAX_SOCIAL_QUERIES = 2
+    MAX_COMMUNITY_QUERIES = 3
+    MAX_BLOG_QUERIES = 2
+    _GENERIC_QUERY_TOKENS = {
+        "and",
+        "or",
+        "site",
+        "social",
+        "media",
+        "community",
+        "discussion",
+        "discussions",
+        "forum",
+        "forums",
+        "blog",
+        "blogs",
+        "engineering",
+        "analysis",
+        "opinion",
+        "opinions",
+        "trend",
+        "trends",
+        "outlook",
+        "future",
+        "latest",
+        "current",
+        "view",
+        "views",
+        "debate",
+        "debates",
+        "adoption",
+        "signal",
+        "signals",
+        "x",
+        "twitter",
+        "reddit",
+        "hacker",
+        "news",
+        "github",
+        "discussions",
+        "v2ex",
+        "juejin",
+        "zhihu",
+        "hn",
+        "com",
+        "cn",
+        "io",
+        "dev",
+        "www",
+        "http",
+        "https",
+    }
+
     def __init__(
         self,
         *,
@@ -105,11 +159,18 @@ class MediaSearchNode(BaseMediaNode):
             system_prompt=MEDIA_SEARCH_PLAN_SYSTEM_PROMPT,
             user_prompt=user_prompt,
         )
-        social_queries = [str(item).strip() for item in payload.get("social_queries", []) if str(item).strip()]
-        community_queries = [
-            str(item).strip() for item in payload.get("community_queries", []) if str(item).strip()
-        ]
-        blog_queries = [str(item).strip() for item in payload.get("blog_queries", []) if str(item).strip()]
+        social_queries = self._dedupe_queries(
+            [str(item).strip() for item in payload.get("social_queries", []) if str(item).strip()],
+            limit=self.MAX_SOCIAL_QUERIES,
+        )
+        community_queries = self._dedupe_queries(
+            [str(item).strip() for item in payload.get("community_queries", []) if str(item).strip()],
+            limit=self.MAX_COMMUNITY_QUERIES,
+        )
+        blog_queries = self._dedupe_queries(
+            [str(item).strip() for item in payload.get("blog_queries", []) if str(item).strip()],
+            limit=self.MAX_BLOG_QUERIES,
+        )
         if not (social_queries or community_queries or blog_queries):
             raise RuntimeError("MediaEngine LLM did not return any valid media queries.")
         return MediaSearchPlan(
@@ -143,6 +204,21 @@ class MediaSearchNode(BaseMediaNode):
     ) -> None:
         all_hits = list(state.search_hits)
         domain_phrases = self._domain_phrases(state)
+        social_queries = self._dedupe_queries(
+            social_queries,
+            limit=self.MAX_SOCIAL_QUERIES,
+            existing_queries=self._history_queries(state, platform_type="social"),
+        )
+        community_queries = self._dedupe_queries(
+            community_queries,
+            limit=self.MAX_COMMUNITY_QUERIES,
+            existing_queries=self._history_queries(state, platform_type="community"),
+        )
+        blog_queries = self._dedupe_queries(
+            blog_queries,
+            limit=self.MAX_BLOG_QUERIES,
+            existing_queries=self._history_queries(state, platform_type="blog"),
+        )
         for index, query in enumerate(social_queries, start=1):
             plan_item_id = f"M-S{index}"
             self._record_event(
@@ -290,6 +366,58 @@ class MediaSearchNode(BaseMediaNode):
                 *state.search_terms,
             ]
         )
+
+    @staticmethod
+    def _history_queries(state: MediaEngineState, *, platform_type: str) -> list[str]:
+        return [
+            str(item.get("query", "")).strip()
+            for item in state.search_history
+            if str(item.get("platform_type", "")).strip() == platform_type and str(item.get("query", "")).strip()
+        ]
+
+    @classmethod
+    def _dedupe_queries(
+        cls,
+        queries: list[str],
+        *,
+        limit: int,
+        existing_queries: list[str] | None = None,
+    ) -> list[str]:
+        deduped: list[str] = []
+        seen_keys: set[str] = set()
+        for query in existing_queries or []:
+            seen_keys.add(cls._semantic_query_key(query))
+        for query in queries:
+            cleaned = " ".join(query.split())
+            if not cleaned:
+                continue
+            key = cls._semantic_query_key(cleaned)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped.append(cleaned)
+            if len(deduped) >= limit:
+                break
+        return deduped
+
+    @classmethod
+    def _semantic_query_key(cls, query: str) -> str:
+        lowered = query.lower()
+        lowered = re.sub(r"site:[^\s)]+", " ", lowered)
+        lowered = re.sub(r"https?://\S+", " ", lowered)
+        lowered = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", lowered)
+        tokens: list[str] = []
+        seen = set()
+        for token in lowered.split():
+            if token in cls._GENERIC_QUERY_TOKENS:
+                continue
+            if len(token) == 1 and token.isascii():
+                continue
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return " ".join(tokens) or " ".join(query.lower().split())
 
     def _search(
         self,
