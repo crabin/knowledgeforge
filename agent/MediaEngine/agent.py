@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent.MediaEngine.nodes.formatting_node import MediaFormattingNode
 from agent.MediaEngine.nodes.reflection_node import MediaReflectionNode
 from agent.MediaEngine.nodes.search_node import MediaEventCallback, MediaRealtimeFileCallback, MediaSearchNode
@@ -25,6 +27,7 @@ class MediaEngine(BaseEngine):
         realtime_file_callback: MediaRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
         task_queue: RetrievalTaskQueue | None = None,
+        save_root: Path | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._planning_chat_client = planning_chat_client or chat_client
@@ -36,6 +39,7 @@ class MediaEngine(BaseEngine):
             realtime_file_callback=realtime_file_callback,
             max_concurrent_network_tasks=max_concurrent_network_tasks,
             task_queue=task_queue,
+            save_root=save_root,
         )
         self._reflection_node = MediaReflectionNode(chat_client=self._chat_client)
         self._summary_node = MediaSummaryNode(chat_client=self._chat_client)
@@ -96,32 +100,29 @@ class MediaEngine(BaseEngine):
     def _engine_plan_from_search_plan(self, plan) -> EnginePlan:
         timestamp = now_iso()
         items: list[EnginePlanItem] = []
-        groups = [
-            ("M-S", "社交媒体观点检索", plan.social_queries, "social", ["社交讨论", "实时观点", "采用信号"]),
-            ("M-C", "技术社区讨论检索", plan.community_queries, "community", ["社区共识", "争议点", "实践反馈"]),
-            ("M-B", "博客与长文趋势检索", plan.blog_queries, "blog", ["趋势分析", "落地案例", "未来方向"]),
-        ]
-        limits = {
-            "social": self._search_node.MAX_SOCIAL_QUERIES,
-            "community": self._search_node.MAX_COMMUNITY_QUERIES,
-            "blog": self._search_node.MAX_BLOG_QUERIES,
-        }
-        for prefix, title, queries, platform_type, targets in groups:
-            for index, query in enumerate(
-                self._search_node._dedupe_queries(queries, limit=limits[platform_type]),
-                start=1,
-            ):
-                items.append(
-                    EnginePlanItem(
-                        plan_item_id=f"{prefix}{index}",
-                        title=title,
-                        query_or_action=query,
-                        targets=targets,
-                        success_criteria=[f"命中相关 {platform_type} 来源", "结果能补充观点或趋势语境"],
-                        fallbacks=[],
-                        source_priority=[platform_type],
-                    )
+        for item in plan.items:
+            items.append(
+                EnginePlanItem(
+                    plan_item_id=item.plan_item_id,
+                    title=item.article_title or f"{item.platform_type} 候选资料",
+                    query_or_action=item.query,
+                    targets=self._targets_for_platform(item.platform_type),
+                    success_criteria=[f"命中相关 {item.platform_type} 来源", "结果能补充观点或趋势语境"],
+                    fallbacks=[],
+                    source_priority=[item.platform_type],
+                    status=item.status,
+                    metadata={
+                        "url": item.candidate_url,
+                        "subdomain": item.subdomain,
+                        "doc_type": item.doc_type,
+                        "source_kind": item.source_kind,
+                        "planned_path": item.planned_path,
+                        "article_title": item.article_title,
+                        "skip_reason": item.skip_reason,
+                        "existing_path": item.existing_path,
+                    },
                 )
+            )
         return EnginePlan(
             agent_name=self.name,
             plan_items=items,
@@ -146,12 +147,14 @@ class MediaEngine(BaseEngine):
             [item.query_or_action for item in deduped_items if "blog" in item.source_priority],
             limit=self._search_node.MAX_BLOG_QUERIES,
         )
+        media_items = self._search_node.items_from_engine_plan(deduped_items)
         return MediaSearchPlan(
             social_queries=social_queries,
             community_queries=community_queries,
             blog_queries=blog_queries,
             reasoning=plan.reasoning,
             is_technical=True,
+            items=media_items,
         )
 
     @staticmethod
@@ -160,6 +163,7 @@ class MediaEngine(BaseEngine):
         seen: set[tuple[str, str]] = set()
         for item in items:
             key = (
+                str(item.metadata.get("url", "")).strip().lower() or MediaSearchNode._semantic_query_key(item.query_or_action),
                 MediaSearchNode._semantic_query_key(item.query_or_action),
                 "|".join(sorted(" ".join(priority.lower().split()) for priority in item.source_priority)),
             )
@@ -203,3 +207,11 @@ class MediaEngine(BaseEngine):
             collected_at=timestamp,
             round_number=round_number,
         )
+
+    @staticmethod
+    def _targets_for_platform(platform_type: str) -> list[str]:
+        if platform_type == "social":
+            return ["社交讨论", "实时观点", "采用信号"]
+        if platform_type == "community":
+            return ["社区共识", "争议点", "实践反馈"]
+        return ["趋势分析", "落地案例", "未来方向"]

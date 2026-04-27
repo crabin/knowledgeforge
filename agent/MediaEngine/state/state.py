@@ -2,9 +2,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
+from typing import Literal
 
 from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.time import now_iso
+
+
+MediaItemStatus = Literal["planned", "in_progress", "completed", "insufficient", "skipped"]
+
+
+@dataclass(slots=True)
+class MediaPlanItem:
+    query: str
+    platform_type: str
+    subdomain: str
+    article_title: str
+    candidate_url: str
+    planned_path: str
+    source_kind: str
+    doc_type: str = "trend"
+    plan_item_id: str = ""
+    status: MediaItemStatus = "planned"
+    skip_reason: str = ""
+    existing_path: str = ""
+    completed_at: str = ""
 
 
 @dataclass(slots=True)
@@ -14,6 +35,7 @@ class MediaSearchPlan:
     blog_queries: list[str]
     reasoning: str
     is_technical: bool
+    items: list[MediaPlanItem] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -32,6 +54,9 @@ class MediaSearchHit:
     snippet: str
     platform_type: str
     score: float
+    subdomain: str = ""
+    planned_path: str = ""
+    plan_item_id: str = ""
 
     @property
     def publisher(self) -> str:
@@ -47,6 +72,10 @@ class MediaCrawledDocument:
     platform_type: str
     publisher: str
     score: float
+    subdomain: str = ""
+    doc_type: str = "trend"
+    planned_path: str = ""
+    plan_item_id: str = ""
 
 
 @dataclass(slots=True)

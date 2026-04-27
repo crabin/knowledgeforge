@@ -99,8 +99,18 @@ class RecordingMediaCrawler:
         self.queries: list[tuple[str, str]] = []
 
     def search(self, **kwargs):
+        from agent.MediaEngine.state.state import MediaSearchHit
+
         self.queries.append((kwargs["platform_type"], kwargs["query"]))
-        return []
+        return [
+            MediaSearchHit(
+                title=f"Hit for {kwargs['query']}",
+                url=f"https://example.com/{kwargs['platform_type']}/{kwargs['query'].replace(' ', '-')}",
+                snippet="community trend",
+                platform_type=kwargs["platform_type"],
+                score=1.0,
+            )
+        ]
 
     def fetch_documents(self, hits, *, max_documents: int = 8):
         return []
@@ -123,7 +133,7 @@ def test_three_engines_generate_plans_without_execution() -> None:
 
     insight_plan = InsightEngine(chat_client=chat_client).plan(context, 1)
     query_plan = QueryEngine(chat_client=chat_client, crawler=RecordingQueryCrawler()).plan(context, 1)
-    media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    media_plan = MediaEngine(chat_client=chat_client, crawler=RecordingMediaCrawler()).plan(context, 1)
 
     assert insight_plan.agent_name == "InsightEngine"
     assert query_plan.agent_name == "QueryEngine"
@@ -153,7 +163,7 @@ def test_query_and_media_plans_dedupe_repeated_queries() -> None:
 
     chat_client = DuplicatePlanChatClient()
     query_plan = QueryEngine(chat_client=chat_client, crawler=RecordingQueryCrawler()).plan(context, 1)
-    media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    media_plan = MediaEngine(chat_client=chat_client, crawler=RecordingMediaCrawler()).plan(context, 1)
 
     assert len(query_plan.plan_items) == 1
     assert [

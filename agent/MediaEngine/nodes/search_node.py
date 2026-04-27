@@ -4,19 +4,21 @@ import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 
 from collections.abc import Callable
 from typing import Any
 
 from agent.MediaEngine.nodes.base_node import BaseMediaNode
 from agent.MediaEngine.prompts.prompts import MEDIA_SEARCH_PLAN_SYSTEM_PROMPT
-from agent.MediaEngine.state.state import MediaEngineState, MediaSearchPlan
+from agent.MediaEngine.state.state import MediaEngineState, MediaPlanItem, MediaSearchPlan
 from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.query_normalization import normalize_query_term
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso
 
 MediaEventCallback = Callable[[str, dict[str, Any]], None]
@@ -30,6 +32,10 @@ class MediaQueryTaskResult:
     platform_type: str
     hits: list[Any]
     status: str
+    url: str = ""
+    subdomain: str = ""
+    planned_path: str = ""
+    article_title: str = ""
     error: str = ""
 
 
@@ -96,6 +102,7 @@ class MediaSearchNode(BaseMediaNode):
         realtime_file_callback: MediaRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
         task_queue: RetrievalTaskQueue | None = None,
+        save_root: Path | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._crawler = crawler
@@ -103,15 +110,14 @@ class MediaSearchNode(BaseMediaNode):
         self._realtime_file_callback = realtime_file_callback
         self._max_concurrent_network_tasks = max(1, max_concurrent_network_tasks)
         self._task_queue = task_queue
+        self._save_root = save_root
 
     def run(self, state: MediaEngineState, **kwargs) -> MediaEngineState:
         plan = self._build_plan(state)
         state.search_plan = plan
         self._append_search_results(
             state,
-            social_queries=plan.social_queries,
-            community_queries=plan.community_queries,
-            blog_queries=plan.blog_queries,
+            plan_items=plan.items,
             is_technical=plan.is_technical,
         )
         return state
@@ -121,9 +127,7 @@ class MediaSearchNode(BaseMediaNode):
         state.search_plan = plan
         self._append_search_results(
             state,
-            social_queries=plan.social_queries,
-            community_queries=plan.community_queries,
-            blog_queries=plan.blog_queries,
+            plan_items=plan.items,
             is_technical=plan.is_technical,
         )
         return state
@@ -139,9 +143,13 @@ class MediaSearchNode(BaseMediaNode):
     ) -> MediaEngineState:
         self._append_search_results(
             state,
-            social_queries=social_queries,
-            community_queries=community_queries,
-            blog_queries=blog_queries,
+            plan_items=self._expand_queries_to_items(
+                state,
+                social_queries=social_queries,
+                community_queries=community_queries,
+                blog_queries=blog_queries,
+                is_technical=is_technical,
+            ),
             is_technical=is_technical,
         )
         state.iteration_count += 1
@@ -190,7 +198,7 @@ class MediaSearchNode(BaseMediaNode):
         )
         if not (social_queries or community_queries or blog_queries):
             raise RuntimeError("MediaEngine LLM did not return any valid media queries.")
-        return MediaSearchPlan(
+        plan = MediaSearchPlan(
             social_queries=social_queries,
             community_queries=community_queries,
             blog_queries=blog_queries,
@@ -198,6 +206,14 @@ class MediaSearchNode(BaseMediaNode):
             or "优先聚合当前社区、社交媒体和技术博客对该主题的观点。",
             is_technical=bool(payload.get("is_technical", is_technical)),
         )
+        plan.items = self._expand_queries_to_items(
+            state,
+            social_queries=plan.social_queries,
+            community_queries=plan.community_queries,
+            blog_queries=plan.blog_queries,
+            is_technical=plan.is_technical,
+        )
+        return plan
 
     @staticmethod
     def _dedupe_hits(hits):
@@ -214,46 +230,37 @@ class MediaSearchNode(BaseMediaNode):
         self,
         state: MediaEngineState,
         *,
-        social_queries: list[str],
-        community_queries: list[str],
-        blog_queries: list[str],
+        plan_items: list[MediaPlanItem],
         is_technical: bool,
     ) -> None:
         all_hits = list(state.search_hits)
-        domain_phrases = self._domain_phrases(state)
-        social_queries = self._dedupe_queries(
-            social_queries,
-            limit=self.MAX_SOCIAL_QUERIES,
-            existing_queries=self._history_queries(state, platform_type="social"),
-        )
-        community_queries = self._dedupe_queries(
-            community_queries,
-            limit=self.MAX_COMMUNITY_QUERIES,
-            existing_queries=self._history_queries(state, platform_type="community"),
-        )
-        blog_queries = self._dedupe_queries(
-            blog_queries,
-            limit=self.MAX_BLOG_QUERIES,
-            existing_queries=self._history_queries(state, platform_type="blog"),
-        )
-        task_specs: list[tuple[str, str, str, int]] = []
-        task_specs.extend((f"M-S{index}", query, "social", 3) for index, query in enumerate(social_queries, start=1))
-        task_specs.extend(
-            (f"M-C{index}", query, "community", 4) for index, query in enumerate(community_queries, start=1)
-        )
-        task_specs.extend((f"M-B{index}", query, "blog", 3) for index, query in enumerate(blog_queries, start=1))
-        for plan_item_id, query, platform_type, _ in task_specs:
+        items_by_id = {item.plan_item_id: item for item in plan_items if item.plan_item_id}
+        task_specs: list[tuple[MediaPlanItem, int]] = []
+        for item in plan_items:
+            if not item.plan_item_id:
+                item.plan_item_id = self._default_plan_item_id(item.platform_type, len(task_specs) + 1)
+            if item.status == "skipped":
+                self._record_event(
+                    state,
+                    "media_plan_item_skipped",
+                    self._item_log_details(item),
+                )
+                continue
+            task_specs.append((item, self._default_max_results(item.platform_type)))
             self._record_event(
                 state,
                 "media_plan_item_started",
-                {"plan_item_id": plan_item_id, "query": query, "platform_type": platform_type},
+                self._item_log_details(item, status="in_progress"),
             )
         for task_result in self._run_media_tasks(
             state,
             task_specs=task_specs,
             is_technical=is_technical,
-            domain_phrases=domain_phrases,
         ):
+            if task_result.plan_item_id in items_by_id:
+                items_by_id[task_result.plan_item_id].status = task_result.status
+                if task_result.status == "completed":
+                    items_by_id[task_result.plan_item_id].completed_at = now_iso()
             state.search_history.append(
                 {
                     "query": task_result.query,
@@ -261,6 +268,8 @@ class MediaSearchNode(BaseMediaNode):
                     "hits": len(task_result.hits),
                     "status": task_result.status,
                     "error": task_result.error,
+                    "url": task_result.url,
+                    "subdomain": task_result.subdomain,
                 }
             )
             event_name = "media_search_failed" if task_result.status == "failed" else "media_search_executed"
@@ -270,11 +279,27 @@ class MediaSearchNode(BaseMediaNode):
                 "platform_type": task_result.platform_type,
                 "hits": len(task_result.hits),
                 "status": task_result.status,
+                "url": task_result.url,
+                "subdomain": task_result.subdomain,
+                "planned_path": task_result.planned_path,
             }
             if task_result.error:
                 details["error"] = task_result.error
                 details["failure_category"] = "network_query_failed"
             self._record_event(state, event_name, details)
+            self._record_event(
+                state,
+                "media_plan_item_completed",
+                {
+                    "plan_item_id": task_result.plan_item_id,
+                    "query": task_result.query,
+                    "platform_type": task_result.platform_type,
+                    "status": task_result.status,
+                    "url": task_result.url,
+                    "subdomain": task_result.subdomain,
+                    "planned_path": task_result.planned_path,
+                },
+            )
             all_hits.extend(task_result.hits)
             self._save_realtime_query_documents(
                 state,
@@ -282,10 +307,22 @@ class MediaSearchNode(BaseMediaNode):
                 query=task_result.query,
                 platform_type=task_result.platform_type,
                 hits=task_result.hits,
+                subdomain=task_result.subdomain,
+                planned_path=task_result.planned_path,
+                url=task_result.url,
+                article_title=task_result.article_title,
             )
 
         state.search_hits = self._dedupe_hits(all_hits)
         state.crawled_documents = self._crawler.fetch_documents(state.search_hits, max_documents=10)
+        hit_map = {hit.url: hit for hit in state.search_hits if getattr(hit, "url", "")}
+        for doc in state.crawled_documents:
+            hit = hit_map.get(doc.url)
+            if hit is None:
+                continue
+            doc.subdomain = getattr(hit, "subdomain", "")
+            doc.planned_path = getattr(hit, "planned_path", "")
+            doc.plan_item_id = getattr(hit, "plan_item_id", "")
         self._record_event(
             state,
             "media_documents_fetched",
@@ -296,48 +333,41 @@ class MediaSearchNode(BaseMediaNode):
         self,
         state: MediaEngineState,
         *,
-        task_specs: list[tuple[str, str, str, int]],
+        task_specs: list[tuple[MediaPlanItem, int]],
         is_technical: bool,
-        domain_phrases: list[str],
     ) -> list[MediaQueryTaskResult]:
         if self._task_queue is None:
             max_workers = min(self._max_concurrent_network_tasks, len(task_specs))
             futures = []
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for plan_item_id, query, platform_type, max_results in task_specs:
+                for item, max_results in task_specs:
                     futures.append(
                         executor.submit(
                             self._run_media_task,
-                            plan_item_id=plan_item_id,
-                            query=query,
-                            platform_type=platform_type,
+                            item=item,
                             max_results=max_results,
                             is_technical=is_technical,
-                            domain_phrases=domain_phrases,
                         )
                     )
                 return [future.result() for future in as_completed(futures)]
 
         queued_tasks = [
             QueuedTaskSpec[MediaQueryTaskResult, None](
-                task_id=plan_item_id,
+                task_id=item.plan_item_id,
                 task_type="network_query_and_optional_llm_summary",
                 payload={
                     "agent": "MediaEngine",
-                    "query": query,
-                    "platform_type": platform_type,
+                    "query": item.query,
+                    "platform_type": item.platform_type,
                     "round": state.round_number,
                 },
-                network_call=lambda plan_item_id=plan_item_id, query=query, platform_type=platform_type, max_results=max_results: self._run_media_task(
-                    plan_item_id=plan_item_id,
-                    query=query,
-                    platform_type=platform_type,
+                network_call=lambda item=item, max_results=max_results: self._run_media_task(
+                    item=item,
                     max_results=max_results,
                     is_technical=is_technical,
-                    domain_phrases=domain_phrases,
                 ),
             )
-            for plan_item_id, query, platform_type, max_results in task_specs
+            for item, max_results in task_specs
         ]
         queued_results = self._task_queue.run_tasks(queued_tasks)
         return [
@@ -357,37 +387,58 @@ class MediaSearchNode(BaseMediaNode):
     def _run_media_task(
         self,
         *,
-        plan_item_id: str,
-        query: str,
-        platform_type: str,
+        item: MediaPlanItem,
         max_results: int,
         is_technical: bool,
-        domain_phrases: list[str],
     ) -> MediaQueryTaskResult:
         try:
-            hits = self._search(
-                query=query,
-                platform_type=platform_type,
-                is_technical=is_technical,
-                max_results=max_results,
-                domain_phrases=domain_phrases,
-            )
+            if item.candidate_url:
+                from agent.MediaEngine.state.state import MediaSearchHit
+
+                hits = [
+                    MediaSearchHit(
+                        title=item.article_title or item.query,
+                        url=item.candidate_url,
+                        snippet=item.query,
+                        platform_type=item.platform_type,
+                        score=1.0,
+                        subdomain=item.subdomain,
+                        planned_path=item.planned_path,
+                        plan_item_id=item.plan_item_id,
+                    )
+                ]
+            else:
+                hits = self._search(
+                    query=item.query,
+                    platform_type=item.platform_type,
+                    is_technical=is_technical,
+                    max_results=max_results,
+                    domain_phrases=self._domain_phrases_from_item(item),
+                )
         except Exception as exc:
             return MediaQueryTaskResult(
-                plan_item_id=plan_item_id,
-                query=query,
-                platform_type=platform_type,
+                plan_item_id=item.plan_item_id,
+                query=item.query,
+                platform_type=item.platform_type,
                 hits=[],
                 status="failed",
+                url=item.candidate_url,
+                subdomain=item.subdomain,
+                planned_path=item.planned_path,
+                article_title=item.article_title,
                 error=str(exc),
             )
         status = "completed" if hits else "insufficient"
         return MediaQueryTaskResult(
-            plan_item_id=plan_item_id,
-            query=query,
-            platform_type=platform_type,
+            plan_item_id=item.plan_item_id,
+            query=item.query,
+            platform_type=item.platform_type,
             hits=hits,
             status=status,
+            url=item.candidate_url,
+            subdomain=item.subdomain,
+            planned_path=item.planned_path,
+            article_title=item.article_title,
         )
 
     def _record_event(self, state: MediaEngineState, event: str, details: dict[str, object]) -> None:
@@ -452,6 +503,93 @@ class MediaSearchNode(BaseMediaNode):
             for item in state.search_history
             if str(item.get("platform_type", "")).strip() == platform_type and str(item.get("query", "")).strip()
         ]
+
+    def _expand_queries_to_items(
+        self,
+        state: MediaEngineState,
+        *,
+        social_queries: list[str],
+        community_queries: list[str],
+        blog_queries: list[str],
+        is_technical: bool,
+    ) -> list[MediaPlanItem]:
+        existing_urls = self._existing_source_urls()
+        seen_urls: set[str] = set()
+        items: list[MediaPlanItem] = []
+        grouped = [
+            ("social", social_queries, self.MAX_SOCIAL_QUERIES, "M-S"),
+            ("community", community_queries, self.MAX_COMMUNITY_QUERIES, "M-C"),
+            ("blog", blog_queries, self.MAX_BLOG_QUERIES, "M-B"),
+        ]
+        domain_phrases = self._domain_phrases(state)
+        default_subdomain = state.request_context.subdomains[0] if state.request_context.subdomains else "通用"
+        for platform_type, queries, max_results, prefix in grouped:
+            for query in queries:
+                hits = self._search(
+                    query=query,
+                    platform_type=platform_type,
+                    is_technical=is_technical,
+                    max_results=max_results,
+                    domain_phrases=domain_phrases,
+                )
+                if not hits:
+                    items.append(
+                        MediaPlanItem(
+                            query=query,
+                            platform_type=platform_type,
+                            subdomain=default_subdomain,
+                            article_title=query,
+                            candidate_url="",
+                            planned_path=self._planned_article_path(state, default_subdomain, query, platform_type),
+                            source_kind=platform_type,
+                        )
+                    )
+                    continue
+                for hit in hits:
+                    if hit.url in seen_urls:
+                        continue
+                    seen_urls.add(hit.url)
+                    item = MediaPlanItem(
+                        query=query,
+                        platform_type=platform_type,
+                        subdomain=default_subdomain,
+                        article_title=hit.title,
+                        candidate_url=hit.url,
+                        planned_path=self._planned_article_path(state, default_subdomain, hit.title, platform_type),
+                        source_kind=platform_type,
+                    )
+                    if hit.url in existing_urls:
+                        item.status = "skipped"
+                        item.skip_reason = "duplicate_url"
+                        item.existing_path = existing_urls[hit.url]
+                    items.append(item)
+        for index, item in enumerate(items, start=1):
+            if not item.plan_item_id:
+                item.plan_item_id = self._default_plan_item_id(item.platform_type, index)
+        return items
+
+    @staticmethod
+    def items_from_engine_plan(items: list[Any]) -> list[MediaPlanItem]:
+        media_items: list[MediaPlanItem] = []
+        for item in items:
+            platform_type = next((priority for priority in item.source_priority if priority in {"social", "community", "blog"}), "community")
+            media_items.append(
+                MediaPlanItem(
+                    query=item.query_or_action,
+                    platform_type=platform_type,
+                    subdomain=str(item.metadata.get("subdomain", "")),
+                    article_title=str(item.metadata.get("article_title", item.title)),
+                    candidate_url=str(item.metadata.get("url", "")),
+                    planned_path=str(item.metadata.get("planned_path", "")),
+                    source_kind=str(item.metadata.get("source_kind", platform_type)),
+                    doc_type=str(item.metadata.get("doc_type", "trend")),
+                    plan_item_id=item.plan_item_id,
+                    status=item.status if item.status != "approved" else "planned",
+                    skip_reason=str(item.metadata.get("skip_reason", "")),
+                    existing_path=str(item.metadata.get("existing_path", "")),
+                )
+            )
+        return media_items
 
     @classmethod
     def _dedupe_queries(
@@ -524,6 +662,53 @@ class MediaSearchNode(BaseMediaNode):
                 max_results=max_results,
             )
 
+    @staticmethod
+    def _domain_phrases_from_item(item: MediaPlanItem) -> list[str]:
+        values = [item.article_title, item.subdomain, item.query]
+        return [value for value in values if value]
+
+    @staticmethod
+    def _default_plan_item_id(platform_type: str, index: int) -> str:
+        prefix = {"social": "M-S", "community": "M-C", "blog": "M-B"}.get(platform_type, "M-X")
+        return f"{prefix}{index}"
+
+    @staticmethod
+    def _default_max_results(platform_type: str) -> int:
+        return {"social": 3, "community": 4, "blog": 3}.get(platform_type, 3)
+
+    def _existing_source_urls(self) -> dict[str, str]:
+        if self._save_root is None or not self._save_root.exists():
+            return {}
+        existing: dict[str, str] = {}
+        for path in self._save_root.glob("**/*.md"):
+            if not path.is_file():
+                continue
+            content = path.read_text(encoding="utf-8", errors="ignore")
+            for line in content.splitlines():
+                if line.strip().startswith("url: "):
+                    existing[line.split("url:", 1)[1].strip().strip('"').strip("'")] = path.as_posix()
+        return existing
+
+    def _planned_article_path(self, state: MediaEngineState, subdomain: str, title: str, platform_type: str) -> str:
+        domain_segment = sanitize_path_segment(state.request_context.domain, "domain")
+        subdomain_segment = sanitize_path_segment(subdomain or "通用", "general")
+        slug = slugify_filename(title, platform_type)
+        root = self._save_root or Path("save")
+        return f"{root / domain_segment / subdomain_segment / (slug + '.md')}".replace("\\", "/")
+
+    @staticmethod
+    def _item_log_details(item: MediaPlanItem, status: str | None = None) -> dict[str, object]:
+        return {
+            "plan_item_id": item.plan_item_id,
+            "query": item.query,
+            "platform_type": item.platform_type,
+            "status": status or item.status,
+            "url": item.candidate_url,
+            "subdomain": item.subdomain,
+            "planned_path": item.planned_path,
+            "skip_reason": item.skip_reason,
+        }
+
     def _save_realtime_query_documents(
         self,
         state: MediaEngineState,
@@ -532,12 +717,20 @@ class MediaSearchNode(BaseMediaNode):
         query: str,
         platform_type: str,
         hits: list[Any],
+        subdomain: str,
+        planned_path: str,
+        url: str,
+        article_title: str,
     ) -> None:
         task_id = getattr(state.request_context, "task_id", "")
         if not task_id or self._realtime_file_callback is None or not hits:
             return
         try:
-            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=4)
+            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=1)
+            for document in documents:
+                document.subdomain = subdomain
+                document.planned_path = planned_path
+                document.plan_item_id = plan_item_id
             candidate = RealtimeReviewCandidate(
                 agent="MediaEngine",
                 round_number=state.round_number,
@@ -547,6 +740,11 @@ class MediaSearchNode(BaseMediaNode):
                 platform_type=platform_type,
                 documents=documents,
                 context=state.request_context,
+                subdomain=subdomain,
+                doc_type="trend",
+                planned_path=planned_path,
+                article_title=article_title,
+                url=url,
             )
             result = self._realtime_file_callback(task_id, candidate)
             self._record_event(
@@ -556,6 +754,10 @@ class MediaSearchNode(BaseMediaNode):
                     "plan_item_id": plan_item_id,
                     "query": query,
                     "platform_type": platform_type,
+                    "url": url,
+                    "subdomain": subdomain,
+                    "planned_path": planned_path,
+                    "review_status": result.status,
                     **result.to_dict(),
                 },
             )

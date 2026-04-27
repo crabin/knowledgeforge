@@ -134,6 +134,7 @@ class TaskService:
                 realtime_file_callback=self._review_realtime_file,
                 max_concurrent_network_tasks=config.max_network_task_concurrency,
                 task_queue=self._retrieval_task_queue,
+                save_root=config.save_root,
             ),
             evaluator=CompletenessEvaluator(),
             supplement_planner=SupplementDecisionPlanner(

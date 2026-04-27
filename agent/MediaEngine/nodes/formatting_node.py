@@ -17,6 +17,8 @@ class MediaFormattingNode(BaseMediaNode):
             f"术语归一化：{state.request_context.domain} -> {state.normalized_domain or state.request_context.domain}",
             f"归一化说明：{state.normalization_reasoning or '无'}",
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
+            "链接级采集计划：",
+            *self._format_plan_items(state),
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             "社交媒体：",
             *[f"- {doc.title} | {doc.url}" for doc in social_docs[:3]],
@@ -88,6 +90,25 @@ class MediaFormattingNode(BaseMediaNode):
             round_number=state.round_number,
             execution_log=state.execution_log,
         )
+
+    @staticmethod
+    def _format_plan_items(state: MediaEngineState) -> list[str]:
+        if not state.search_plan or not state.search_plan.items:
+            return ["- 无结构化链接级计划项。"]
+        lines: list[str] = []
+        for item in state.search_plan.items:
+            marker = "☑" if item.status == "completed" else "☐"
+            lines.append(
+                f"- {marker} {item.plan_item_id or 'M?'} [{item.status}] {item.article_title or item.query} | URL：{item.candidate_url or '待解析'}"
+            )
+            lines.append(f"  子领域：{item.subdomain or '通用'}")
+            lines.append(f"  平台：{item.platform_type}")
+            lines.append(f"  查询：{item.query}")
+            if item.planned_path:
+                lines.append(f"  计划保存路径：{item.planned_path}")
+            if item.skip_reason:
+                lines.append(f"  跳过原因：{item.skip_reason}")
+        return lines
 
     @staticmethod
     def _fallback_sources(state: MediaEngineState) -> list[SourceRecord]:
