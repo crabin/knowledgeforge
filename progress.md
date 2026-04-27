@@ -18,6 +18,8 @@
 - 扩展补源：新增 `菜鸟教程搜索` 与 `CSDN 搜索`。其中 `菜鸟教程` 仅在 IT/教程型 query 下启用，`CSDN` 作为低优先级博客补源保留但默认降权。
 - 新增 5 个独立检测脚本：`scripts/check_tencent_cloud_source.py`、`scripts/check_zhihu_search_source.py`、`scripts/check_zh_wikipedia_source.py`、`scripts/check_runoob_source.py`、`scripts/check_csdn_source.py`，可直接验证每个补源 URL 当前是否可用。
 - 补充 pytest 回归，覆盖备用源 URL 生成、IT 教程型 query 判断、知乎封禁识别、Query 补源合并，以及 5 个检测脚本的退出码行为。
+- 新建仓库根目录 `README.md`，补充项目定位、快速启动、目录说明与运行界面截图。
+- 将两张 KnowledgeForge 控制台运行截图收纳到 `docs/images/`，用于 README 展示整体控制台与补检索运行状态。
 
 ## Verification
 
@@ -39,6 +41,8 @@
 - 结果：`available=true, status_code=200, http_status_code=200, probe_method=http, reason=ok`
 - 运行 `uv run scripts/check_csdn_source.py`
 - 结果：`available=true, status_code=200, http_status_code=200, probe_method=http, reason=ok`
+- 检查 `README.md` 中截图资源路径
+- 结果：`docs/images/knowledgeforge-dashboard-overview.png` 与 `docs/images/knowledgeforge-dashboard-runtime.png` 已入库可引用
 
 ## Follow-up
 
