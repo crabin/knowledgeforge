@@ -4,9 +4,11 @@ from bs4 import BeautifulSoup
 
 from agent.QueryEngine.tools.crawler import (
     SEARCH_PROVIDERS,
+    DomainKnowledgeCrawler,
     parse_brave_results,
     parse_google_results,
 )
+from agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
 from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher, WikipediaResult
 
 
@@ -111,3 +113,81 @@ def test_wikipedia_fetcher_parses_valid_response(monkeypatch) -> None:
     assert result.title == "Machine learning"
     assert result.reliability == "medium"
     assert "wikipedia.org" in result.url
+
+
+def test_build_supplemental_source_targets_includes_requested_urls() -> None:
+    targets = build_supplemental_source_targets("GAN")
+    by_key = {target.key: target for target in targets}
+    assert by_key["tencent_cloud"].url == "https://cloud.tencent.com/developer/search/article-GAN"
+    assert by_key["zhihu_search"].url == "https://www.zhihu.com/search?type=content&q=GAN"
+    assert by_key["zh_wikipedia"].url.startswith("https://zh.wikipedia.org/")
+
+
+def test_probe_source_url_marks_zhihu_block_page_unavailable() -> None:
+    class FakeResponse:
+        status_code = 200
+        text = (
+            '{"error":{"message":"您当前请求存在异常，暂时限制本次访问。'
+            '如有疑问，您可以通过手机摇一摇或登录后私信知乎小管家反馈。3de246852f24ad64a3be8cc01a10dad8","code":40362}}'
+        )
+        url = "https://www.zhihu.com/search?type=content&q=GAN"
+
+    class FakeClient:
+        def get(self, url: str):
+            return FakeResponse()
+
+    target = next(item for item in build_supplemental_source_targets("GAN") if item.key == "zhihu_search")
+    result = probe_source_url(target, client=FakeClient())
+    assert result.available is False
+    assert result.reason == "blocked_marker_detected"
+
+
+def test_query_crawler_extends_with_supplemental_hits_when_zhihu_question_present(monkeypatch) -> None:
+    state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
+    crawler = DomainKnowledgeCrawler(timeout=0.1)
+    zhihu_hit = state.SearchHit(
+        title="如何形象又有趣的讲解对抗神经网络（GAN）是什么?",
+        url="https://www.zhihu.com/question/63493495",
+        snippet="知乎问题页",
+        source_type="tutorial",
+        score=2.0,
+    )
+    monkeypatch.setattr(
+        crawler,
+        "_search_with_browser",
+        lambda **kwargs: [zhihu_hit],
+    )
+    monkeypatch.setattr(
+        crawler,
+        "_discover_supplemental_hits",
+        lambda **kwargs: [
+            state.SearchHit(
+                title="腾讯云开发者社区搜索 - GAN",
+                url="https://cloud.tencent.com/developer/search/article-GAN",
+                snippet="腾讯云开发者社区文章搜索结果页",
+                source_type="tutorial",
+                score=3.5,
+            ),
+            state.SearchHit(
+                title="中文维基百科搜索 - GAN",
+                url="https://zh.wikipedia.org/w/index.php?search=GAN&title=Special%3ASearch&ns0=1",
+                snippet="中文维基百科搜索结果页",
+                source_type="tutorial",
+                score=4.0,
+            ),
+        ],
+    )
+
+    hits = crawler.search(
+        query="GAN",
+        source_type="tutorial",
+        official_domains=[],
+        preferred_domains=["zh.wikipedia.org", "cloud.tencent.com"],
+        max_results=5,
+        domain_phrases=["gan"],
+    )
+
+    urls = [hit.url for hit in hits]
+    assert "https://www.zhihu.com/question/63493495" in urls
+    assert "https://cloud.tencent.com/developer/search/article-GAN" in urls
+    assert any("zh.wikipedia.org" in url for url in urls)

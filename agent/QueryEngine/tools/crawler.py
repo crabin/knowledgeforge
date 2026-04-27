@@ -9,6 +9,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from agent.QueryEngine.state.state import CrawledDocument, SearchHit
+from agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
 from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
 from agent.QueryEngine.utils.ranking import is_result_relevant, score_url
 from agent.QueryEngine.utils.text_processing import extract_main_text
@@ -108,6 +109,7 @@ class DomainKnowledgeCrawler:
         max_results: int = 5,
         domain_phrases: list[str] | None = None,
     ) -> list[SearchHit]:
+        hits: list[SearchHit] = []
         try:
             browser_hits = self._search_with_browser(
                 query=query,
@@ -118,22 +120,41 @@ class DomainKnowledgeCrawler:
                 domain_phrases=domain_phrases,
             )
             if browser_hits:
-                return browser_hits
+                hits = browser_hits
         except Exception as exc:
             self._log(f"[QUERY-SEARCH][browser] unexpected failure {exc.__class__.__name__}: {exc}")
 
-        try:
-            return self._search_with_http_fallback(
-                query=query,
-                source_type=source_type,
-                official_domains=official_domains,
-                preferred_domains=preferred_domains,
-                max_results=max_results,
-                domain_phrases=domain_phrases,
-            )
-        except Exception as exc:
-            self._log(f"[QUERY-SEARCH][httpx] unexpected failure {exc.__class__.__name__}: {exc}")
-            return []
+        if not hits:
+            try:
+                hits = self._search_with_http_fallback(
+                    query=query,
+                    source_type=source_type,
+                    official_domains=official_domains,
+                    preferred_domains=preferred_domains,
+                    max_results=max_results,
+                    domain_phrases=domain_phrases,
+                )
+            except Exception as exc:
+                self._log(f"[QUERY-SEARCH][httpx] unexpected failure {exc.__class__.__name__}: {exc}")
+                hits = []
+
+        supplemental_hits = self._discover_supplemental_hits(
+            query=query,
+            source_type=source_type,
+            official_domains=official_domains,
+            preferred_domains=preferred_domains,
+            domain_phrases=domain_phrases,
+            existing_hits=hits,
+            max_results=max_results,
+        )
+        merged = OrderedDict((hit.url, hit) for hit in hits)
+        for hit in supplemental_hits:
+            merged.setdefault(hit.url, hit)
+            if len(merged) >= max_results:
+                break
+        final_hits = list(merged.values())
+        final_hits.sort(key=lambda item: item.score, reverse=True)
+        return final_hits[:max_results]
 
     def fetch_wikipedia_supplement(
         self,
@@ -338,6 +359,64 @@ class DomainKnowledgeCrawler:
         else:
             self._log(f"[QUERY-SEARCH][httpx:{provider_name}] no hits query={query}")
         return list(deduped.values())
+
+    def _discover_supplemental_hits(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None,
+        domain_phrases: list[str] | None,
+        existing_hits: list[SearchHit],
+        max_results: int,
+    ) -> list[SearchHit]:
+        if not self._should_expand_sources(existing_hits, max_results):
+            return []
+        existing_urls = {hit.url for hit in existing_hits}
+        supplemental_hits: list[SearchHit] = []
+        with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
+            for target in build_supplemental_source_targets(query):
+                if target.url in existing_urls:
+                    continue
+                probe = probe_source_url(target, client=client)
+                self._log(
+                    f"[QUERY-SEARCH][supplemental:{target.key}] "
+                    f"available={probe.available} status={probe.status_code} reason={probe.reason}"
+                )
+                if not probe.available:
+                    continue
+                hit = SearchHit(
+                    title=f"{target.label} - {query}",
+                    url=target.url,
+                    snippet=target.snippet,
+                    source_type=source_type,
+                    score=score_url(target.url, source_type, official_domains, preferred_domains)
+                    + self._supplemental_source_bonus(target.url),
+                )
+                if domain_phrases and not is_result_relevant(hit.title, hit.snippet, hit.url, domain_phrases):
+                    continue
+                supplemental_hits.append(hit)
+                if len(existing_hits) + len(supplemental_hits) >= max_results:
+                    break
+        supplemental_hits.sort(key=lambda item: item.score, reverse=True)
+        return supplemental_hits
+
+    @staticmethod
+    def _should_expand_sources(existing_hits: list[SearchHit], max_results: int) -> bool:
+        if len(existing_hits) < max_results:
+            return True
+        return any("zhihu.com/question/" in hit.url for hit in existing_hits)
+
+    @staticmethod
+    def _supplemental_source_bonus(url: str) -> float:
+        if "zh.wikipedia.org" in url:
+            return 2.0
+        if "cloud.tencent.com" in url:
+            return 1.5
+        if "zhihu.com/search" in url:
+            return 1.0
+        return 0.0
 
     @staticmethod
     def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:
