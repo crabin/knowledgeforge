@@ -142,6 +142,46 @@ def test_probe_source_url_marks_zhihu_block_page_unavailable() -> None:
     assert result.reason == "blocked_marker_detected"
 
 
+def test_probe_source_url_uses_browser_fallback_for_zh_wikipedia_http_403() -> None:
+    class FakeResponse:
+        status_code = 403
+        text = "Forbidden"
+        url = "https://zh.wikipedia.org/w/index.php?search=GAN&title=Special%3ASearch&ns0=1"
+
+    class FakeClient:
+        def get(self, url: str):
+            return FakeResponse()
+
+    target = next(item for item in build_supplemental_source_targets("GAN") if item.key == "zh_wikipedia")
+    result = probe_source_url(
+        target,
+        client=FakeClient(),
+        browser_fetcher=lambda url: "搜索结果 生成对抗网络 Generative Adversarial Network 共 6 条结果",
+    )
+    assert result.available is True
+    assert result.reason == "browser_fallback_ok"
+
+
+def test_probe_source_url_keeps_zhihu_unavailable_on_http_403_without_browser_fallback() -> None:
+    class FakeResponse:
+        status_code = 403
+        text = "Forbidden"
+        url = "https://www.zhihu.com/search?type=content&q=GAN"
+
+    class FakeClient:
+        def get(self, url: str):
+            return FakeResponse()
+
+    target = next(item for item in build_supplemental_source_targets("GAN") if item.key == "zhihu_search")
+    result = probe_source_url(
+        target,
+        client=FakeClient(),
+        browser_fetcher=lambda url: "系统监测到您的网络环境存在异常",
+    )
+    assert result.available is False
+    assert result.reason == "http_403"
+
+
 def test_query_crawler_extends_with_supplemental_hits_when_zhihu_question_present(monkeypatch) -> None:
     state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
     crawler = DomainKnowledgeCrawler(timeout=0.1)

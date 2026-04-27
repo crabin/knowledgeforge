@@ -13,6 +13,7 @@
 - MediaEngine 现在同样会携带 `url`、`subdomain`、`planned_path` 等计划元数据，并复用统一的 README / 子领域索引更新链路。
 - 为 QueryEngine 增加“补充查询源”机制：当结果不足或命中知乎问题页等高风险来源时，自动补充 `腾讯云开发者社区搜索`、`知乎搜索`、`中文维基百科搜索` 三个备用 URL。
 - 新增通用 URL 探测模块 `agent/QueryEngine/tools/supplemental_sources.py`，对备用源执行 HTTP 可用性检测，并识别知乎 403/封禁提示等阻断信号。
+- 为 `zh.wikipedia` 增加 browser fallback 探测：当 `httpx` 返回 403 时，允许通过 browser 文本抓取二次确认该搜索页是否仍可用。
 - 新增 3 个独立检测脚本：`scripts/check_tencent_cloud_source.py`、`scripts/check_zhihu_search_source.py`、`scripts/check_zh_wikipedia_source.py`，可直接验证每个补源 URL 当前是否可用。
 - 补充 pytest 回归，覆盖备用源 URL 生成、知乎封禁识别、Query 补源合并，以及 3 个检测脚本的退出码行为。
 
@@ -28,9 +29,14 @@
 - 结果：`available=false, status=403`
 - 运行 `python scripts/check_zh_wikipedia_source.py GAN`
 - 结果：`available=false, status=403`
+- 运行 `uv run scripts/check_zh_wikipedia_source.py`
+- 结果：`available=true, status=403, reason=browser_fallback_ok`
+- 运行 `uv run scripts/check_zhihu_search_source.py`
+- 结果：`available=false, status=403, reason=http_403`
 
 ## Follow-up
 
 - QueryEngine 与 MediaEngine 已统一为链接级计划和单篇落盘模式，InsightEngine 仍保持原有本地线索规划形态。
 - 补检索决策已能读取领域 README、子领域 README 与已保存文章概览；若后续需要“补检索确认前也必须显式展示 URL 级计划”，可继续把 supplement planner 扩展为预检索链接生成器。
 - 当前网络环境下 `知乎搜索` 与 `zh.wikipedia.org` 均返回 403，因此它们更适合作为“有条件启用并先探测”的补源，而不是无条件主源；后续如果需要稳定中文百科补源，建议增加 API/镜像级备选策略。
+- 实测表明 `zh.wikipedia` 属于“HTTP 层受限但浏览器可达”，而 `知乎搜索` 属于“浏览器也会进入安全验证”；两者后续应继续分开治理，不适合共用同一放行规则。
