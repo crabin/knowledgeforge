@@ -268,11 +268,13 @@ h3 {
 
 .workflow-x6 {
   width: 100%;
-  height: 340px;
+  min-height: 320px;
   overflow: hidden;
   border: 1px solid rgba(23, 33, 31, 0.14);
   border-radius: 8px;
   background: #fffdf8;
+  touch-action: none;
+  user-select: none;
 }
 
 .workflow-x6:empty::before {
@@ -1020,10 +1022,6 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .workflow-x6 {
-    height: 760px;
-  }
-
   .raw-json-summary {
     align-items: start;
     padding: 14px 16px;
@@ -1055,6 +1053,6 @@ button:disabled {
   }
 
   .workflow-x6 {
-    height: 760px;
+    min-height: 320px;
   }
 }

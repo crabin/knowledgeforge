@@ -1416,6 +1416,23 @@
 - 当前保守结论：
   - Token 统计不再挤占主面板空间；真实 usage 优先，缺失时用估算兜底，前端只展示用户关注的四个总量指标。
 
+### 阶段 50：实时流程图固定视图与节点排版修复
+- **状态：** complete
+- **开始时间：** 2026-04-27
+- 执行的操作：
+  - 关闭 X6 流程图的用户缩放与拖动画布交互，保持固定视图
+  - 按桌面两行、窄屏纵向的稳定布局重算节点尺寸和画布高度，避免节点被压缩后溢出
+  - 将流程节点从单一 `label` 改为编号、标题、描述三段文本，并为标题和描述启用块内换行与截断
+  - 移除 CSS 中依赖固定大高度的兜底值，改由前端根据当前布局写入实际画布高度
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/js/dashboard.js
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/static/css/dashboard.css
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `uv run pytest tests/test_dashboard.py`：2 passed
+- 当前保守结论：
+  - 实时流程图现在是固定画布，用户不能再手动放大缩小；节点文本会优先在块内换行，超长内容按可控方式截断，不再直接越出边框。
+
 ## 五问重启检查
 | 问题 | 答案 |
 |------|------|

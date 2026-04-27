@@ -267,10 +267,13 @@ function renderWorkflowFallback(byStep, current) {
 function renderWorkflowX6(byStep, current) {
   const graph = ensureWorkflowGraph();
   if (!graph) return;
-  graph.resize(workflowX6Container.clientWidth || 960, workflowX6Container.clientHeight || 360);
   const data = buildWorkflowGraphData(byStep, current);
+  const width = workflowX6Container.clientWidth || 960;
+  const height = data.meta?.height || workflowX6Container.clientHeight || 360;
+  workflowX6Container.style.height = `${height}px`;
+  graph.resize(width, height);
   graph.fromJSON(data);
-  graph.centerContent();
+  graph.centerContent({ padding: 16 });
 }
 
 function ensureWorkflowGraph() {
@@ -282,16 +285,14 @@ function ensureWorkflowGraph() {
     container: workflowX6Container,
     width: workflowX6Container.clientWidth || 960,
     height: workflowX6Container.clientHeight || 360,
-    panning: true,
-    mousewheel: {
-      enabled: true,
-      modifiers: ["ctrl", "meta"],
-    },
+    panning: false,
+    mousewheel: false,
     interacting: {
       nodeMovable: false,
       edgeMovable: false,
       arrowheadMovable: false,
       vertexMovable: false,
+      magnetConnectable: false,
     },
     background: {
       color: "#fffdf8",
@@ -312,13 +313,13 @@ function ensureWorkflowGraph() {
 
 function buildWorkflowGraphData(byStep, current) {
   const width = workflowX6Container?.clientWidth || 960;
-  const compact = width < 760;
-  const nodeWidth = compact ? Math.min(220, width - 48) : 184;
-  const nodeHeight = compact ? 78 : 92;
-  const gapX = compact ? 0 : Math.max(32, Math.floor((width - 48 - nodeWidth * 4) / 3));
+  const compact = width < 920;
+  const nodeWidth = compact ? Math.max(180, width - 48) : 204;
+  const nodeHeight = compact ? 122 : 118;
+  const gapX = compact ? 0 : Math.max(22, Math.floor((width - 48 - nodeWidth * 4) / 3));
   const startX = 24;
   const startY = 24;
-  const rowGap = compact ? 24 : 58;
+  const rowGap = compact ? 18 : 42;
   const columnGap = compact ? 0 : nodeWidth + gapX;
   const nodes = workflowSteps.map((step, index) => {
     const position = getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap);
@@ -331,6 +332,12 @@ function buildWorkflowGraphData(byStep, current) {
       width: nodeWidth,
       height: nodeHeight,
       data: { status },
+      markup: [
+        { tagName: "rect", selector: "body" },
+        { tagName: "text", selector: "order" },
+        { tagName: "text", selector: "title" },
+        { tagName: "text", selector: "description" },
+      ],
       attrs: getWorkflowNodeAttrs(step, status),
     };
   });
@@ -349,7 +356,9 @@ function buildWorkflowGraphData(byStep, current) {
       attrs: getWorkflowEdgeAttrs(edgeStatus),
     };
   });
-  return { nodes, edges };
+  const rows = compact ? workflowSteps.length : Math.ceil(workflowSteps.length / 4);
+  const height = startY * 2 + rows * nodeHeight + Math.max(0, rows - 1) * rowGap;
+  return { nodes, edges, meta: { height } };
 }
 
 function getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap) {
@@ -388,16 +397,49 @@ function getWorkflowNodeAttrs(step, status) {
       strokeWidth: status === "active" ? 3 : 1.5,
       filter: status === "active" ? "drop-shadow(0 8px 14px rgba(30, 123, 100, 0.18))" : "none",
     },
-    label: {
-      text: `${step.order}  ${step.title}\n${step.description}`,
-      fill: palette.title,
-      fontSize: 13,
-      fontWeight: 800,
-      lineHeight: 18,
-      refX: 14,
-      refY: 15,
+    order: {
+      text: step.order,
+      fill: palette.meta,
+      fontSize: 12,
+      fontWeight: 900,
+      refX: 16,
+      refY: 16,
       textAnchor: "start",
       textVerticalAnchor: "top",
+    },
+    title: {
+      text: step.title,
+      fill: palette.title,
+      fontSize: 15,
+      fontWeight: 800,
+      lineHeight: 20,
+      refX: 16,
+      refY: 36,
+      refWidth: -32,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+      textWrap: {
+        width: -32,
+        height: 34,
+        ellipsis: true,
+      },
+    },
+    description: {
+      text: step.description,
+      fill: palette.meta,
+      fontSize: 12,
+      fontWeight: 600,
+      lineHeight: 17,
+      refX: 16,
+      refY: 64,
+      refWidth: -32,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+      textWrap: {
+        width: -32,
+        height: 40,
+        ellipsis: true,
+      },
     },
   };
 }
