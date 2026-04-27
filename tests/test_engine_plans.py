@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+
 from agent.InsightEngine.agent import InsightEngine
 from agent.MediaEngine.agent import MediaEngine
 from agent.QueryEngine.agent import QueryEngine
@@ -283,6 +286,143 @@ def test_query_engine_reviews_files_after_plan_item_completion() -> None:
     assert reviewed[0][1].plan_item_id == "Q1"
     assert reviewed[0][1].agent == "QueryEngine"
     assert any(entry["event"] == "query_realtime_file_reviewed" for entry in result.execution_log)
+
+
+def test_query_engine_limits_concurrent_network_tasks_to_five() -> None:
+    context = _context()
+
+    class SlowCrawler(RecordingQueryCrawler):
+        def __init__(self) -> None:
+            super().__init__()
+            self._lock = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def search(self, **kwargs):
+            from agent.QueryEngine.state.state import SearchHit
+
+            with self._lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            self.queries.append(kwargs["query"])
+            time.sleep(0.05)
+            with self._lock:
+                self.active -= 1
+            return [
+                SearchHit(
+                    title=f"Hit for {kwargs['query']}",
+                    url=f"https://example.com/{kwargs['query'].replace(' ', '-')}",
+                    snippet="official reference",
+                    source_type="official",
+                    score=1.0,
+                )
+            ]
+
+        def fetch_documents(self, hits, *, max_documents: int = 8):
+            from agent.QueryEngine.state.state import CrawledDocument
+
+            return [
+                CrawledDocument(
+                    title=hit.title,
+                    url=hit.url,
+                    snippet=hit.snippet,
+                    content="official reference content",
+                    source_type=hit.source_type,
+                    publisher=hit.publisher,
+                    score=hit.score,
+                )
+                for hit in hits
+            ]
+
+    crawler = SlowCrawler()
+    plan = EnginePlan(
+        agent_name="QueryEngine",
+        plan_items=[
+            EnginePlanItem(
+                plan_item_id=f"Q{i + 1}",
+                title=f"问题 {i + 1}",
+                query_or_action=f"query {i + 1}",
+                targets=["权威事实"],
+                success_criteria=["执行查询"],
+                source_priority=["official documentation"],
+            )
+            for i in range(7)
+        ],
+        reasoning="并发控制测试",
+        status="approved",
+        created_at="2026-04-27T00:00:00+09:00",
+    )
+
+    QueryEngine(
+        chat_client=None,
+        crawler=crawler,
+        max_concurrent_network_tasks=5,
+    ).run(context, 1, approved_plan=plan)
+
+    assert len(crawler.queries) == 7
+    assert crawler.max_active <= 5
+
+
+def test_query_engine_uses_fallback_query_when_primary_search_fails() -> None:
+    context = _context()
+
+    class FallbackCrawler(RecordingQueryCrawler):
+        def search(self, **kwargs):
+            from agent.QueryEngine.state.state import SearchHit
+
+            self.queries.append(kwargs["query"])
+            if kwargs["query"] == "primary query":
+                raise RuntimeError("google browser timeout")
+            return [
+                SearchHit(
+                    title="Fallback Official Hit",
+                    url="https://example.com/fallback-docs",
+                    snippet="fallback official reference",
+                    source_type="official",
+                    score=1.0,
+                )
+            ]
+
+        def fetch_documents(self, hits, *, max_documents: int = 8):
+            from agent.QueryEngine.state.state import CrawledDocument
+
+            return [
+                CrawledDocument(
+                    title=hit.title,
+                    url=hit.url,
+                    snippet=hit.snippet,
+                    content="fallback official content",
+                    source_type=hit.source_type,
+                    publisher=hit.publisher,
+                    score=hit.score,
+                )
+                for hit in hits
+            ]
+
+    crawler = FallbackCrawler()
+    plan = EnginePlan(
+        agent_name="QueryEngine",
+        plan_items=[
+            EnginePlanItem(
+                plan_item_id="Q1",
+                title="确认权威事实",
+                query_or_action="primary query",
+                targets=["权威事实"],
+                success_criteria=["执行 fallback 查询"],
+                fallbacks=["fallback query"],
+                source_priority=["official documentation"],
+            )
+        ],
+        reasoning="失败兜底测试",
+        status="approved",
+        created_at="2026-04-27T00:00:00+09:00",
+    )
+
+    result = QueryEngine(chat_client=None, crawler=crawler).run(context, 1, approved_plan=plan)
+
+    assert crawler.queries == ["primary query", "fallback query"]
+    assert any(entry["event"] == "query_search_failed" for entry in result.execution_log)
+    assert any(source.url == "https://example.com/fallback-docs" for source in result.sources)
 
 
 def test_media_engine_executes_approved_plan() -> None:

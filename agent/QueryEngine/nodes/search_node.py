@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 import json
 
 from collections.abc import Callable
@@ -26,6 +28,22 @@ from knowledgeforge.utils.time import now_iso
 QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
 
 
+@dataclass(slots=True)
+class SearchAttemptResult:
+    query: str
+    hits: list[Any]
+    status: str
+    error: str = ""
+
+
+@dataclass(slots=True)
+class QuestionTaskResult:
+    question: SearchQuestion
+    source_type: str
+    hits: list[Any]
+    attempts: list[SearchAttemptResult]
+
+
 class QuerySearchNode(BaseQueryNode):
     def __init__(
         self,
@@ -34,11 +52,13 @@ class QuerySearchNode(BaseQueryNode):
         crawler: DomainKnowledgeCrawler,
         event_callback: QueryEventCallback | None = None,
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
+        max_concurrent_network_tasks: int = 5,
     ) -> None:
         super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
         self._crawler = crawler
         self._realtime_file_callback = realtime_file_callback
+        self._max_concurrent_network_tasks = max(1, max_concurrent_network_tasks)
 
     def run(
         self,
@@ -176,6 +196,7 @@ class QuerySearchNode(BaseQueryNode):
             "query_plan_created",
             {
                 "question_count": len(plan_questions),
+                "max_concurrent_network_tasks": self._max_concurrent_network_tasks,
                 "questions": [
                     {
                         "plan_item_id": question.plan_item_id,
@@ -192,73 +213,83 @@ class QuerySearchNode(BaseQueryNode):
                 ],
             },
         )
+        if not plan_questions:
+            return
+        max_workers = min(self._max_concurrent_network_tasks, len(plan_questions))
+        futures = {}
         for question in plan_questions:
             question.status = "in_progress"
             source_type = self._question_source_type(question)
-            queries = [question.google_query, *question.fallback_queries]
-            question_hits = []
             self._record_event(
                 state,
                 "query_plan_item_started",
                 self._question_log_details(question, status=question.status),
             )
-            for index, query in enumerate(self._dedupe_terms(queries)):
-                if index > 0 and self._question_satisfied(question_hits):
-                    break
-                hits = self._search_for_question(
-                    state,
-                    question=question,
-                    query=query,
-                    source_type=source_type,
-                    domain_phrases=domain_phrases,
-                )
-                state.search_history.append(
-                    {
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for question in plan_questions:
+                source_type = self._question_source_type(question)
+                futures[
+                    executor.submit(
+                        self._run_question_task,
+                        state,
+                        question=question,
+                        source_type=source_type,
+                        domain_phrases=domain_phrases,
+                    )
+                ] = question
+            for future in as_completed(futures):
+                task_result = future.result()
+                question = task_result.question
+                question_hits = task_result.hits
+                for attempt in task_result.attempts:
+                    state.search_history.append(
+                        {
+                            "question": question.question,
+                            "query": attempt.query,
+                            "expected_info": question.expected_info,
+                            "source_type": task_result.source_type,
+                            "hits": len(attempt.hits),
+                            "status": attempt.status,
+                            "error": attempt.error,
+                        }
+                    )
+                    event_name = "query_search_failed" if attempt.status == "failed" else "query_search_executed"
+                    details = {
+                        "plan_item_id": question.plan_item_id,
                         "question": question.question,
-                        "query": query,
+                        "query": attempt.query,
+                        "search_targets": question.search_targets,
                         "expected_info": question.expected_info,
-                        "source_type": source_type,
-                        "hits": len(hits),
-                        "status": "completed" if self._question_satisfied(hits) else "insufficient",
+                        "source_type": task_result.source_type,
+                        "hits": len(attempt.hits),
+                        "status": attempt.status,
                     }
-                )
+                    if attempt.error:
+                        details["error"] = attempt.error
+                        details["failure_category"] = "network_query_failed"
+                    self._record_event(state, event_name, details)
+                all_hits.extend(question_hits)
+                question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
+                if question.status == "completed":
+                    question.completed_at = now_iso()
                 self._record_event(
                     state,
-                    "query_search_executed",
+                    "query_question_completed",
                     {
                         "plan_item_id": question.plan_item_id,
                         "question": question.question,
-                        "query": query,
                         "search_targets": question.search_targets,
-                        "expected_info": question.expected_info,
-                        "source_type": source_type,
-                        "hits": len(hits),
-                        "status": "completed" if self._question_satisfied(hits) else "insufficient",
+                        "status": question.status,
+                        "total_hits": len(question_hits),
+                        "completed_at": question.completed_at,
                     },
                 )
-                question_hits.extend(hits)
-                all_hits.extend(hits)
-            question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
-            if question.status == "completed":
-                question.completed_at = now_iso()
-            self._record_event(
-                state,
-                "query_question_completed",
-                {
-                    "plan_item_id": question.plan_item_id,
-                    "question": question.question,
-                    "search_targets": question.search_targets,
-                    "status": question.status,
-                    "total_hits": len(question_hits),
-                    "completed_at": question.completed_at,
-                },
-            )
-            self._save_realtime_question_documents(
-                state,
-                question=question,
-                source_type=source_type,
-                hits=question_hits,
-            )
+                self._save_realtime_question_documents(
+                    state,
+                    question=question,
+                    source_type=task_result.source_type,
+                    hits=question_hits,
+                )
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
         state.candidate_official_domains = self._merge_candidate_domains(
@@ -457,6 +488,47 @@ class QuerySearchNode(BaseQueryNode):
     @staticmethod
     def _question_satisfied(hits) -> bool:
         return any(getattr(hit, "score", 0) > 0 for hit in hits)
+
+    def _run_question_task(
+        self,
+        state: QueryEngineState,
+        *,
+        question: SearchQuestion,
+        source_type: str,
+        domain_phrases: list[str],
+    ) -> QuestionTaskResult:
+        attempts: list[SearchAttemptResult] = []
+        question_hits: list[Any] = []
+        for index, query in enumerate(self._dedupe_terms([question.google_query, *question.fallback_queries])):
+            if index > 0 and self._question_satisfied(question_hits):
+                break
+            try:
+                hits = self._search_for_question(
+                    state,
+                    question=question,
+                    query=query,
+                    source_type=source_type,
+                    domain_phrases=domain_phrases,
+                )
+            except Exception as exc:
+                attempts.append(
+                    SearchAttemptResult(
+                        query=query,
+                        hits=[],
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
+                continue
+            status = "completed" if self._question_satisfied(hits) else "insufficient"
+            attempts.append(SearchAttemptResult(query=query, hits=hits, status=status))
+            question_hits.extend(hits)
+        return QuestionTaskResult(
+            question=question,
+            source_type=source_type,
+            hits=question_hits,
+            attempts=attempts,
+        )
 
     def _search_for_question(
         self,

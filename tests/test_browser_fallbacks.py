@@ -25,8 +25,8 @@ def test_agent_browser_marks_itself_unhealthy_after_timeout(monkeypatch) -> None
     browser = AgentBrowserCLI(timeout=0.1)
     browser._binary = "agent-browser"
 
-    first = browser.search_bing("machine learning", limit=3)
-    second = browser.search_bing("machine learning", limit=3)
+    first = browser.search_google("machine learning", limit=3)
+    second = browser.search_google("machine learning", limit=3)
 
     assert first == []
     assert second == []
@@ -38,7 +38,7 @@ def test_agent_browser_marks_itself_unhealthy_after_timeout(monkeypatch) -> None
 
 def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
     crawler = DomainKnowledgeCrawler(timeout=0.1)
-    crawler._browser = type("FakeBrowser", (), {"search_bing": lambda self, query, limit=5: []})()
+    crawler._browser = type("FakeBrowser", (), {"search_google": lambda self, query, limit=5: []})()
     provider_calls: list[str] = []
 
     def fake_provider(*, provider_name: str, **kwargs):

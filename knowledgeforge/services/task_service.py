@@ -102,6 +102,7 @@ class TaskService:
                 crawler=DomainKnowledgeCrawler() if config.enable_live_crawlers else _NoopQueryCrawler(),
                 event_callback=self._log_realtime_query_event,
                 realtime_file_callback=self._review_realtime_file,
+                max_concurrent_network_tasks=config.max_query_network_concurrency,
             ),
             media_engine=MediaEngine(
                 chat_client=execution_chat_client,

@@ -26,6 +26,7 @@ class QueryEngine(BaseEngine):
         crawler: DomainKnowledgeCrawler | None = None,
         event_callback: QueryEventCallback | None = None,
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
+        max_concurrent_network_tasks: int = 5,
     ) -> None:
         self._chat_client = chat_client
         self._embedding_client = embedding_client
@@ -35,6 +36,7 @@ class QueryEngine(BaseEngine):
             crawler=self._crawler,
             event_callback=event_callback,
             realtime_file_callback=realtime_file_callback,
+            max_concurrent_network_tasks=max_concurrent_network_tasks,
         )
         self._reflection_node = QueryReflectionNode(
             chat_client=self._chat_client,

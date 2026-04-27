@@ -35,7 +35,7 @@ class AgentBrowserCLI:
     def last_failure_reason(self) -> str:
         return self._last_failure_reason
 
-    def search_bing(self, query: str, limit: int = 5) -> list[BrowserSearchResult]:
+    def search_google(self, query: str, limit: int = 5) -> list[BrowserSearchResult]:
         if not self.healthy:
             if self.available and self._last_failure_reason:
                 self._log(f"[BROWSER][search] skipped: browser unhealthy reason={self._last_failure_reason}")
@@ -46,19 +46,17 @@ class AgentBrowserCLI:
             self._log("[BROWSER][search] skipped: agent-browser binary not found")
             return []
 
-        search_url = f"https://www.bing.com/search?q={quote_plus(query)}"
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
         # agent-browser eval already JSON-encodes its return value — return the
         # array directly so json.loads gives us a list, not a double-wrapped string.
-        # Bing wraps result hrefs in tracking redirects; decode via the u=a1<base64> param.
         js = (
-            "Array.from(document.querySelectorAll('li.b_algo')).slice(0, 20)"
-            ".map(function(li) {"
-            "  var a = li.querySelector('h2 a');"
+            "Array.from(document.querySelectorAll('div.g')).slice(0, 20)"
+            ".map(function(block) {"
+            "  var a = block.querySelector('a[href]');"
             "  if (!a) return null;"
-            "  var m = a.href.match(/[?&]u=a1([A-Za-z0-9+/=]+)/);"
-            "  var url = m ? atob(m[1]) : a.href;"
-            "  var sn = li.querySelector('.b_caption p') || li.querySelector('p');"
-            "  return {title: a.textContent.trim(), url: url,"
+            "  var title = block.querySelector('h3');"
+            "  var sn = block.querySelector('div.VwiC3b, div.IsZvec, span.aCOpRe');"
+            "  return {title: (title ? title.textContent : a.textContent).trim(), url: a.href,"
             "          snippet: sn ? sn.textContent.trim() : ''};"
             "})"
             ".filter(function(x) { return x && x.title && x.url && x.url.indexOf('http') === 0; })"
@@ -90,6 +88,10 @@ class AgentBrowserCLI:
             return []
         finally:
             self._close()
+
+    def search_bing(self, query: str, limit: int = 5) -> list[BrowserSearchResult]:
+        """Legacy alias kept for compatibility with older callers and tests."""
+        return self.search_google(query, limit=limit)
 
     def fetch_text(self, url: str) -> str:
         if not self.healthy:

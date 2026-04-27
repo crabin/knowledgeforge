@@ -105,26 +105,32 @@ class DomainKnowledgeCrawler:
         max_results: int = 5,
         domain_phrases: list[str] | None = None,
     ) -> list[SearchHit]:
-        browser_hits = self._search_with_browser(
-            query=query,
-            source_type=source_type,
-            official_domains=official_domains,
-            preferred_domains=preferred_domains,
-            max_results=max_results,
-            domain_phrases=domain_phrases,
-        )
-        if browser_hits:
-            return browser_hits
+        try:
+            browser_hits = self._search_with_browser(
+                query=query,
+                source_type=source_type,
+                official_domains=official_domains,
+                preferred_domains=preferred_domains,
+                max_results=max_results,
+                domain_phrases=domain_phrases,
+            )
+            if browser_hits:
+                return browser_hits
+        except Exception as exc:
+            self._log(f"[QUERY-SEARCH][browser] unexpected failure {exc.__class__.__name__}: {exc}")
 
-        http_hits = self._search_with_http_fallback(
-            query=query,
-            source_type=source_type,
-            official_domains=official_domains,
-            preferred_domains=preferred_domains,
-            max_results=max_results,
-            domain_phrases=domain_phrases,
-        )
-        return http_hits
+        try:
+            return self._search_with_http_fallback(
+                query=query,
+                source_type=source_type,
+                official_domains=official_domains,
+                preferred_domains=preferred_domains,
+                max_results=max_results,
+                domain_phrases=domain_phrases,
+            )
+        except Exception as exc:
+            self._log(f"[QUERY-SEARCH][httpx] unexpected failure {exc.__class__.__name__}: {exc}")
+            return []
 
     def fetch_wikipedia_supplement(
         self,
@@ -201,9 +207,9 @@ class DomainKnowledgeCrawler:
         max_results: int,
         domain_phrases: list[str] | None = None,
     ) -> list[SearchHit]:
-        browser_results = self._browser.search_bing(query, limit=max_results)
+        browser_results = self._browser.search_google(query, limit=max_results)
         if not browser_results:
-            self._log(f"[QUERY-SEARCH][browser] no hits query={query}")
+            self._log(f"[QUERY-SEARCH][browser:google] no hits query={query}")
             return []
         hits = [
             SearchHit(
@@ -217,7 +223,7 @@ class DomainKnowledgeCrawler:
         ]
         hits = self._filter_relevant_hits(hits, domain_phrases)
         hits.sort(key=lambda item: item.score, reverse=True)
-        self._log(f"[QUERY-SEARCH][browser] hits={len(hits[:max_results])} query={query}")
+        self._log(f"[QUERY-SEARCH][browser:google] hits={len(hits[:max_results])} query={query}")
         return hits[:max_results]
 
     def _search_with_http_fallback(
