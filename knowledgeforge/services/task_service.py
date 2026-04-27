@@ -124,6 +124,7 @@ class TaskService:
                 strict_graph_sync=config.strict_graph_sync,
             ),
             workflow_event_callback=self._log_workflow_step_event,
+            state_update_callback=self._persist_running_state_update,
         )
         self._tasks: dict[str, WorkflowState] = {}
         self._task_lock = Lock()
@@ -615,6 +616,12 @@ class TaskService:
         refreshed_logs = self._audit_logger.read(task_id)
         return {
             "task_id": task_id,
+            "task_status": task.get("task_status"),
+            "current_step": task.get("current_step"),
+            "current_action": task.get("current_action"),
+            "round_number": task.get("round_number"),
+            "agent_plans": task.get("agent_plans", {}),
+            "workflow_events": task.get("workflow_events", []),
             "logs": refreshed_logs,
             "token_usage": summarize_token_usage(refreshed_logs),
         }
@@ -884,6 +891,11 @@ class TaskService:
             state["updated_at"] = now_iso()
             payload = self._serialize_state(state)
             self._state_store.save(task_id, payload)
+
+    def _persist_running_state_update(self, task_id: str, state: WorkflowState) -> None:
+        with self._task_lock:
+            self._tasks[task_id] = state
+            self._state_store.save(task_id, self._serialize_state(state))
 
     @staticmethod
     def _describe_realtime_action(entry: dict[str, Any]) -> str:

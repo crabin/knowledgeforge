@@ -29,6 +29,7 @@ class KnowledgeGraphWorkflow:
         writer: MarkdownKnowledgeWriter,
         post_storage_pipeline: PostStoragePipeline,
         workflow_event_callback: Callable[[str, WorkflowStepEvent], None] | None = None,
+        state_update_callback: Callable[[str, WorkflowState], None] | None = None,
     ) -> None:
         self._insight_engine = insight_engine
         self._query_engine = query_engine
@@ -38,6 +39,7 @@ class KnowledgeGraphWorkflow:
         self._writer = writer
         self._post_storage_pipeline = post_storage_pipeline
         self._workflow_event_callback = workflow_event_callback
+        self._state_update_callback = state_update_callback
         self._graph = self._build_graph()
 
     def run(self, initial_state: WorkflowState) -> WorkflowState:
@@ -110,7 +112,7 @@ class KnowledgeGraphWorkflow:
                 "finish_incomplete": "finish_incomplete",
             },
         )
-        graph.add_edge("query_supplement", "evaluate_completeness")
+        graph.add_edge("query_supplement", "collect_parallel")
         graph.add_edge("write_markdown", "run_post_storage")
         graph.add_edge("run_post_storage", END)
         graph.add_edge("finish_incomplete", END)
@@ -120,11 +122,12 @@ class KnowledgeGraphWorkflow:
         context = state["request_context"]
         round_number = state.get("round_number", 1)
         plans = state.get("agent_plans", {})
+        query_plan = state.get("pending_query_supplement_plan") or plans.get("QueryEngine")
         self._emit_workflow_event(state, "collecting", "三路并行采集", "active")
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
                 "InsightEngine": executor.submit(self._insight_engine.run, context, round_number, plans.get("InsightEngine")),
-                "QueryEngine": executor.submit(self._query_engine.run, context, round_number, plans.get("QueryEngine")),
+                "QueryEngine": executor.submit(self._query_engine.run, context, round_number, query_plan),
                 "MediaEngine": executor.submit(self._media_engine.run, context, round_number, plans.get("MediaEngine")),
             }
             outputs = {name: future.result() for name, future in futures.items()}
@@ -137,17 +140,20 @@ class KnowledgeGraphWorkflow:
                 metadata={"timestamp": now_iso(), "round": round_number},
             )
         )
-        return {
+        updates = {
             "agent_outputs": outputs,
             "messages": messages,
             "task_status": "collected",
             "current_step": "collecting",
             "current_action": "三路采集已完成。",
+            "pending_query_supplement_plan": None,
             "workflow_events": [
                 *state.get("workflow_events", []),
                 self._make_workflow_event("collecting", "三路并行采集", "completed"),
             ],
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _evaluate_completeness(self, state: WorkflowState) -> dict[str, Any]:
         self._emit_workflow_event(state, "evaluating", "完整性评估", "active")
@@ -158,7 +164,7 @@ class KnowledgeGraphWorkflow:
         previous_decision = state.get("completeness").supplement_decision if state.get("completeness") else {}
         if previous_decision and not completeness.supplement_decision:
             completeness.supplement_decision = previous_decision
-        return {
+        updates = {
             "completeness": completeness,
             "task_status": completeness.status,
             "current_step": "evaluating",
@@ -168,6 +174,8 @@ class KnowledgeGraphWorkflow:
                 self._make_workflow_event("evaluating", "完整性评估", "completed" if completeness.status == "pass" else "blocked"),
             ],
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _write_markdown(self, state: WorkflowState) -> dict[str, Any]:
         self._emit_workflow_event(state, "writing", "Markdown 落盘", "active")
@@ -177,7 +185,7 @@ class KnowledgeGraphWorkflow:
             completeness=state["completeness"],
             round_number=state.get("round_number", 1),
         )
-        return {
+        updates = {
             "document_artifact": artifact,
             "task_status": "written",
             "current_step": "writing",
@@ -187,14 +195,18 @@ class KnowledgeGraphWorkflow:
                 self._make_workflow_event("writing", "Markdown 落盘", "completed", {"path": artifact.path}),
             ],
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _finish_incomplete(self, state: WorkflowState) -> dict[str, Any]:
         task_status = "max_rounds_reached" if state.get("round_number", 1) >= state.get("max_rounds", 1) else "supplement_required"
-        return {
+        updates = {
             "task_status": task_status,
             "current_step": "evaluating",
             "current_action": "完整性不足，等待补检索或恢复执行。",
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _query_supplement(self, state: WorkflowState) -> dict[str, Any]:
         next_round = state.get("round_number", 1) + 1
@@ -206,26 +218,21 @@ class KnowledgeGraphWorkflow:
             round_number=next_round,
         )
         if not plan.plan_items:
-            return {
+            updates = {
                 "task_status": "supplement_required",
                 "current_step": "supplementing",
                 "current_action": "补充决策未生成可执行 QueryEngine 计划。",
             }
+            self._commit_state(state, updates)
+            return updates
 
-        supplement_output = self._query_engine.run(
-            state["request_context"],
-            next_round,
-            plan,
-        )
-        outputs = dict(state["agent_outputs"])
-        outputs["QueryEngine"] = self._merge_query_outputs(outputs.get("QueryEngine"), supplement_output)
         agent_plans = dict(state.get("agent_plans", {}))
-        agent_plans["QueryEngineSupplement"] = plan
+        agent_plans[f"QueryEngineSupplement_R{next_round}"] = plan
         messages = list(state.get("messages", []))
         messages.append(
             AgentMessage(
                 role="assistant",
-                content="已根据实时知识 index 生成补充决策，并完成 QueryEngine 定向补采。",
+                content="已根据实时知识 index 生成补充决策，下一轮将重新执行三路采集。",
                 metadata={
                     "timestamp": now_iso(),
                     "round": next_round,
@@ -233,19 +240,19 @@ class KnowledgeGraphWorkflow:
                 },
             )
         )
-        return {
-            "agent_outputs": outputs,
+        updates = {
             "agent_plans": agent_plans,
+            "pending_query_supplement_plan": plan,
             "messages": messages,
             "round_number": next_round,
-            "task_status": "supplement_collected",
+            "task_status": "running",
             "current_step": "supplementing",
-            "current_action": "QueryEngine 定向补采已完成，重新进行完整性评估。",
+            "current_action": f"已生成第 {next_round} 轮补检索计划，等待三路 Agent 重新采集。",
             "workflow_events": [
                 *state.get("workflow_events", []),
                 self._make_workflow_event(
                     "supplementing",
-                    "补充决策与 QueryEngine 定向补采",
+                    "补充决策与下一轮三路采集准备",
                     "completed",
                     {
                         "round": next_round,
@@ -255,6 +262,8 @@ class KnowledgeGraphWorkflow:
                 ),
             ],
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _run_post_storage(self, state: WorkflowState) -> dict[str, Any]:
         self._emit_workflow_event(state, "governing", "结构化治理与质量检测", "active")
@@ -269,7 +278,7 @@ class KnowledgeGraphWorkflow:
             task_status = "research_required"
         else:
             task_status = "repair_required"
-        return {
+        updates = {
             "post_storage_result": result,
             "task_status": task_status,
             "current_step": "versioning" if task_status == "verified" else "governing",
@@ -280,6 +289,8 @@ class KnowledgeGraphWorkflow:
                 self._make_workflow_event("versioning", "版本冻结与研报资格", "completed" if task_status == "verified" else "pending"),
             ],
         }
+        self._commit_state(state, updates)
+        return updates
 
     def _emit_workflow_event(
         self,
@@ -328,6 +339,11 @@ class KnowledgeGraphWorkflow:
         if state.get("round_number", 1) < state.get("max_rounds", 1):
             return "query_supplement"
         return "finish_incomplete"
+
+    def _commit_state(self, state: WorkflowState, updates: dict[str, Any]) -> None:
+        state.update(updates)
+        if self._state_update_callback is not None:
+            self._state_update_callback(state["task_id"], state)
 
     @staticmethod
     def _merge_query_outputs(

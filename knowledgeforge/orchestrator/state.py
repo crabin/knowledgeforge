@@ -27,6 +27,7 @@ class WorkflowState(TypedDict, total=False):
     current_action: str
     plan_approved_at: str
     agent_outputs: dict[str, EngineRunResult]
+    pending_query_supplement_plan: EnginePlan
     completeness: CompletenessResult
     document_artifact: DocumentArtifact
     post_storage_result: PostStorageResult

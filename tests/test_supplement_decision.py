@@ -112,20 +112,30 @@ def test_supplement_planner_reads_domain_index_and_builds_query_plan(tmp_path: P
 
 
 class FakeInsightEngine:
+    def __init__(self) -> None:
+        self.run_rounds: list[int] = []
+
     def run(self, context, round_number, approved_plan=None):
+        self.run_rounds.append(round_number)
         return _result("InsightEngine", ["工作流编排"], [_source("insight", "medium")])
 
 
 class FakeMediaEngine:
+    def __init__(self) -> None:
+        self.run_rounds: list[int] = []
+
     def run(self, context, round_number, approved_plan=None):
+        self.run_rounds.append(round_number)
         return _result("MediaEngine", ["工作流编排"], [_source("media", "medium")])
 
 
 class SupplementingQueryEngine:
     def __init__(self) -> None:
         self.approved_queries: list[str] = []
+        self.run_rounds: list[int] = []
 
     def run(self, context, round_number, approved_plan=None):
+        self.run_rounds.append(round_number)
         if approved_plan is None:
             return _result("QueryEngine", ["工作流编排"], [_source("initial-query", "high")])
         self.approved_queries.extend(item.query_or_action for item in approved_plan.plan_items)
@@ -194,12 +204,14 @@ def test_workflow_uses_index_decision_to_dispatch_query_supplement(tmp_path: Pat
     domain_dir = config.save_root / sanitize_path_segment(context.domain, "domain")
     ensure_directory(domain_dir)
     (domain_dir / "README.md").write_text("# 知识工程\n\n已规划子主题：工作流编排。\n", encoding="utf-8")
+    insight_engine = FakeInsightEngine()
     query_engine = SupplementingQueryEngine()
+    media_engine = FakeMediaEngine()
 
     workflow = KnowledgeGraphWorkflow(
-        insight_engine=FakeInsightEngine(),  # type: ignore[arg-type]
+        insight_engine=insight_engine,  # type: ignore[arg-type]
         query_engine=query_engine,  # type: ignore[arg-type]
-        media_engine=FakeMediaEngine(),  # type: ignore[arg-type]
+        media_engine=media_engine,  # type: ignore[arg-type]
         evaluator=CompletenessEvaluator(),
         supplement_planner=SupplementDecisionPlanner(
             save_root=config.save_root,
@@ -223,4 +235,7 @@ def test_workflow_uses_index_decision_to_dispatch_query_supplement(tmp_path: Pat
     assert final_state["task_status"] == "verified"
     assert final_state["round_number"] == 2
     assert query_engine.approved_queries == ["Knowledge graph markdown README index maintenance official documentation"]
+    assert insight_engine.run_rounds == [1, 2]
+    assert query_engine.run_rounds == [1, 2]
+    assert media_engine.run_rounds == [1, 2]
     assert final_state["completeness"].supplement_decision["index_paths"]

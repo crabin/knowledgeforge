@@ -2,6 +2,52 @@
 
 ## 会话：2026-04-24
 
+### 阶段 51：执行进度快照与补检索轮次门禁修复
+- **状态：** complete
+- **开始时间：** 2026-04-27
+- 执行的操作：
+  - 修复运行中任务快照只在最终完成时整体持久化的问题；现在 `collecting / evaluating / supplementing / writing / governing` 等关键节点结束后都会刷新任务状态，避免前端长时间停留在旧的 `running + evaluating` 视图。
+  - 调整补检索流程：完整性评估发现缺口后，不再立刻单独执行 `QueryEngine` 补采，而是先生成下一轮补检索计划，再回到“三路 Agent 并行采集”入口，满足“每轮三个 agent 先采完，再评估，再决定补检索”的流程约束。
+  - 扩展 `/tasks/{task_id}/logs` 返回最新任务快照字段，让前端高频轮询日志接口时也能同步拿到 `task_status / current_step / current_action / round_number / workflow_events / agent_plans`。
+  - 补充回归测试，覆盖日志接口快照同步与补检索进入第二轮后三路 Engine 都会再次执行的行为。
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/graph.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/orchestrator/state.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/knowledgeforge/services/task_service.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_supplement_decision.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_workflow.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `python -m compileall knowledgeforge/orchestrator knowledgeforge/services`：通过
+  - `python -m compileall tests/test_supplement_decision.py tests/test_workflow.py`：通过
+  - `PYTHONPATH=. pytest tests/test_supplement_decision.py tests/test_workflow.py -q`：29 passed
+- 当前保守结论：
+  - 这次修复同时覆盖了“后端已经推进但前端看起来卡住”和“补检索未等整轮三 agent 完成就提前进入”的两类问题；后续若仍有卡住，更可能落在某个 Engine 内部真实阻塞，而不是任务状态快照不刷新。
+
+### 阶段 50：MediaEngine 查询计划去重与 prompt 收敛
+- **状态：** complete
+- **开始时间：** 2026-04-26
+- 执行的操作：
+  - 收紧 `MediaEngine` 计划 prompt，明确“最少必要查询”、禁止换站点式重复、并为 social/community/blog 三类增加数量上限与覆盖目标约束。
+  - 在 `MediaSearchNode` 增加语义级 query 去重：忽略 `site:`、平台名和通用趋势词，避免同一主题意图仅换平台就生成多条重复计划。
+  - 为补检索阶段增加去重与上限控制，避免 reflection 把首轮已覆盖的同类查询重新补回来。
+  - 补充回归测试，覆盖 Media 计划近重复 query 收敛与补检索重复跳过。
+- 创建/修改的文件：
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/agent.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/reflection_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/nodes/search_node.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/agent/MediaEngine/prompts/prompts.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_engine_plans.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/tests/test_media_engine.py
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/findings.md
+  - /Users/lpb/workspace/myProjects/KnowledgeForge/progress.md
+- 验证结果：
+  - `python -m compileall agent/MediaEngine tests/test_engine_plans.py tests/test_media_engine.py`：通过
+  - `PYTHONPATH=. pytest tests/test_engine_plans.py tests/test_media_engine.py -q`：15 passed
+  - `PYTHONPATH=. pytest tests/test_workflow.py -q`：26 passed
+- 当前保守结论：
+  - MediaEngine 现在会优先输出更少但覆盖面更好的计划项，并在执行层阻断“同主题仅换站点”的重复查询；补检索阶段也不会轻易把相同意图重新加回计划。
+
 ### 阶段 49：LLM 计划生成重试与串行保护
 - **状态：** complete
 - **开始时间：** 2026-04-26

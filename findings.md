@@ -119,6 +119,18 @@
 - 新增 `/tasks/{task_id}/logs` 用于读取 audit 日志，适合前端“查看日志”按钮和后续排障。
 - 端口 5000 在当前机器被 macOS AirTunes 占用并返回 403；本轮验证使用 `http://127.0.0.1:5001/`。
 
+## 执行进度卡死排查结论
+- 异步任务此前只有 workflow step 事件和 Query / Media 实时事件会刷新运行中任务快照；`evaluate_completeness`、`write_markdown`、`run_post_storage` 等节点返回的新 `task_status/current_step/current_action/round_number` 要等整条 workflow 结束后才整体落盘。
+- 这会导致前端在轮询 `/tasks/{task_id}/logs` 时长期看到旧快照，例如一直停在 `running + evaluating`，即使后端内部已经继续到补检索准备或后续节点。
+- 修复方式是：在 workflow 每个关键节点结束后立即提交中间 state 快照到 `TaskStateStore`，让运行中任务也具备“按节点落盘”的可观察性。
+- 额外补强：`/tasks/{task_id}/logs` 现在除了日志，还直接返回最新的 `task_status/current_step/current_action/round_number/workflow_events/agent_plans`，避免前端必须等下一次 `/tasks/{task_id}` 才拿到新状态。
+
+## 补检索轮次门禁结论
+- 源需求和流程文档都明确主链路是“并行采集 → 完整性评估 → 补检索策略 → 再次并行采集”；补检索不应在评估后直接绕过其他 Engine 单独执行。
+- 旧实现里 `evaluate_completeness -> query_supplement -> evaluate_completeness` 会让 QueryEngine 补采直接回评估，等于把第二轮缩成了单引擎补跑，和三路并行采集约束不一致。
+- 现在补检索节点只负责生成下一轮 QueryEngine 补采计划，并把 round 推进到下一轮；真正的执行会回到 `collect_parallel`，由 Insight / Query / Media 三路一起完成后再重新评估。
+- 这样做的直接收益是：前端计划进度、轮次和当前动作与真实流程重新对齐，也更符合后续“状态持久化与恢复”对轮次边界清晰可审计的要求。
+
 ## 任务列表保存与查看结论
 - 任务本体已经由 `TaskStateStore` 按 `task_id.json` 持久化，因此列表不需要新增独立数据库或索引文件；扫描已保存 JSON 并提取摘要即可满足“保存和查看”。
 - `GET /tasks` 返回 `count` 与任务摘要数组，摘要包含 task_id、状态、领域、子领域、轮次、文档路径、版本、研报资格和更新时间。
@@ -128,6 +140,12 @@
 - 用户期望在 `save/{领域}/{子领域}` 目录下看到查询计划，因此仅存于 API / 前端 / audit log 不够；查询计划属于 Agent 中间产物文档，应按知识文档规范保存。
 - Markdown Writer 现在会为 QueryEngine 的 `查询计划：` raw material 与 `execution_log` 生成独立 `doc_type=note`、`source_type=query` 文档，文件名后缀为 `-query.md`。
 - 综述文档的“后续动作”会引用查询计划文件路径，方便从主文档追溯到查询决策。
+
+## MediaEngine 计划去重结论
+- MediaEngine 的重复计划不能只靠“完全相同字符串”去重；很多冗余来自同一主题意图只换站点、引号、OR 词或轻微修饰词。
+- 更稳的做法是双层收敛：prompt 明确“最少必要查询 + 每类数量上限 + 同类必须覆盖不同信息目标”，执行层再按语义 key 做兜底去重。
+- 补检索也必须复用同样的去重思路；否则首轮计划收敛后，reflection 仍会把同一意图换个平台重新补回来。
+- 对当前 MediaEngine，较稳的上限是 `social<=2`、`community<=3`、`blog<=2`，并要求按信息价值排序，让系统优先执行最有信息密度的 query。
 - `save/` 目录在 `.gitignore` 中被忽略，本地已生成的领域文档不会进入 git 提交。
 
 ## QueryEngine 查询计划清单化结论

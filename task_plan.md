@@ -12,6 +12,8 @@
   - 已完成：QueryEngine 实时事件写入 audit log 的同时刷新任务快照，让前端轮询任务详情时能看到当前动作、更新时间和中间日志。
   - 已完成：补充回归测试覆盖 intake 确认后的实时轮询、任务详情中间状态和最终任务状态。
   - 已完成：`/tasks/{task_id}/logs` 读取时从任务快照补写缺失 execution_log，确保新日志保存到 audit jsonl。
+  - 已完成：workflow 关键节点结束后即时持久化运行中快照，避免任务详情长期停留在旧的 `running / evaluating` 状态。
+  - 已完成：`/tasks/{task_id}/logs` 直接附带最新任务快照字段，降低前端只轮询日志接口时的状态滞后。
 - 三路 Agent 计划确认与流程可视化
   - 已完成：Insight / Query / Media 三路 Engine 均支持先生成 `EnginePlan`，再按确认后的计划执行。
   - 已完成：`/tasks/async` 与 intake confirm 默认进入 `awaiting_plan_confirmation`，新增计划查看与确认接口。
@@ -23,7 +25,7 @@
 - 补充模块决策优化
   - 已完成：完整性不足时读取实时保存的领域 `README.md`、`*-query.md` 和已保存 Markdown 内容作为知识 index 上下文。
   - 已完成：新增 LLM 补充决策器，分析当前 index 暴露的缺陷、优先级、补查 query、预期信息和成功标准。
-  - 已完成：补充决策只分发给 QueryEngine 执行权威事实补采，执行后合并 QueryEngine 输出并重新评估完整性。
+  - 已完成：补充决策仍然只为 QueryEngine 生成权威事实补采计划，但不会再立即单独执行；它会进入下一轮三路 Agent 并行采集后再重新评估完整性。
   - 已完成：补充决策结果进入 `CompletenessResult.supplement_decision`，最终通过后仍可审计读取的 index 路径和决策来源。
 - Query / Media 计划项实时保存
   - 已完成：新增文件审查模块，按计划项审查 QueryEngine / MediaEngine 获取的合格内容并实时保存 Markdown 草稿。

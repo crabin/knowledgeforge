@@ -420,6 +420,30 @@ def test_task_logs_backfill_saved_execution_log_entries(tmp_path: Path) -> None:
     assert "query_plan_created" in saved_events
 
 
+def test_task_logs_include_latest_runtime_snapshot(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["状态同步"]})
+    state = service._create_initial_state(context, audit_source="api_async")
+    task_id = state["task_id"]
+    state["task_status"] = "running"
+    state["current_step"] = "evaluating"
+    state["current_action"] = "完整性评估已完成。"
+    service._state_store.save(task_id, service._serialize_state(state))
+
+    logs = service.get_task_logs(task_id)
+
+    assert logs is not None
+    assert logs["task_status"] == "running"
+    assert logs["current_step"] == "evaluating"
+    assert logs["current_action"] == "完整性评估已完成。"
+
+
 def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",
