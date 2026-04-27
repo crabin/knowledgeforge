@@ -326,13 +326,15 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any("官方文档优先：" in item or item == "官方文档优先：" for item in result.raw_material)
     assert any(item == "链接级采集计划：" for item in result.raw_material)
     assert any("☑ Q1 [completed]" in item for item in result.raw_material)
-    assert any("查询：langgraph official documentation workflow orchestration" in item for item in result.raw_material)
+    assert any("overview official documentation" in item.lower() for item in result.raw_material)
     assert any("URL：https://langchain-ai.github.io/langgraph/" in item for item in result.raw_material)
-    assert any("查询内容：" in item and "核心 API" in item for item in result.raw_material)
-    assert any("预期信息：" in item and "官方能力说明" in item for item in result.raw_material)
-    assert any("满足标准：" in item and "命中官方文档" in item for item in result.raw_material)
-    assert crawler.queries[0] == ("official", "langgraph official documentation workflow orchestration")
-    assert crawler.queries[1] == ("tutorial", "langgraph tutorial guide knowledge workflows")
+    assert any("查询内容：" in item and "领域定义" in item for item in result.raw_material)
+    assert any("预期信息：" in item and "主要应用" in item for item in result.raw_material)
+    assert any("满足标准：" in item and "权威来源" in item for item in result.raw_material)
+    assert crawler.queries[0][0] == "official"
+    assert "overview official documentation" in crawler.queries[0][1]
+    assert crawler.queries[1][0] == "tutorial"
+    assert "fundamentals official guide" in crawler.queries[1][1]
     assert any("反思结论：" in item for item in result.raw_material)
     assert any("候选官方域名：" in item for item in result.raw_material)
     assert any("检索轨迹：" in item for item in result.raw_material)
@@ -413,11 +415,12 @@ def test_query_engine_llm_plan_emits_structured_questions() -> None:
 
     assert any(item == "链接级采集计划：" for item in result.raw_material)
     assert any("LangGraph Docs" in item or "LangGraph Tutorial" in item for item in result.raw_material)
-    assert any("查询：Machine Learning basic concepts official documentation standard" in item for item in result.raw_material)
+    assert any("basic concepts official guide" in item.lower() for item in result.raw_material)
     assert any("URL：https://langchain-ai.github.io/langgraph/" in item or "URL：https://example.com/tutorial/langgraph" in item for item in result.raw_material)
-    assert any("查询内容：" in item and "权威来源" in item for item in result.raw_material)
-    assert any("预期信息：" in item and "官方定义" in item for item in result.raw_material)
-    assert crawler.queries[0] == ("official", "Machine Learning basic concepts official documentation standard")
+    assert any("查询内容：" in item and "基础概念" in item for item in result.raw_material)
+    assert any("预期信息：" in item and "理论前置" in item for item in result.raw_material)
+    assert crawler.queries[0][0] == "official"
+    assert "overview official documentation" in crawler.queries[0][1]
 
 
 def test_query_engine_marks_empty_plan_sources_as_unknown() -> None:
@@ -461,7 +464,9 @@ def test_query_engine_llm_plan_can_use_search_friendly_english_topics() -> None:
     assert any("basic concepts" in query for query in queries)
     assert any("core methods" in query for query in queries)
     assert not any("基础概念 tutorial" in query for query in queries)
-    assert len(plan.plan_items) == 2
+    assert len(plan.plan_items) >= 2
+    assert any(item.metadata.get("module_id") == "overview" for item in plan.plan_items)
+    assert any(item.metadata.get("doc_role") for item in plan.plan_items)
 
 
 def test_query_engine_reflection_supplements_only_insufficient_questions() -> None:

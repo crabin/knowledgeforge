@@ -10,6 +10,7 @@ import yaml
 
 from knowledgeforge.config import AppConfig
 from knowledgeforge.models import RequestContext
+from knowledgeforge.utils.knowledge_tree import module_directory, module_labels_by_id, plan_path_for_role
 from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso, today_compact
 
@@ -29,6 +30,9 @@ class RealtimeReviewCandidate:
     platform_type: str = ""
     subdomain: str = ""
     doc_type: str = "source"
+    module_id: str = ""
+    module_label: str = ""
+    doc_role: str = "topic_article"
     planned_path: str = ""
     article_title: str = ""
     url: str = ""
@@ -41,6 +45,8 @@ class RealtimeReviewResult:
     failed_sources: list[dict[str, str]] = field(default_factory=list)
     index_path: str = ""
     subdomain_index_path: str = ""
+    module_index_path: str = ""
+    module_overview_path: str = ""
     index_paths: list[str] = field(default_factory=list)
     status: RealtimeReviewStatus = "skipped"
 
@@ -66,9 +72,13 @@ class RealtimeFileReviewer:
             result = RealtimeReviewResult()
             context = candidate.context
             domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-            subdomain = candidate.subdomain or (context.subdomains[0] if context.subdomains else "通用")
-            subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
-            ensure_directory(subdomain_dir)
+            subdomain = candidate.subdomain or (context.core_topics[0] if context.core_topics else "通用")
+            module_id = candidate.module_id or "core_topics"
+            module_label = candidate.module_label or module_labels_by_id().get(module_id, "Core Topics")
+            target_dir = Path(
+                candidate.planned_path
+            ).parent if candidate.planned_path else self._default_target_dir(domain_dir, module_id, subdomain)
+            ensure_directory(target_dir)
 
             existing_urls = self._existing_source_urls(domain_dir)
             for document in candidate.documents:
@@ -80,13 +90,24 @@ class RealtimeFileReviewer:
                 if url in existing_urls:
                     result.skipped_sources.append({"url": url, "reason": "duplicate_url"})
                     continue
-                path = self._write_article_document(candidate, document, subdomain, subdomain_dir)
+                path = self._write_article_document(candidate, document, subdomain, target_dir)
                 result.saved_paths.append(path)
                 existing_urls.add(url)
 
             result.index_path = self.refresh_domain_index(context)
+            result.module_overview_path = self.refresh_module_overview(context, module_id)
+            result.module_index_path = self.refresh_module_index(context, module_id)
             result.subdomain_index_path = self.refresh_subdomain_index(context, subdomain)
-            result.index_paths = [path for path in [result.index_path, result.subdomain_index_path] if path]
+            result.index_paths = [
+                path
+                for path in [
+                    result.index_path,
+                    result.module_overview_path,
+                    result.module_index_path,
+                    result.subdomain_index_path,
+                ]
+                if path
+            ]
             result.status = "saved" if result.saved_paths else "skipped"
             return result
 
@@ -95,30 +116,46 @@ class RealtimeFileReviewer:
         ensure_directory(domain_dir)
         readme_path = domain_dir / "README.md"
         readme_path.write_text(self.render_domain_index(context, domain_dir), encoding="utf-8")
+        (domain_dir / "index.md").write_text(self.render_domain_navigation(context, domain_dir), encoding="utf-8")
         return readme_path.as_posix()
+
+    def refresh_module_overview(self, context: RequestContext, module_id: str) -> str:
+        module_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain") / module_directory(module_id)
+        ensure_directory(module_dir)
+        readme_path = module_dir / "README.md"
+        readme_path.write_text(self.render_module_overview(context, module_id, module_dir), encoding="utf-8")
+        return readme_path.as_posix()
+
+    def refresh_module_index(self, context: RequestContext, module_id: str) -> str:
+        module_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain") / module_directory(module_id)
+        ensure_directory(module_dir)
+        index_path = module_dir / "index.md"
+        index_path.write_text(self.render_module_index(context, module_id, module_dir), encoding="utf-8")
+        return index_path.as_posix()
 
     def refresh_subdomain_index(self, context: RequestContext, subdomain: str) -> str:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-        subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
+        subdomain_dir = domain_dir / "02_core_topics" / sanitize_path_segment(subdomain, "general")
         ensure_directory(subdomain_dir)
         readme_path = subdomain_dir / "README.md"
-        readme_path.write_text(self.render_subdomain_index(context, subdomain_dir, subdomain), encoding="utf-8")
-        return readme_path.as_posix()
+        index_path = subdomain_dir / "index.md"
+        readme_path.write_text(self.render_subdomain_overview(context, subdomain_dir, subdomain), encoding="utf-8")
+        index_path.write_text(self.render_subdomain_index(context, subdomain_dir, subdomain), encoding="utf-8")
+        return index_path.as_posix()
 
     @staticmethod
     def render_domain_index(context: RequestContext, domain_dir: Path) -> str:
         timestamp = now_iso()
         realtime_docs = RealtimeFileReviewer.scan_realtime_documents(domain_dir)
         subdomain_rows = []
-        subdomains = sorted({item["subdomain"] for item in realtime_docs if item.get("subdomain")})
-        if not subdomains:
-            subdomains = context.subdomains or ["通用"]
+        subdomains = sorted({item["subdomain"] for item in realtime_docs if item.get("subdomain")}) or context.core_topics or ["通用"]
         for topic in subdomains:
             topic_segment = sanitize_path_segment(topic, "general")
-            subdomain_rows.append(f"| {topic} | {topic_segment}/README.md |")
+            subdomain_rows.append(f"| {topic} | 02_core_topics/{topic_segment}/README.md |")
         realtime_rows = [
-            "| {path} | {subdomain} | {agent} | {plan_item_id} | {url} | {updated_at} |".format(
+            "| {path} | {module_label} | {subdomain} | {agent} | {plan_item_id} | {url} | {updated_at} |".format(
                 path=item["path"],
+                module_label=item.get("module_label", ""),
                 subdomain=item["subdomain"],
                 agent=item["agent"],
                 plan_item_id=item["plan_item_id"],
@@ -134,7 +171,8 @@ class RealtimeFileReviewer:
                 "## 领域概览",
                 "",
                 f"当前领域目录用于保存 {context.domain} 的知识文档与索引信息。",
-                f"已规划子主题：{', '.join(context.subdomains) if context.subdomains else '通用'}。",
+                f"已规划模块：{', '.join(item['directory'] for item in context.knowledge_modules) if context.knowledge_modules else '默认模块'}。",
+                f"已规划核心主题：{', '.join(context.core_topics) if context.core_topics else '通用'}。",
                 f"当前实时保存文档数量：{len(realtime_docs)}。",
                 f"索引更新时间：{timestamp}。",
                 "",
@@ -146,9 +184,98 @@ class RealtimeFileReviewer:
                 "",
                 "## 实时保存文档",
                 "",
-                "| 路径 | 子领域 | Agent | 计划项 | URL | 更新时间 |",
-                "|---|---|---|---|---|---|",
-                *(realtime_rows or ["| 暂无 | - | - | - | - | - |"]),
+                "| 路径 | 模块 | 子领域 | Agent | 计划项 | URL | 更新时间 |",
+                "|---|---|---|---|---|---|---|",
+                *(realtime_rows or ["| 暂无 | - | - | - | - | - | - |"]),
+                "",
+            ]
+        )
+
+    @staticmethod
+    def render_domain_navigation(context: RequestContext, domain_dir: Path) -> str:
+        rows = [
+            f"| {item['label']} | {item['directory']}/README.md | {item['priority']} |"
+            for item in context.knowledge_modules
+        ]
+        topic_rows = [
+            f"| {topic} | 02_core_topics/{sanitize_path_segment(topic, 'topic')}/README.md |"
+            for topic in (context.core_topics or context.subdomains or ["通用"])
+        ]
+        return "\n".join(
+            [
+                f"# Knowledge Index: {context.domain}",
+                "",
+                "## 1. Knowledge Map",
+                "",
+                f"本知识库用于系统整理和学习 {context.domain} 的核心知识模块与主题分支。",
+                "",
+                "## 2. Learning Structure",
+                "",
+                "| Module | Path | Priority |",
+                "|---|---|---|",
+                *(rows or ["| Overview | 00_overview/README.md | high |"]),
+                "",
+                "## 3. Core Topics",
+                "",
+                "| Topic | Path |",
+                "|---|---|",
+                *(topic_rows or ["| 通用 | 02_core_topics/general/README.md |"]),
+                "",
+            ]
+        )
+
+    @staticmethod
+    def render_module_overview(context: RequestContext, module_id: str, module_dir: Path) -> str:
+        module_label = module_labels_by_id().get(module_id, module_id)
+        docs = [item for item in RealtimeFileReviewer.scan_realtime_documents(module_dir) if item.get("module_id") == module_id]
+        return "\n".join(
+            [
+                f"# {context.domain} / {module_label}",
+                "",
+                "## 模块概览",
+                "",
+                f"该模块承载 {context.domain} 的 {module_label} 相关知识。",
+                f"当前实时文档数量：{len(docs)}。",
+                "",
+            ]
+        )
+
+    @staticmethod
+    def render_module_index(context: RequestContext, module_id: str, module_dir: Path) -> str:
+        module_label = module_labels_by_id().get(module_id, module_id)
+        docs = [item for item in RealtimeFileReviewer.scan_realtime_documents(module_dir) if item.get("module_id") == module_id]
+        rows = [
+            f"| {item['title']} | {item['path']} | {item['doc_role']} | {item['status']} |"
+            for item in docs
+        ]
+        return "\n".join(
+            [
+                f"# Index: {context.domain} / {module_label}",
+                "",
+                "## 模块文档",
+                "",
+                "| 标题 | 路径 | 文档角色 | 状态 |",
+                "|---|---|---|---|",
+                *(rows or ["| 暂无 | - | - | - |"]),
+                "",
+            ]
+        )
+
+    @staticmethod
+    def render_subdomain_overview(context: RequestContext, subdomain_dir: Path, subdomain: str) -> str:
+        timestamp = now_iso()
+        realtime_docs = [
+            item for item in RealtimeFileReviewer.scan_realtime_documents(subdomain_dir) if item.get("subdomain") == subdomain
+        ]
+        return "\n".join(
+            [
+                f"# {subdomain} Overview",
+                "",
+                "## 子领域概览",
+                "",
+                f"当前子领域用于保存 {subdomain} 的文章级知识文档。",
+                f"文章数量：{len(realtime_docs)}。",
+                f"索引更新时间：{timestamp}。",
                 "",
             ]
         )
@@ -160,9 +287,10 @@ class RealtimeFileReviewer:
             item for item in RealtimeFileReviewer.scan_realtime_documents(subdomain_dir) if item.get("subdomain") == subdomain
         ]
         rows = [
-            "| {title} | {path} | {source_type} | {status} | {plan_item_id} | {url} | {updated_at} |".format(
+            "| {title} | {path} | {doc_role} | {source_type} | {status} | {plan_item_id} | {url} | {updated_at} |".format(
                 title=item["title"],
                 path=item["path"],
+                doc_role=item.get("doc_role", ""),
                 source_type=item["source_type"],
                 status=item["status"],
                 plan_item_id=item["plan_item_id"],
@@ -173,19 +301,15 @@ class RealtimeFileReviewer:
         ]
         return "\n".join(
             [
-                f"# {context.domain} / {subdomain}",
-                "",
-                "## 子领域概览",
-                "",
-                f"当前子领域用于保存 {subdomain} 的文章级知识文档。",
-                f"文章数量：{len(realtime_docs)}。",
-                f"索引更新时间：{timestamp}。",
+                f"# Index: {subdomain}",
                 "",
                 "## 文章列表",
                 "",
-                "| 标题 | 路径 | 来源类型 | 状态 | 计划项 | URL | 更新时间 |",
-                "|---|---|---|---|---|---|---|",
-                *(rows or ["| 暂无 | - | - | - | - | - | - |"]),
+                f"当前子领域用于保存 {subdomain} 的文章级知识文档。索引更新时间：{timestamp}。",
+                "",
+                "| 标题 | 路径 | 文档角色 | 来源类型 | 状态 | 计划项 | URL | 更新时间 |",
+                "|---|---|---|---|---|---|---|---|",
+                *(rows or ["| 暂无 | - | - | - | - | - | - | - |"]),
                 "",
             ]
         )
@@ -210,6 +334,9 @@ class RealtimeFileReviewer:
                     "subdomain": str(front_matter.get("subdomain") or ""),
                     "source_count": len(front_matter.get("sources") or []),
                     "source_type": str(front_matter.get("source_type") or ""),
+                    "doc_role": str(front_matter.get("doc_role") or ""),
+                    "module_id": str(front_matter.get("module_id") or ""),
+                    "module_label": str(front_matter.get("module_label") or ""),
                     "status": str(front_matter.get("status") or ""),
                     "updated_at": str(front_matter.get("updated_at") or ""),
                     "url": str(front_matter.get("url") or ""),
@@ -229,8 +356,12 @@ class RealtimeFileReviewer:
         document_id = f"realtime-{uuid.uuid4().hex[:12]}"
         title = candidate.article_title or str(getattr(document, "title", "")).strip() or f"{context.domain} 资料"
         suffix = "media" if candidate.agent == "MediaEngine" else "query"
-        filename = f"{today_compact()}-{slugify_filename(title, document_id)}-{suffix}.md"
-        document_path = subdomain_dir / filename
+        planned_path = Path(candidate.planned_path) if candidate.planned_path else None
+        if planned_path and planned_path.suffix == ".md" and planned_path.name.lower() not in {"readme.md", "index.md"}:
+            document_path = planned_path
+        else:
+            filename = f"{today_compact()}-{slugify_filename(title, document_id)}-{suffix}.md"
+            document_path = subdomain_dir / filename
         relative_path = document_path.as_posix()
         doc_type = candidate.doc_type or ("trend" if candidate.agent == "MediaEngine" else "source")
         document_url = str(getattr(document, "url", "")).strip()
@@ -241,6 +372,7 @@ class RealtimeFileReviewer:
             "subdomain": subdomain,
             "doc_type": doc_type,
             "source_type": suffix,
+            "doc_role": candidate.doc_role,
             "agent": candidate.agent,
             "round": candidate.round_number,
             "status": "draft",
@@ -251,6 +383,8 @@ class RealtimeFileReviewer:
             "tags": [*context.focus_points, "realtime", candidate.plan_item_id],
             "realtime_saved": True,
             "plan_item_id": candidate.plan_item_id,
+            "module_id": candidate.module_id or "core_topics",
+            "module_label": candidate.module_label or module_labels_by_id().get(candidate.module_id or "core_topics", "Core Topics"),
             "query": candidate.query,
             "platform_type": candidate.platform_type,
             "url": document_url,
@@ -332,6 +466,8 @@ class RealtimeFileReviewer:
                 "",
                 f"领域：{candidate.context.domain}",
                 f"子领域：{candidate.subdomain or (candidate.context.subdomains[0] if candidate.context.subdomains else '通用')}",
+                f"模块：{candidate.module_label or module_labels_by_id().get(candidate.module_id or 'core_topics', 'Core Topics')}",
+                f"文档角色：{candidate.doc_role}",
                 f"计划项：{candidate.plan_item_id}",
                 f"查询：{candidate.query}",
                 f"来源类型：{candidate.source_type}",
@@ -436,6 +572,13 @@ class RealtimeFileReviewer:
         if candidate.agent == "MediaEngine":
             return "low"
         return "medium"
+
+    @staticmethod
+    def _default_target_dir(domain_dir: Path, module_id: str, subdomain: str) -> Path:
+        base = domain_dir / module_directory(module_id)
+        if module_id == "core_topics" or subdomain:
+            return base / sanitize_path_segment(subdomain or "general", "general")
+        return base
 
     @staticmethod
     def _excerpt(value: str, limit: int = 1200) -> str:

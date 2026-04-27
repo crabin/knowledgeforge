@@ -18,6 +18,7 @@ from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.query_normalization import normalize_query_term
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.utils.knowledge_tree import plan_path_for_role
 from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso
 
@@ -173,6 +174,8 @@ class MediaSearchNode(BaseMediaNode):
                 "aliases": state.domain_aliases,
                 "search_terms": state.search_terms,
                 "subdomains": context.subdomains,
+                "core_topics": context.core_topics,
+                "knowledge_modules": context.knowledge_modules,
                 "time_window": context.time_window,
                 "focus_points": context.focus_points,
                 "constraints": context.constraints,
@@ -522,9 +525,10 @@ class MediaSearchNode(BaseMediaNode):
             ("blog", blog_queries, self.MAX_BLOG_QUERIES, "M-B"),
         ]
         domain_phrases = self._domain_phrases(state)
-        default_subdomain = state.request_context.subdomains[0] if state.request_context.subdomains else "通用"
+        default_subdomain = state.request_context.core_topics[0] if state.request_context.core_topics else "通用"
         for platform_type, queries, max_results, prefix in grouped:
             for query in queries:
+                module_id, module_label = self._module_for_platform(platform_type)
                 hits = self._search(
                     query=query,
                     platform_type=platform_type,
@@ -540,8 +544,17 @@ class MediaSearchNode(BaseMediaNode):
                             subdomain=default_subdomain,
                             article_title=query,
                             candidate_url="",
-                            planned_path=self._planned_article_path(state, default_subdomain, query, platform_type),
+                            planned_path=self._planned_article_path(
+                                state,
+                                subdomain=default_subdomain,
+                                title=query,
+                                module_id=module_id,
+                                doc_role="topic_article",
+                            ),
                             source_kind=platform_type,
+                            doc_role="topic_article",
+                            module_id=module_id,
+                            module_label=module_label,
                         )
                     )
                     continue
@@ -555,8 +568,17 @@ class MediaSearchNode(BaseMediaNode):
                         subdomain=default_subdomain,
                         article_title=hit.title,
                         candidate_url=hit.url,
-                        planned_path=self._planned_article_path(state, default_subdomain, hit.title, platform_type),
+                        planned_path=self._planned_article_path(
+                            state,
+                            subdomain=default_subdomain,
+                            title=hit.title,
+                            module_id=module_id,
+                            doc_role="topic_article",
+                        ),
                         source_kind=platform_type,
+                        doc_role="topic_article",
+                        module_id=module_id,
+                        module_label=module_label,
                     )
                     if hit.url in existing_urls:
                         item.status = "skipped"
@@ -583,6 +605,9 @@ class MediaSearchNode(BaseMediaNode):
                     planned_path=str(item.metadata.get("planned_path", "")),
                     source_kind=str(item.metadata.get("source_kind", platform_type)),
                     doc_type=str(item.metadata.get("doc_type", "trend")),
+                    doc_role=str(item.metadata.get("doc_role", "topic_article")),
+                    module_id=str(item.metadata.get("module_id", "review")),
+                    module_label=str(item.metadata.get("module_label", "Review")),
                     plan_item_id=item.plan_item_id,
                     status=item.status if item.status != "approved" else "planned",
                     skip_reason=str(item.metadata.get("skip_reason", "")),
@@ -689,12 +714,24 @@ class MediaSearchNode(BaseMediaNode):
                     existing[line.split("url:", 1)[1].strip().strip('"').strip("'")] = path.as_posix()
         return existing
 
-    def _planned_article_path(self, state: MediaEngineState, subdomain: str, title: str, platform_type: str) -> str:
-        domain_segment = sanitize_path_segment(state.request_context.domain, "domain")
-        subdomain_segment = sanitize_path_segment(subdomain or "通用", "general")
-        slug = slugify_filename(title, platform_type)
-        root = self._save_root or Path("save")
-        return f"{root / domain_segment / subdomain_segment / (slug + '.md')}".replace("\\", "/")
+    def _planned_article_path(
+        self,
+        state: MediaEngineState,
+        *,
+        subdomain: str,
+        title: str,
+        module_id: str,
+        doc_role: str,
+    ) -> str:
+        return plan_path_for_role(
+            save_root=self._save_root or Path("save"),
+            domain=state.request_context.domain,
+            module_id=module_id,
+            subdomain=subdomain,
+            doc_role=doc_role,
+            title=title,
+            suffix="media",
+        )
 
     @staticmethod
     def _item_log_details(item: MediaPlanItem, status: str | None = None) -> dict[str, object]:
@@ -705,6 +742,9 @@ class MediaSearchNode(BaseMediaNode):
             "status": status or item.status,
             "url": item.candidate_url,
             "subdomain": item.subdomain,
+            "module_id": item.module_id,
+            "module_label": item.module_label,
+            "doc_role": item.doc_role,
             "planned_path": item.planned_path,
             "skip_reason": item.skip_reason,
         }
@@ -742,6 +782,9 @@ class MediaSearchNode(BaseMediaNode):
                 context=state.request_context,
                 subdomain=subdomain,
                 doc_type="trend",
+                module_id=next((item.module_id for item in state.search_plan.items if item.plan_item_id == plan_item_id), "review") if state.search_plan else "review",
+                module_label=next((item.module_label for item in state.search_plan.items if item.plan_item_id == plan_item_id), "Review") if state.search_plan else "Review",
+                doc_role=next((item.doc_role for item in state.search_plan.items if item.plan_item_id == plan_item_id), "topic_article") if state.search_plan else "topic_article",
                 planned_path=planned_path,
                 article_title=article_title,
                 url=url,
@@ -756,6 +799,8 @@ class MediaSearchNode(BaseMediaNode):
                     "platform_type": platform_type,
                     "url": url,
                     "subdomain": subdomain,
+                    "module_id": candidate.module_id,
+                    "doc_role": candidate.doc_role,
                     "planned_path": planned_path,
                     "review_status": result.status,
                     **result.to_dict(),
@@ -773,3 +818,11 @@ class MediaSearchNode(BaseMediaNode):
                     "failure_category": "file_write_failed",
                 },
             )
+
+    @staticmethod
+    def _module_for_platform(platform_type: str) -> tuple[str, str]:
+        if platform_type == "blog":
+            return "projects", "Projects"
+        if platform_type == "community":
+            return "advanced_topics", "Advanced Topics"
+        return "review", "Review"

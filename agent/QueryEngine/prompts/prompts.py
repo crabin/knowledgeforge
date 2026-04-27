@@ -13,6 +13,8 @@ SEARCH_PLAN_SCHEMA = {
                 "properties": {
                     "question": {"type": "string"},
                     "subdomain": {"type": "string"},
+                    "module_id": {"type": "string"},
+                    "doc_role": {"type": "string"},
                     "google_query": {"type": "string"},
                     "search_targets": {"type": "array", "items": {"type": "string"}},
                     "expected_info": {"type": "array", "items": {"type": "string"}},
@@ -83,8 +85,10 @@ SEARCH_PLAN_SYSTEM_PROMPT = f"""
 1. 官方文档、标准、规范、厂商文档、项目主页、官方 GitHub 文档是最权威来源，必须优先。
 2. 教程、博客、社区文章只作为补充，用于解释用法、案例和经验。
 3. 每个子领域至少生成 1 个官方/权威事实问题，问题要能回答“需要确认什么事实”。
-4. 每个 question 必须写清楚：
+   4. 每个 question 必须写清楚：
    - subdomain：该问题对应的子领域，必须来自用户提供的子领域。
+   - module_id：该问题归属的知识模块，优先使用 overview、foundations、core_topics、advanced_topics、papers、projects、tools、review。
+   - doc_role：目标文档角色，优先使用 domain_overview、module_doc、topic_overview、topic_article 之一。
    - google_query：面向 Google 风格的查询语句，但不要使用只能由 Google API 执行的特殊能力。
    - search_targets：这个计划项需要查询/确认的内容列表，写成可以逐条勾选的短句。
    - expected_info：需要从搜索结果中拿到哪些信息，例如定义、官方说明、版本/时间范围、关键能力、限制、案例证据。

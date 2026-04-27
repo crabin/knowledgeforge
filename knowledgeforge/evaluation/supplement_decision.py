@@ -9,6 +9,7 @@ from typing import Any
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import CompletenessResult, EnginePlan, EnginePlanItem, EngineRunResult, RequestContext
 from knowledgeforge.evaluation.prompts import SUPPLEMENT_DECISION_SYSTEM_PROMPT
+from knowledgeforge.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
 from knowledgeforge.utils.paths import sanitize_path_segment
 from knowledgeforge.utils.time import now_iso
 
@@ -71,7 +72,7 @@ class SupplementDecisionPlanner:
             outputs=outputs,
             round_number=round_number,
         )
-        plan = self.to_query_engine_plan(decision, round_number=round_number)
+        plan = self.to_query_engine_plan(decision, context=context, round_number=round_number)
         completeness.supplement_decision = decision.to_dict()
         if plan.plan_items:
             completeness.supplement_queries = [item.query_or_action for item in plan.plan_items]
@@ -126,7 +127,7 @@ class SupplementDecisionPlanner:
                 pass
         return self._fallback_decision(context, completeness, outputs, index_payload)
 
-    def to_query_engine_plan(self, decision: SupplementDecision, *, round_number: int) -> EnginePlan:
+    def to_query_engine_plan(self, decision: SupplementDecision, *, context: RequestContext, round_number: int) -> EnginePlan:
         timestamp = now_iso()
         items = [
             EnginePlanItem(
@@ -140,8 +141,20 @@ class SupplementDecisionPlanner:
                 status="approved",
                 metadata={
                     "subdomain": defect.topic,
+                    "module_id": self._module_id_for_defect(defect.topic),
+                    "module_label": module_labels_by_id().get(self._module_id_for_defect(defect.topic), "Core Topics"),
+                    "doc_role": self._doc_role_for_defect(defect.topic),
                     "doc_type": "source",
                     "source_kind": "official",
+                    "planned_path": plan_path_for_role(
+                        save_root=self._save_root,
+                        domain=context.domain,
+                        module_id=self._module_id_for_defect(defect.topic),
+                        subdomain=defect.topic,
+                        doc_role=self._doc_role_for_defect(defect.topic),
+                        title=defect.topic,
+                        suffix="query",
+                    ),
                 },
             )
             for index, defect in enumerate(decision.defects[:6], start=1)
@@ -159,7 +172,8 @@ class SupplementDecisionPlanner:
     def _read_index_payload(self, context: RequestContext) -> dict[str, Any]:
         domain_dir = self._save_root / sanitize_path_segment(context.domain, "domain")
         readme_path = domain_dir / "README.md"
-        candidates = [readme_path]
+        index_path = domain_dir / "index.md"
+        candidates = [readme_path, index_path]
         if domain_dir.exists():
             candidates.extend(sorted(path for path in domain_dir.glob("**/*.md") if path != readme_path))
         contents: list[dict[str, str]] = []
@@ -296,6 +310,30 @@ class SupplementDecisionPlanner:
             index_paths=index_payload.get("paths", []),
             source="fallback_saved_document_review",
         )
+
+    @staticmethod
+    def _module_id_for_defect(topic: str) -> str:
+        lowered = topic.lower()
+        if "paper" in lowered or "论文" in topic:
+            return "papers"
+        if "基础" in topic or "foundation" in lowered:
+            return "foundations"
+        if "tool" in lowered or "工具" in topic:
+            return "tools"
+        if "project" in lowered or "项目" in topic:
+            return "projects"
+        if "review" in lowered or "复习" in topic:
+            return "review"
+        return "core_topics"
+
+    @staticmethod
+    def _doc_role_for_defect(topic: str) -> str:
+        lowered = topic.lower()
+        if "index" in lowered or "索引" in topic:
+            return "topic_index"
+        if "overview" in lowered or "概览" in topic:
+            return "topic_overview"
+        return "topic_article"
 
     def _build_document_overview(self, path: Path, text: str, remaining: int) -> dict[str, str] | None:
         if remaining <= 0:

@@ -15,11 +15,14 @@ class Neo4jPathMapper:
     ) -> GraphSyncResult:
         nodes = [
             {"label": "Domain", "id": artifact.domain},
+            {"label": "KnowledgeModule", "id": artifact.module_id or "core_topics", "label_text": artifact.module_label or artifact.module_id},
             {"label": "SubTopic", "id": artifact.subdomain},
             {"label": "Article", "id": artifact.document_id, "path": artifact.path},
         ]
         relationships = [
-            {"from": artifact.domain, "type": "HAS_SUBTOPIC", "to": artifact.subdomain},
+            {"from": artifact.domain, "type": "HAS_MODULE", "to": artifact.module_id or "core_topics"},
+            {"from": artifact.module_id or "core_topics", "type": "HAS_SUBTOPIC", "to": artifact.subdomain},
+            {"from": artifact.module_id or "core_topics", "type": "HAS_ARTICLE", "to": artifact.document_id},
             {"from": artifact.subdomain, "type": "HAS_ARTICLE", "to": artifact.document_id},
         ]
         for entity in extraction.entities:

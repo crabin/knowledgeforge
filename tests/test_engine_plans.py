@@ -141,6 +141,9 @@ def test_three_engines_generate_plans_without_execution() -> None:
     assert insight_plan.plan_items
     assert query_plan.plan_items
     assert media_plan.plan_items
+    assert any(item.metadata.get("module_id") for item in insight_plan.plan_items)
+    assert any(item.metadata.get("module_id") for item in query_plan.plan_items)
+    assert any(item.metadata.get("module_id") for item in media_plan.plan_items)
     assert all(plan.status == "awaiting_confirmation" for plan in [insight_plan, query_plan, media_plan])
 
 
@@ -165,7 +168,7 @@ def test_query_and_media_plans_dedupe_repeated_queries() -> None:
     query_plan = QueryEngine(chat_client=chat_client, crawler=RecordingQueryCrawler()).plan(context, 1)
     media_plan = MediaEngine(chat_client=chat_client, crawler=RecordingMediaCrawler()).plan(context, 1)
 
-    assert len(query_plan.plan_items) == 1
+    assert sum(1 for item in query_plan.plan_items if item.query_or_action == "knowledge engineering official documentation") == 1
     assert [
         item.query_or_action
         for item in media_plan.plan_items

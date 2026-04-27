@@ -60,6 +60,10 @@ class RequestContext:
     clarification_summary: str = ""
     confirmed: bool = False
     task_id: str = ""
+    knowledge_modules: list[dict[str, str]] = field(default_factory=list)
+    core_topics: list[str] = field(default_factory=list)
+    structure_mode: str = "layered_knowledge_tree"
+    navigation_targets: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -189,6 +193,10 @@ class DocumentArtifact:
     path: str
     status: str
     version: str
+    module_id: str = ""
+    module_label: str = ""
+    doc_role: str = "topic_article"
+    navigation_paths: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

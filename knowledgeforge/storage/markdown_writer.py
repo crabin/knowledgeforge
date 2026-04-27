@@ -14,6 +14,7 @@ from knowledgeforge.models import (
     RequestContext,
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeFileReviewer
+from knowledgeforge.utils.knowledge_tree import module_directory, module_labels_by_id, plan_path_for_role
 from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso, today_compact
 
@@ -30,18 +31,19 @@ class MarkdownKnowledgeWriter:
         round_number: int,
     ) -> dict[str, str]:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-        subdomain = context.subdomains[0] if context.subdomains else "通用"
-        subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
-        ensure_directory(subdomain_dir)
-
         saved_paths: dict[str, str] = {}
         for agent_name, plan in plans.items():
             if not plan.plan_items:
                 continue
+            first_item = plan.plan_items[0]
+            module_id = str(first_item.metadata.get("module_id", "overview"))
+            subdomain = str(first_item.metadata.get("subdomain", "")) or (context.core_topics[0] if context.core_topics else "通用")
+            target_dir = self._plan_document_directory(domain_dir, module_id, subdomain)
+            ensure_directory(target_dir)
             title = f"{context.domain} {agent_name} 生成计划"
             document_id = f"{agent_name.lower()}-plan-{uuid.uuid4().hex[:12]}"
             filename = f"{today_compact()}-{slugify_filename(title, document_id)}-plan.md"
-            document_path = subdomain_dir / filename
+            document_path = target_dir / filename
             saved_paths[agent_name] = self.write_agent_plan_document(
                 context=context,
                 plan=plan,
@@ -69,7 +71,7 @@ class MarkdownKnowledgeWriter:
             "id": document_id or document_path.stem,
             "title": title,
             "domain": context.domain,
-            "subdomain": context.subdomains[0] if context.subdomains else "通用",
+            "subdomain": context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用"),
             "doc_type": "note",
             "source_type": "agent_plan",
             "agent": plan.agent_name,
@@ -110,8 +112,8 @@ class MarkdownKnowledgeWriter:
         round_number: int,
     ) -> DocumentArtifact:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-        subdomain = context.subdomains[0] if context.subdomains else "通用"
-        subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
+        subdomain = context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用")
+        subdomain_dir = domain_dir / "02_core_topics" / sanitize_path_segment(subdomain, "general")
         ensure_directory(subdomain_dir)
 
         document_id = f"article-{uuid.uuid4().hex[:12]}"
@@ -129,10 +131,14 @@ class MarkdownKnowledgeWriter:
             path=relative_path,
             status="draft",
             version="v1",
+            module_id="core_topics",
+            module_label="Core Topics",
+            doc_role="topic_article",
         )
 
         document_body = self._render_document(artifact, context, outputs, completeness, round_number)
-        domain_readme = self._render_domain_readme(context, outputs, domain_dir)
+        navigation_paths = self._write_navigation_documents(context, outputs, domain_dir)
+        artifact.navigation_paths = navigation_paths
         query_plan_path = self._write_query_plan_document(
             context=context,
             query_output=outputs.get("QueryEngine"),
@@ -148,7 +154,6 @@ class MarkdownKnowledgeWriter:
             )
 
         ensure_directory(domain_dir)
-        (domain_dir / "README.md").write_text(domain_readme, encoding="utf-8")
         document_path.write_text(document_body, encoding="utf-8")
         return artifact
 
@@ -265,7 +270,7 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 摘要",
                 "",
-                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 {plan.agent_name} 执行前生成的计划。",
+                f"本文档保存 {context.domain} / {', '.join(context.core_topics or context.subdomains)} 在本轮 {plan.agent_name} 执行前生成的计划。",
                 "它用于用户确认、执行审计和后续质量回溯，不等同于已验证知识结论。",
                 "",
                 "## 关键结论",
@@ -277,7 +282,7 @@ class MarkdownKnowledgeWriter:
                 "## 背景与上下文",
                 "",
                 f"领域：{context.domain}",
-                f"子领域：{', '.join(context.subdomains)}",
+                f"子领域：{', '.join(context.core_topics or context.subdomains)}",
                 f"时间范围：{context.time_window}",
                 f"生成时间：{timestamp}",
                 "",
@@ -381,7 +386,7 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 摘要",
                 "",
-                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 QueryEngine 执行前生成的链接级采集计划、预期信息和执行状态。",
+                f"本文档保存 {context.domain} / {', '.join(context.core_topics or context.subdomains)} 在本轮 QueryEngine 执行前生成的链接级采集计划、预期信息和执行状态。",
                 "它用于审计查询决策，不等同于已验证知识结论。",
                 "",
                 "## 关键结论",
@@ -393,7 +398,7 @@ class MarkdownKnowledgeWriter:
                 "## 背景与上下文",
                 "",
                 f"领域：{context.domain}",
-                f"子领域：{', '.join(context.subdomains)}",
+                f"子领域：{', '.join(context.core_topics or context.subdomains)}",
                 f"时间范围：{context.time_window}",
                 f"生成时间：{timestamp}",
                 "",
@@ -485,7 +490,7 @@ class MarkdownKnowledgeWriter:
         }
 
         summary_lines = [
-            f"本文围绕 {context.domain} 生成首版知识综述，覆盖 {', '.join(context.subdomains)}。",
+            f"本文围绕 {context.domain} 生成首版知识综述，覆盖 {', '.join(context.core_topics or context.subdomains)}。",
             "当前版本由 Insight、Query、Media 三路并行采集结果汇总而成。",
             "文档保留了来源信息、候选实体关系、冲突与后续动作，供后续结构化抽取与质量检测使用。",
         ]
@@ -539,7 +544,7 @@ class MarkdownKnowledgeWriter:
                 source_counter += 1
 
         relation_rows = []
-        for subdomain in context.subdomains:
+        for subdomain in (context.core_topics or context.subdomains):
             relation_rows.append(f"| {context.domain} | covers | {subdomain} | S1 |")
 
         front_matter_text = yaml.safe_dump(
@@ -567,6 +572,8 @@ class MarkdownKnowledgeWriter:
                 "## 背景与上下文",
                 "",
                 f"领域：{context.domain}",
+                f"模块：{artifact.module_label or artifact.module_id}",
+                f"子领域：{artifact.subdomain}",
                 f"时间范围：{context.time_window}",
                 f"关注点：{', '.join(context.focus_points)}",
                 "",
@@ -587,15 +594,17 @@ class MarkdownKnowledgeWriter:
                 "| 实体 | 类型 | 描述 | 来源 |",
                 "|---|---|---|---|",
                 f"| {context.domain} | Domain | 目标领域 | S1 |",
+                f"| {artifact.module_label or artifact.module_id} | KnowledgeModule | 知识模块 | S1 |",
                 *[
                     f"| {subdomain} | SubTopic | 领域子主题 | S1 |"
-                    for subdomain in context.subdomains
+                    for subdomain in (context.core_topics or context.subdomains)
                 ],
                 "",
                 "### 关系候选",
                 "",
                 "| 主体 | 关系 | 客体 | 来源 |",
                 "|---|---|---|---|",
+                f"| {context.domain} | has_module | {artifact.module_label or artifact.module_id} | S1 |",
                 *relation_rows,
                 "",
                 "## 冲突与不确定性",
@@ -670,7 +679,7 @@ class MarkdownKnowledgeWriter:
     ) -> str:
         if RealtimeFileReviewer.scan_realtime_documents(domain_dir):
             return RealtimeFileReviewer.render_domain_index(context, domain_dir)
-        sections = "\n".join(f"- {topic}" for topic in context.subdomains)
+        sections = "\n".join(f"- {topic}" for topic in (context.core_topics or context.subdomains))
         sources = sum(len(output.sources) for output in outputs.values())
         return "\n".join(
             [
@@ -679,12 +688,65 @@ class MarkdownKnowledgeWriter:
                 "## 领域概览",
                 "",
                 f"当前领域目录用于保存 {context.domain} 的知识文档与索引信息。",
-                f"已规划子主题：{', '.join(context.subdomains)}。",
+                f"已规划模块：{', '.join(item['directory'] for item in context.knowledge_modules)}。",
+                f"已规划核心主题：{', '.join(context.core_topics or context.subdomains)}。",
                 f"当前批次已汇总来源数量：{sources}。",
                 "",
-                "## 子主题",
+                "## 核心主题",
                 "",
                 sections,
                 "",
             ]
         )
+
+    def _write_navigation_documents(
+        self,
+        context: RequestContext,
+        outputs: dict[str, EngineRunResult],
+        domain_dir: Path,
+    ) -> list[str]:
+        ensure_directory(domain_dir)
+        paths: list[str] = []
+        domain_readme = self._render_domain_readme(context, outputs, domain_dir)
+        readme_path = domain_dir / "README.md"
+        readme_path.write_text(domain_readme, encoding="utf-8")
+        paths.append(readme_path.as_posix())
+        domain_index_path = domain_dir / "index.md"
+        domain_index_path.write_text(RealtimeFileReviewer.render_domain_navigation(context, domain_dir), encoding="utf-8")
+        paths.append(domain_index_path.as_posix())
+        for module in context.knowledge_modules:
+            module_dir = domain_dir / module["directory"]
+            ensure_directory(module_dir)
+            module_readme = module_dir / "README.md"
+            module_index = module_dir / "index.md"
+            module_readme.write_text(
+                RealtimeFileReviewer.render_module_overview(context, module["module_id"], module_dir),
+                encoding="utf-8",
+            )
+            module_index.write_text(
+                RealtimeFileReviewer.render_module_index(context, module["module_id"], module_dir),
+                encoding="utf-8",
+            )
+            paths.extend([module_readme.as_posix(), module_index.as_posix()])
+        for topic in (context.core_topics or context.subdomains):
+            topic_dir = domain_dir / "02_core_topics" / sanitize_path_segment(topic, "topic")
+            ensure_directory(topic_dir)
+            topic_readme = topic_dir / "README.md"
+            topic_index = topic_dir / "index.md"
+            topic_readme.write_text(
+                RealtimeFileReviewer.render_subdomain_overview(context, topic_dir, topic),
+                encoding="utf-8",
+            )
+            topic_index.write_text(
+                RealtimeFileReviewer.render_subdomain_index(context, topic_dir, topic),
+                encoding="utf-8",
+            )
+            paths.extend([topic_readme.as_posix(), topic_index.as_posix()])
+        return paths
+
+    @staticmethod
+    def _plan_document_directory(domain_dir: Path, module_id: str, subdomain: str) -> Path:
+        module_dir = domain_dir / module_directory(module_id)
+        if module_id == "core_topics":
+            return module_dir / sanitize_path_segment(subdomain or "topic", "topic")
+        return module_dir

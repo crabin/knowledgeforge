@@ -24,6 +24,7 @@ from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleEmbeddingClient,
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso
@@ -132,6 +133,9 @@ class QuerySearchNode(BaseQueryNode):
                 "aliases": state.domain_aliases,
                 "search_terms": state.search_terms,
                 "subdomains": context.subdomains,
+                "core_topics": context.core_topics,
+                "knowledge_modules": context.knowledge_modules,
+                "navigation_targets": context.navigation_targets,
                 "time_window": context.time_window,
                 "focus_points": context.focus_points,
                 "constraints": context.constraints,
@@ -152,6 +156,7 @@ class QuerySearchNode(BaseQueryNode):
         ]
         if not question_templates:
             raise RuntimeError("QueryEngine LLM did not return any valid search questions.")
+        question_templates = self._prepend_structural_templates(state, question_templates)
         questions = self._expand_questions_to_article_plan(
             state,
             question_templates,
@@ -295,12 +300,15 @@ class QuerySearchNode(BaseQueryNode):
                 {
                     "plan_item_id": question.plan_item_id,
                     "question": question.question,
+                    "query": question.google_query,
                     "search_targets": question.search_targets,
                     "status": question.status,
                     "total_hits": len(question_hits),
                     "completed_at": question.completed_at,
                     "url": question.candidate_url,
                     "subdomain": question.subdomain,
+                    "module_id": question.module_id,
+                    "doc_role": question.doc_role,
                     "planned_path": question.planned_path,
                 },
             )
@@ -458,6 +466,12 @@ class QuerySearchNode(BaseQueryNode):
                     subdomain=str(item.get("subdomain", "")).strip()
                     or (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
                     doc_type=str(item.get("doc_type", "source")).strip() or "source",
+                    doc_role=str(item.get("doc_role", "")).strip() or "topic_article",
+                    module_id=str(item.get("module_id", "")).strip() or "core_topics",
+                    module_label=module_labels_by_id().get(
+                        str(item.get("module_id", "")).strip() or "core_topics",
+                        "Core Topics",
+                    ),
                 )
             )
         return questions
@@ -496,9 +510,18 @@ class QuerySearchNode(BaseQueryNode):
                         status="planned",
                         subdomain=template.subdomain,
                         doc_type=template.doc_type,
+                        doc_role=template.doc_role,
+                        module_id=template.module_id,
+                        module_label=template.module_label,
                         article_title=template.question,
                         source_kind=source_type,
-                        planned_path=self._planned_article_path(state, template.subdomain, template.question),
+                        planned_path=self._planned_article_path(
+                            state,
+                            subdomain=template.subdomain,
+                            title=template.question,
+                            module_id=template.module_id,
+                            doc_role=template.doc_role,
+                        ),
                     )
                 )
                 continue
@@ -507,7 +530,6 @@ class QuerySearchNode(BaseQueryNode):
                 if not url or url in seen_urls:
                     continue
                 seen_urls.add(url)
-                planned_path = self._planned_article_path(state, template.subdomain, hit.title)
                 article_question = SearchQuestion(
                     question=template.question,
                     google_query=template.google_query,
@@ -519,11 +541,20 @@ class QuerySearchNode(BaseQueryNode):
                     status="planned",
                     subdomain=template.subdomain,
                     doc_type=template.doc_type,
+                    doc_role=template.doc_role,
+                    module_id=template.module_id,
+                    module_label=template.module_label,
                     article_title=hit.title,
                     candidate_url=url,
                     publisher=getattr(hit, "publisher", ""),
                     source_kind=source_type,
-                    planned_path=planned_path,
+                    planned_path=self._planned_article_path(
+                        state,
+                        subdomain=template.subdomain,
+                        title=hit.title,
+                        module_id=template.module_id,
+                        doc_role=template.doc_role,
+                    ),
                 )
                 if url in existing_urls:
                     article_question.status = "skipped"
@@ -547,11 +578,24 @@ class QuerySearchNode(BaseQueryNode):
                     existing[line.split("url:", 1)[1].strip().strip('"').strip("'")] = path.as_posix()
         return existing
 
-    def _planned_article_path(self, state: QueryEngineState, subdomain: str, title: str) -> str:
-        domain_segment = sanitize_path_segment(state.request_context.domain, "domain")
-        subdomain_segment = sanitize_path_segment(subdomain or "通用", "general")
-        slug = slugify_filename(title, "article")
-        return f"{(self._save_root or Path('save')) / domain_segment / subdomain_segment / (slug + '.md')}".replace("\\", "/")
+    def _planned_article_path(
+        self,
+        state: QueryEngineState,
+        *,
+        subdomain: str,
+        title: str,
+        module_id: str,
+        doc_role: str,
+    ) -> str:
+        return plan_path_for_role(
+            save_root=self._save_root or Path("save"),
+            domain=state.request_context.domain,
+            module_id=module_id,
+            subdomain=subdomain,
+            doc_role=doc_role,
+            title=title,
+            suffix="query",
+        )
 
     def _questions_from_query_lists(
         self,
@@ -569,7 +613,10 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["命中相关官方或权威来源"],
                 fallback_queries=[],
-                subdomain=state.request_context.subdomains[0] if state.request_context.subdomains else "通用",
+                subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
+                module_id="core_topics",
+                module_label="Core Topics",
+                doc_role="topic_article",
             )
             for query in official_queries
         ]
@@ -582,7 +629,10 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["tutorial", "technical blog", "reference guide"],
                 success_criteria=["命中相关教程或技术参考"],
                 fallback_queries=self._expand_preferred_queries([query])[1:],
-                subdomain=state.request_context.subdomains[0] if state.request_context.subdomains else "通用",
+                subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
+                module_id="core_topics",
+                module_label="Core Topics",
+                doc_role="topic_article",
             )
             for query in tutorial_queries
         )
@@ -612,7 +662,10 @@ class QuerySearchNode(BaseQueryNode):
                     source_priority=["official documentation", "standard", "vendor docs"],
                     success_criteria=["补检索命中相关官方或权威来源"],
                     fallback_queries=[],
-                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
+                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.core_topics[0] if state.request_context.core_topics else "通用"),
+                    module_id=insufficient_questions[0].module_id if insufficient_questions else "core_topics",
+                    module_label=insufficient_questions[0].module_label if insufficient_questions else "Core Topics",
+                    doc_role=insufficient_questions[0].doc_role if insufficient_questions else "topic_article",
                 )
             )
         for query in tutorial_queries:
@@ -626,7 +679,10 @@ class QuerySearchNode(BaseQueryNode):
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["补检索命中相关实践资料"],
                     fallback_queries=[],
-                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
+                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.core_topics[0] if state.request_context.core_topics else "通用"),
+                    module_id=insufficient_questions[0].module_id if insufficient_questions else "core_topics",
+                    module_label=insufficient_questions[0].module_label if insufficient_questions else "Core Topics",
+                    doc_role=insufficient_questions[0].doc_role if insufficient_questions else "topic_article",
                 )
             )
         return questions
@@ -638,6 +694,8 @@ class QuerySearchNode(BaseQueryNode):
                 question.plan_item_id = f"Q{index}"
             if not question.search_targets:
                 question.search_targets = list(question.expected_info)
+            if not question.module_label:
+                question.module_label = module_labels_by_id().get(question.module_id, "Core Topics")
 
     @staticmethod
     def _question_log_details(question: SearchQuestion, *, status: str | None = None) -> dict:
@@ -654,6 +712,9 @@ class QuerySearchNode(BaseQueryNode):
             "completed_at": question.completed_at,
             "url": question.candidate_url,
             "subdomain": question.subdomain,
+            "module_id": question.module_id,
+            "module_label": question.module_label,
+            "doc_role": question.doc_role,
             "planned_path": question.planned_path,
             "review_status": question.review_status,
             "skip_reason": question.skip_reason,
@@ -905,6 +966,9 @@ class QuerySearchNode(BaseQueryNode):
                 context=state.request_context,
                 subdomain=question.subdomain,
                 doc_type=question.doc_type,
+                module_id=question.module_id,
+                module_label=question.module_label,
+                doc_role=question.doc_role,
                 planned_path=question.planned_path,
                 article_title=question.article_title or question.question,
                 url=question.candidate_url,
@@ -919,6 +983,8 @@ class QuerySearchNode(BaseQueryNode):
                     "query": question.google_query,
                     "url": question.candidate_url,
                     "subdomain": question.subdomain,
+                    "module_id": question.module_id,
+                    "doc_role": question.doc_role,
                     "planned_path": question.planned_path,
                     "review_status": result.status,
                     **result.to_dict(),
@@ -936,3 +1002,72 @@ class QuerySearchNode(BaseQueryNode):
                     "failure_category": "file_write_failed",
                 },
             )
+
+    def _prepend_structural_templates(
+        self,
+        state: QueryEngineState,
+        questions: list[SearchQuestion],
+    ) -> list[SearchQuestion]:
+        context = state.request_context
+        bootstrap = [
+            SearchQuestion(
+                question=f"建立 {context.domain} 的领域总览",
+                google_query=f"{state.normalized_domain or context.domain} overview official documentation",
+                search_targets=["领域定义", "核心问题", "重要性"],
+                expected_info=["领域定义", "核心问题", "主要应用"],
+                source_priority=["official documentation", "standard", "vendor docs"],
+                success_criteria=["命中领域总览级权威来源"],
+                fallback_queries=[f"{state.normalized_domain or context.domain} introduction authoritative source"],
+                subdomain="领域总览",
+                doc_type="summary",
+                doc_role="domain_overview",
+                module_id="overview",
+                module_label="Overview",
+            ),
+            SearchQuestion(
+                question=f"建立 {context.domain} 的基础知识导航",
+                google_query=f"{state.normalized_domain or context.domain} fundamentals official guide",
+                search_targets=["基础概念", "理论前置", "核心术语"],
+                expected_info=["基础概念", "理论前置", "核心术语"],
+                source_priority=["official documentation", "reference guide", "standard"],
+                success_criteria=["命中基础知识权威或高可信资料"],
+                fallback_queries=[f"{state.normalized_domain or context.domain} basics reference guide"],
+                subdomain="基础知识",
+                doc_type="article",
+                doc_role="module_doc",
+                module_id="foundations",
+                module_label="Foundations",
+            ),
+            SearchQuestion(
+                question=f"建立 {context.domain} 的论文脉络入口",
+                google_query=f"{state.normalized_domain or context.domain} survey papers recent papers",
+                search_targets=["综述论文", "最新研究方向", "代表论文"],
+                expected_info=["综述论文", "最新研究方向", "代表论文"],
+                source_priority=["survey paper", "official publication", "reference guide"],
+                success_criteria=["命中论文脉络相关高可信资料"],
+                fallback_queries=[f"{state.normalized_domain or context.domain} recent papers survey"],
+                subdomain="论文阅读",
+                doc_type="article",
+                doc_role="module_doc",
+                module_id="papers",
+                module_label="Papers",
+            ),
+        ]
+        for topic in context.core_topics:
+            bootstrap.append(
+                SearchQuestion(
+                    question=f"建立 {topic} 的核心主题入口",
+                    google_query=f"{state.normalized_domain or context.domain} {topic} official guide",
+                    search_targets=["主题定义", "代表方法", "适用场景"],
+                    expected_info=["主题定义", "代表方法", "适用场景"],
+                    source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
+                    success_criteria=["命中该主题的权威或高可信资料"],
+                    fallback_queries=[f"{state.normalized_domain or context.domain} {topic} reference documentation"],
+                    subdomain=topic,
+                    doc_type="article",
+                    doc_role="topic_overview",
+                    module_id="core_topics",
+                    module_label="Core Topics",
+                )
+            )
+        return [*bootstrap, *questions]

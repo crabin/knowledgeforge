@@ -21,6 +21,9 @@ class MediaPlanItem:
     planned_path: str
     source_kind: str
     doc_type: str = "trend"
+    doc_role: str = "topic_article"
+    module_id: str = "review"
+    module_label: str = "Review"
     plan_item_id: str = ""
     status: MediaItemStatus = "planned"
     skip_reason: str = ""

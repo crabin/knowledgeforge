@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS
+from knowledgeforge.utils.knowledge_tree import (
+    build_default_modules,
+    build_navigation_targets,
+    normalize_core_topics,
+)
 
 
 DEFAULT_SUBDOMAINS = ["基础概念", "核心方法", "应用场景"]
@@ -26,10 +31,13 @@ class ContextBuilder:
         search_terms = self._normalize_list(payload.get("search_terms")) or [normalized_domain, domain]
         clarification_summary = str(payload.get("clarification_summary", "")).strip()
         confirmed = bool(payload.get("confirmed", False))
+        knowledge_modules = build_default_modules()
+        core_topics = normalize_core_topics(subdomains, domain)
+        navigation_targets = build_navigation_targets(domain, core_topics)
 
         initial_strategy = [
             f"围绕 {normalized_domain} 的 {topic} 收集可追溯资料"
-            for topic in subdomains
+            for topic in core_topics
         ]
 
         return RequestContext(
@@ -47,6 +55,9 @@ class ContextBuilder:
             search_terms=self._dedupe(search_terms),
             clarification_summary=clarification_summary,
             confirmed=confirmed,
+            knowledge_modules=knowledge_modules,
+            core_topics=core_topics,
+            navigation_targets=navigation_targets,
         )
 
     @staticmethod
