@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ SUPPLEMENT_DECISION_SYSTEM_PROMPT = """
 
 输出 JSON：
 {
+  "coverage_summary": "...",
   "defects": [
     {
       "topic": "...",
@@ -57,6 +59,8 @@ class SupplementDefect:
 class SupplementDecision:
     defects: list[SupplementDefect]
     reasoning: str
+    coverage_summary: str
+    reviewed_documents: list[dict[str, str]]
     index_paths: list[str]
     source: str
 
@@ -64,6 +68,8 @@ class SupplementDecision:
         return {
             "defects": [asdict(defect) for defect in self.defects],
             "reasoning": self.reasoning,
+            "coverage_summary": self.coverage_summary,
+            "reviewed_documents": self.reviewed_documents,
             "index_paths": self.index_paths,
             "source": self.source,
         }
@@ -131,17 +137,24 @@ class SupplementDecisionPlanner:
                                 }
                                 for name, output in outputs.items()
                             },
-                            "knowledge_index": index_payload,
+                            "knowledge_index": {
+                                "paths": index_payload["paths"],
+                                "readme_excerpt": index_payload["readme_excerpt"],
+                            },
+                            "knowledge_overview": {
+                                "reviewed_documents": index_payload["documents"],
+                                "coverage_outline": index_payload["coverage_outline"],
+                            },
                         },
                         ensure_ascii=False,
                     ),
                 )
-                decision = self._parse_llm_decision(payload, index_payload["paths"])
+                decision = self._parse_llm_decision(payload, index_payload)
                 if decision.defects:
                     return decision
             except Exception:
                 pass
-        return self._fallback_decision(context, completeness, outputs, index_payload["paths"])
+        return self._fallback_decision(context, completeness, outputs, index_payload)
 
     def to_query_engine_plan(self, decision: SupplementDecision, *, round_number: int) -> EnginePlan:
         timestamp = now_iso()
@@ -170,11 +183,12 @@ class SupplementDecisionPlanner:
 
     def _read_index_payload(self, context: RequestContext) -> dict[str, Any]:
         domain_dir = self._save_root / sanitize_path_segment(context.domain, "domain")
-        candidates = [domain_dir / "README.md"]
+        readme_path = domain_dir / "README.md"
+        candidates = [readme_path]
         if domain_dir.exists():
-            candidates.extend(sorted(domain_dir.glob("**/*-query.md")))
             candidates.extend(sorted(path for path in domain_dir.glob("**/*.md") if path.name != "README.md"))
         contents: list[dict[str, str]] = []
+        coverage_outline: list[str] = []
         remaining = self._max_index_chars
         for path in candidates:
             if not path.exists() or not path.is_file() or remaining <= 0:
@@ -182,16 +196,36 @@ class SupplementDecisionPlanner:
             text = path.read_text(encoding="utf-8", errors="ignore").strip()
             if not text:
                 continue
-            snippet = text[:remaining]
-            remaining -= len(snippet)
-            contents.append({"path": path.as_posix(), "content": snippet})
+            if path.name == "README.md":
+                snippet = text[: min(len(text), remaining, 2400)]
+                remaining -= len(snippet)
+                coverage_outline.append(f"README: {self._collapse_whitespace(snippet[:400])}")
+                contents.append(
+                    {
+                        "path": path.as_posix(),
+                        "title": context.domain,
+                        "doc_type": "index",
+                        "overview": self._collapse_whitespace(snippet[:900]),
+                    }
+                )
+                continue
+            doc = self._build_document_overview(path, text, remaining)
+            if doc is None:
+                continue
+            remaining -= len(doc["overview"])
+            contents.append(doc)
+            coverage_outline.append(
+                f"{doc['title']} ({doc['subdomain']}): {self._collapse_whitespace(doc['overview'][:160])}"
+            )
         return {
             "paths": [item["path"] for item in contents],
             "documents": contents,
+            "coverage_outline": coverage_outline[:12],
+            "readme_excerpt": contents[0]["overview"] if contents and contents[0]["path"].endswith("README.md") else "",
         }
 
     @staticmethod
-    def _parse_llm_decision(payload: dict[str, Any], index_paths: list[str]) -> SupplementDecision:
+    def _parse_llm_decision(payload: dict[str, Any], index_payload: dict[str, Any]) -> SupplementDecision:
         defects: list[SupplementDefect] = []
         for item in payload.get("defects", []):
             if not isinstance(item, dict):
@@ -223,8 +257,11 @@ class SupplementDecisionPlanner:
         return SupplementDecision(
             defects=defects,
             reasoning=str(payload.get("reasoning", "")).strip() or "LLM 基于实时知识 index 生成补充决策。",
-            index_paths=index_paths,
-            source="llm_index_analysis",
+            coverage_summary=str(payload.get("coverage_summary", "")).strip()
+            or "LLM 已审阅现有知识文档概述，并据此判断缺口。",
+            reviewed_documents=index_payload.get("documents", [])[:10],
+            index_paths=index_payload.get("paths", []),
+            source="llm_saved_document_review",
         )
 
     @staticmethod
@@ -232,7 +269,7 @@ class SupplementDecisionPlanner:
         context: RequestContext,
         completeness: CompletenessResult,
         outputs: dict[str, EngineRunResult],
-        index_paths: list[str],
+        index_payload: dict[str, Any],
     ) -> SupplementDecision:
         defects: list[SupplementDefect] = []
         for topic in completeness.missing_topics:
@@ -278,7 +315,73 @@ class SupplementDecisionPlanner:
             )
         return SupplementDecision(
             defects=defects[:6],
-            reasoning="LLM 决策不可用，已根据完整性评估和实时 index 路径生成规则补充决策。",
-            index_paths=index_paths,
-            source="fallback_index_analysis",
+            reasoning="LLM 决策不可用，已根据完整性评估和已保存文档概述生成规则补充决策。",
+            coverage_summary="规则模式已检查 README、历史文章摘要与后续动作，发现仍存在未覆盖主题或权威来源缺口。",
+            reviewed_documents=index_payload.get("documents", [])[:10],
+            index_paths=index_payload.get("paths", []),
+            source="fallback_saved_document_review",
         )
+
+    def _build_document_overview(self, path: Path, text: str, remaining: int) -> dict[str, str] | None:
+        if remaining <= 0:
+            return None
+        front_matter, body = self._split_front_matter(text)
+        summary = self._extract_section(body, "摘要")
+        conclusions = self._extract_section(body, "关键结论")
+        followups = self._extract_section(body, "后续动作")
+        background = self._extract_section(body, "背景与上下文")
+        overview_parts = [
+            summary,
+            conclusions,
+            followups,
+            background,
+            self._collapse_whitespace(body[:320]),
+        ]
+        overview = "\n".join(part for part in overview_parts if part)
+        if not overview:
+            return None
+        title = front_matter.get("title") or self._extract_heading(body) or path.stem
+        subdomain = front_matter.get("subdomain") or path.parent.name
+        doc_type = front_matter.get("doc_type") or "article"
+        source_type = front_matter.get("source_type") or "mixed"
+        return {
+            "path": path.as_posix(),
+            "title": title,
+            "subdomain": subdomain,
+            "doc_type": doc_type,
+            "source_type": source_type,
+            "overview": overview[: min(remaining, 1200)],
+        }
+
+    @staticmethod
+    def _split_front_matter(text: str) -> tuple[dict[str, str], str]:
+        if not text.startswith("---"):
+            return {}, text
+        match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, re.DOTALL)
+        if not match:
+            return {}, text
+        raw_front_matter, body = match.groups()
+        fields: dict[str, str] = {}
+        for line in raw_front_matter.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            fields[key.strip()] = value.strip().strip('"').strip("'")
+        return fields, body
+
+    @staticmethod
+    def _extract_heading(body: str) -> str:
+        match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _extract_section(body: str, title: str) -> str:
+        pattern = rf"^##\s+{re.escape(title)}\s*$([\s\S]*?)(?=^##\s+|\Z)"
+        match = re.search(pattern, body, re.MULTILINE)
+        if not match:
+            return ""
+        return SupplementDecisionPlanner._collapse_whitespace(match.group(1).strip())[:500]
+
+    @staticmethod
+    def _collapse_whitespace(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()

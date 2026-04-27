@@ -210,6 +210,12 @@ class KnowledgeGraphWorkflow:
 
     def _query_supplement(self, state: WorkflowState) -> dict[str, Any]:
         next_round = state.get("round_number", 1) + 1
+        pre_updates = {
+            "task_status": "supplementing",
+            "current_step": "supplementing",
+            "current_action": "正在分析已保存文档概述并生成补充查询计划。",
+        }
+        self._commit_state(state, pre_updates)
         self._emit_workflow_event(state, "supplementing", "补充决策与 QueryEngine 定向补采", "active")
         plan = self._supplement_planner.plan(
             context=state["request_context"],
@@ -217,11 +223,12 @@ class KnowledgeGraphWorkflow:
             outputs=state["agent_outputs"],
             round_number=next_round,
         )
+        supplement_decision = state["completeness"].supplement_decision if state.get("completeness") else {}
         if not plan.plan_items:
             updates = {
                 "task_status": "supplement_required",
                 "current_step": "supplementing",
-                "current_action": "补充决策未生成可执行 QueryEngine 计划。",
+                "current_action": "已分析保存文档，但未生成可执行的补充查询计划。",
             }
             self._commit_state(state, updates)
             return updates
@@ -247,17 +254,20 @@ class KnowledgeGraphWorkflow:
             "round_number": next_round,
             "task_status": "running",
             "current_step": "supplementing",
-            "current_action": f"已生成第 {next_round} 轮补检索计划，等待三路 Agent 重新采集。",
+            "current_action": f"已基于保存文档概述生成第 {next_round} 轮补检索计划，等待三路 Agent 重新采集。",
             "workflow_events": [
                 *state.get("workflow_events", []),
                 self._make_workflow_event(
                     "supplementing",
-                    "补充决策与下一轮三路采集准备",
+                    "补充决策、文档缺口分析与下一轮三路采集准备",
                     "completed",
                     {
                         "round": next_round,
                         "plan_item_count": len(plan.plan_items),
                         "queries": [item.query_or_action for item in plan.plan_items],
+                        "reviewed_document_count": len(supplement_decision.get("reviewed_documents", [])),
+                        "coverage_summary": supplement_decision.get("coverage_summary", ""),
+                        "defects": supplement_decision.get("defects", []),
                     },
                 ),
             ],

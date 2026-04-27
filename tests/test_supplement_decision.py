@@ -29,6 +29,7 @@ class FakeSupplementChatClient:
     def complete_json(self, *, system_prompt: str, user_prompt: str):
         self.prompts.append(user_prompt)
         return {
+            "coverage_summary": "已检查 README 与历史知识文档，发现索引维护证据仍然不足。",
             "defects": [
                 {
                     "topic": "知识 index 索引",
@@ -87,6 +88,27 @@ def test_supplement_planner_reads_domain_index_and_builds_query_plan(tmp_path: P
     domain_dir = tmp_path / sanitize_path_segment(context.domain, "domain")
     ensure_directory(domain_dir)
     (domain_dir / "README.md").write_text("# 知识工程\n\n## 子主题\n\n- 工作流编排\n", encoding="utf-8")
+    subdomain_dir = domain_dir / "知识-index-索引"
+    ensure_directory(subdomain_dir)
+    (subdomain_dir / "20260425-index-review-query.md").write_text(
+        """---
+title: "知识索引维护现状"
+subdomain: "知识 index 索引"
+doc_type: "article"
+source_type: "query"
+---
+# 知识索引维护现状
+
+## 摘要
+
+现有文档说明了 README 目录结构，但没有覆盖索引维护与实时更新策略。
+
+## 后续动作
+
+- 补充官方或最佳实践来源，说明如何维护知识索引。
+""",
+        encoding="utf-8",
+    )
     chat_client = FakeSupplementChatClient()
 
     planner = SupplementDecisionPlanner(save_root=tmp_path, chat_client=chat_client)
@@ -108,7 +130,10 @@ def test_supplement_planner_reads_domain_index_and_builds_query_plan(tmp_path: P
     assert plan.agent_name == "QueryEngine"
     assert plan.plan_items[0].query_or_action == "Knowledge graph markdown README index maintenance official documentation"
     assert "README.md" in chat_client.prompts[0]
-    assert completeness.supplement_decision["source"] == "llm_index_analysis"
+    assert "知识索引维护现状" in chat_client.prompts[0]
+    assert completeness.supplement_decision["source"] == "llm_saved_document_review"
+    assert completeness.supplement_decision["reviewed_documents"][1]["title"] == "知识索引维护现状"
+    assert "索引维护证据仍然不足" in completeness.supplement_decision["coverage_summary"]
 
 
 class FakeInsightEngine:
@@ -239,3 +264,4 @@ def test_workflow_uses_index_decision_to_dispatch_query_supplement(tmp_path: Pat
     assert query_engine.run_rounds == [1, 2]
     assert media_engine.run_rounds == [1, 2]
     assert final_state["completeness"].supplement_decision["index_paths"]
+    assert final_state["completeness"].supplement_decision["reviewed_documents"]

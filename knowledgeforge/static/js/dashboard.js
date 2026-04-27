@@ -149,6 +149,7 @@ function renderSummary(payload) {
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
     ["错误", payload.error],
     ["计划进度", progress],
+    ["补检索分析", summarizeSupplementDecision(payload)],
     ["实时保存", realtime],
     ["Token", summarizeTokenUsageLabel(payload)],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
@@ -508,6 +509,7 @@ function renderAgentPlans(payload) {
   const plans = payload.agent_plans || payload.task?.agent_plans || {};
   const taskStatus = payload.task_status || payload.task?.task_status || "";
   const planItems = buildAgentPlanItems(plans, payload);
+  const supplementDecision = payload.completeness?.supplement_decision || payload.task?.completeness?.supplement_decision || {};
   const isEditable = taskStatus === "awaiting_plan_confirmation";
 
   if (planPanelHint) {
@@ -521,7 +523,8 @@ function renderAgentPlans(payload) {
     return;
   }
 
-  agentPlanOutput.innerHTML = planItems
+  const supplementCard = renderSupplementDecisionCard(supplementDecision);
+  agentPlanOutput.innerHTML = `${supplementCard}${planItems
     .map((item) => {
       const done = item.status === "completed";
       const active = item.status === "in_progress" || item.status === "approved";
@@ -562,11 +565,41 @@ function renderAgentPlans(payload) {
         ${actionButtons}
       </article>`;
     })
-    .join("");
+    .join("")}`;
 
   if (isEditable) {
     attachPlanCardHandlers();
   }
+}
+
+function renderSupplementDecisionCard(decision) {
+  if (!decision || !Array.isArray(decision.defects) || !decision.defects.length) return "";
+  const reviewedDocuments = Array.isArray(decision.reviewed_documents) ? decision.reviewed_documents : [];
+  const documentItems = reviewedDocuments.slice(0, 3).map((doc) => {
+    const title = doc.title || doc.path || "未命名文档";
+    const subdomain = doc.subdomain ? ` · ${doc.subdomain}` : "";
+    return `<li>${escapeHtml(title)}${escapeHtml(subdomain)}</li>`;
+  }).join("");
+  const defectItems = decision.defects.slice(0, 3).map((defect) => {
+    const topic = defect.topic || "未命名缺口";
+    const issue = defect.issue || "";
+    return `<li>${escapeHtml(topic)}：${escapeHtml(issue)}</li>`;
+  }).join("");
+  const summary = decision.coverage_summary || decision.reasoning || "已基于保存文档生成补充决策。";
+  return `<article class="plan-card active">
+    <div class="plan-card-head">
+      <span class="checkmark" aria-hidden="true"></span>
+      <div>
+        <strong>补检索分析 · 已审阅保存文档</strong>
+        <span>${escapeHtml(reviewedDocuments.length ? `已审阅 ${reviewedDocuments.length} 篇文档` : "已生成缺口判断")}</span>
+      </div>
+    </div>
+    <div class="plan-query">${escapeHtml(summary)}</div>
+    <div class="plan-lists">
+      <div><b>审阅文档</b><ul>${documentItems || "<li>暂无记录</li>"}</ul></div>
+      <div><b>识别缺口</b><ul>${defectItems || "<li>暂无记录</li>"}</ul></div>
+    </div>
+  </article>`;
 }
 
 function attachPlanCardHandlers() {
@@ -885,6 +918,13 @@ function summarizeTokenUsageLabel(payload) {
   const usage = payload.token_usage || payload.task?.token_usage;
   if (!usage || !usage.request_count) return "";
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
+}
+
+function summarizeSupplementDecision(payload) {
+  const decision = payload.completeness?.supplement_decision || payload.task?.completeness?.supplement_decision;
+  if (!decision || !Array.isArray(decision.defects) || !decision.defects.length) return "";
+  const docCount = Array.isArray(decision.reviewed_documents) ? decision.reviewed_documents.length : 0;
+  return `${docCount || 0} 篇文档已审阅，新增 ${decision.defects.length} 个补检索缺口`;
 }
 
 function renderTokenUsage(payload) {
