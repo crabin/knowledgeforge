@@ -414,8 +414,12 @@ class DomainKnowledgeCrawler:
             return 2.0
         if "cloud.tencent.com" in url:
             return 1.5
+        if "runoob.com" in url:
+            return 1.25
         if "zhihu.com/search" in url:
             return 1.0
+        if "so.csdn.net" in url:
+            return 0.25
         return 0.0
 
     @staticmethod

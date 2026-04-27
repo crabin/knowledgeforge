@@ -8,7 +8,11 @@ from agent.QueryEngine.tools.crawler import (
     parse_brave_results,
     parse_google_results,
 )
-from agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
+from agent.QueryEngine.tools.supplemental_sources import (
+    build_supplemental_source_targets,
+    is_it_tutorial_query,
+    probe_source_url,
+)
 from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher, WikipediaResult
 
 
@@ -121,6 +125,21 @@ def test_build_supplemental_source_targets_includes_requested_urls() -> None:
     assert by_key["tencent_cloud"].url == "https://cloud.tencent.com/developer/search/article-GAN"
     assert by_key["zhihu_search"].url == "https://www.zhihu.com/search?type=content&q=GAN"
     assert by_key["zh_wikipedia"].url.startswith("https://zh.wikipedia.org/")
+    assert by_key["csdn_search"].url == "https://so.csdn.net/so/search?spm=1000.2115.3001.4498&q=GAN&t=&u="
+    assert by_key["runoob_search"].url == "https://www.runoob.com/?s=GAN"
+
+
+def test_build_supplemental_source_targets_skips_runoob_for_non_it_query() -> None:
+    targets = build_supplemental_source_targets("历史人物")
+    keys = {target.key for target in targets}
+    assert "csdn_search" in keys
+    assert "runoob_search" not in keys
+
+
+def test_is_it_tutorial_query_matches_python_and_tutorial_terms() -> None:
+    assert is_it_tutorial_query("python 教程")
+    assert is_it_tutorial_query("LangGraph examples")
+    assert not is_it_tutorial_query("世界历史")
 
 
 def test_probe_source_url_marks_zhihu_block_page_unavailable() -> None:

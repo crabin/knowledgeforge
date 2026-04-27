@@ -79,3 +79,45 @@ def test_check_zh_wikipedia_source_script_returns_zero_when_available(monkeypatc
     )
     assert module.main(["GAN"]) == 0
     assert "zh_wikipedia" in capsys.readouterr().out
+
+
+def test_check_runoob_source_script_returns_zero_when_available(monkeypatch, capsys) -> None:
+    module = _load_script_module("check_runoob_source", "scripts/check_runoob_source.py")
+    monkeypatch.setattr(
+        module,
+        "probe_source_url",
+        lambda target: SourceProbeResult(
+            key=target.key,
+            url=target.url,
+            available=True,
+            status_code=200,
+            http_status_code=200,
+            final_url=target.url,
+            probe_method="http",
+            reason="ok",
+            content_chars=300,
+        ),
+    )
+    assert module.main(["python"]) == 0
+    assert "runoob_search" in capsys.readouterr().out
+
+
+def test_check_csdn_source_script_returns_zero_when_available(monkeypatch, capsys) -> None:
+    module = _load_script_module("check_csdn_source", "scripts/check_csdn_source.py")
+    monkeypatch.setattr(
+        module,
+        "probe_source_url",
+        lambda target: SourceProbeResult(
+            key=target.key,
+            url=target.url,
+            available=True,
+            status_code=200,
+            http_status_code=200,
+            final_url=target.url,
+            probe_method="http",
+            reason="ok",
+            content_chars=300,
+        ),
+    )
+    assert module.main(["IDS"]) == 0
+    assert "csdn_search" in capsys.readouterr().out

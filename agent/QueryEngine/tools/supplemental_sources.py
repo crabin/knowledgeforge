@@ -15,6 +15,43 @@ BLOCKED_ZHIHU_MARKERS = (
     "知乎小管家",
 )
 
+IT_TUTORIAL_KEYWORDS = (
+    "python",
+    "java",
+    "javascript",
+    "typescript",
+    "golang",
+    "go ",
+    "rust",
+    "c++",
+    "c#",
+    "linux",
+    "docker",
+    "kubernetes",
+    "mysql",
+    "postgresql",
+    "redis",
+    "nginx",
+    "flask",
+    "django",
+    "fastapi",
+    "react",
+    "vue",
+    "node",
+    "langgraph",
+    "llm",
+    "ai",
+    "machine learning",
+    "deep learning",
+    "gan",
+    "教程",
+    "入门",
+    "示例",
+    "代码",
+    "开发",
+    "编程",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SupplementalSourceTarget:
@@ -43,7 +80,7 @@ class SourceProbeResult:
 
 def build_supplemental_source_targets(query: str) -> list[SupplementalSourceTarget]:
     encoded_query = quote_plus(" ".join(query.split()))
-    return [
+    targets = [
         SupplementalSourceTarget(
             key="tencent_cloud",
             label="腾讯云开发者社区搜索",
@@ -67,7 +104,30 @@ def build_supplemental_source_targets(query: str) -> list[SupplementalSourceTarg
             snippet="中文维基百科搜索结果页，可补充概念定义与术语映射。",
             allow_browser_fallback=True,
         ),
+        SupplementalSourceTarget(
+            key="csdn_search",
+            label="CSDN 搜索",
+            url=f"https://so.csdn.net/so/search?spm=1000.2115.3001.4498&q={encoded_query}&t=&u=",
+            publisher="so.csdn.net",
+            snippet="CSDN 博客搜索结果页，可补充社区文章线索，但内容质量不稳定，需降权看待。",
+        ),
     ]
+    if is_it_tutorial_query(query):
+        targets.append(
+            SupplementalSourceTarget(
+                key="runoob_search",
+                label="菜鸟教程搜索",
+                url=f"https://www.runoob.com/?s={encoded_query}",
+                publisher="www.runoob.com",
+                snippet="菜鸟教程搜索结果页，适合 IT 教程、语法与入门示例类查询。",
+            )
+        )
+    return targets
+
+
+def is_it_tutorial_query(query: str) -> bool:
+    normalized = f" {query.strip().lower()} "
+    return any(keyword in normalized for keyword in IT_TUTORIAL_KEYWORDS)
 
 
 def probe_source_url(
