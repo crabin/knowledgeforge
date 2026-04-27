@@ -16,7 +16,7 @@ class QueryFormattingNode(BaseQueryNode):
             f"术语归一化：{state.request_context.domain} -> {state.normalized_domain or state.request_context.domain}",
             f"归一化说明：{state.normalization_reasoning or '无'}",
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
-            "查询计划：",
+            "链接级采集计划：",
             *self._format_search_plan(state),
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             f"候选官方域名：{', '.join(state.candidate_official_domains) if state.candidate_official_domains else '无'}",
@@ -54,6 +54,7 @@ class QueryFormattingNode(BaseQueryNode):
             )
             for doc in state.crawled_documents
         ]
+        sources.sort(key=lambda item: (0 if item.source_type == "official" else 1, item.title.lower()))
         if not sources:
             sources = self._fallback_sources(state)
             raw_material.extend(
@@ -101,19 +102,25 @@ class QueryFormattingNode(BaseQueryNode):
     @staticmethod
     def _format_search_plan(state: QueryEngineState) -> list[str]:
         if not state.search_plan or not state.search_plan.questions:
-            return ["- 无结构化查询问题。"]
+            return ["- 无结构化链接级计划项。"]
         formatted: list[str] = []
-        for index, question in enumerate(state.search_plan.questions, start=1):
+        for question in state.search_plan.questions:
             marker = "☑" if question.status == "completed" else "☐"
             formatted.append(
-                f"- {marker} Q{index} [{question.status}] {question.question} | Google 查询：{question.google_query}"
+                f"- {marker} {question.plan_item_id or 'Q?'} [{question.status}] {question.article_title or question.question} | URL：{question.candidate_url or '待解析'}"
             )
+            formatted.append(f"  子领域：{question.subdomain or '通用'}")
+            formatted.append(f"  查询：{question.google_query}")
             if question.search_targets:
                 formatted.append(f"  查询内容：{'; '.join(question.search_targets)}")
             if question.expected_info:
                 formatted.append(f"  预期信息：{'; '.join(question.expected_info)}")
             if question.success_criteria:
                 formatted.append(f"  满足标准：{'; '.join(question.success_criteria)}")
+            if question.planned_path:
+                formatted.append(f"  计划保存路径：{question.planned_path}")
+            if question.skip_reason:
+                formatted.append(f"  跳过原因：{question.skip_reason}")
             if question.fallback_queries:
                 formatted.append(f"  补查查询：{'; '.join(question.fallback_queries)}")
         return formatted

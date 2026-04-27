@@ -247,6 +247,12 @@ class MarkdownKnowledgeWriter:
                     f"  满足标准：{'; '.join(item.success_criteria) if item.success_criteria else '未指定'}",
                 ]
             )
+            if item.metadata.get("subdomain"):
+                plan_lines.append(f"  子领域：{item.metadata.get('subdomain')}")
+            if item.metadata.get("url"):
+                plan_lines.append(f"  URL：{item.metadata.get('url')}")
+            if item.metadata.get("planned_path"):
+                plan_lines.append(f"  计划保存路径：{item.metadata.get('planned_path')}")
             if item.fallbacks:
                 plan_lines.append(f"  补查查询：{'; '.join(item.fallbacks)}")
         return "\n".join(
@@ -330,9 +336,10 @@ class MarkdownKnowledgeWriter:
 
     @staticmethod
     def _extract_query_plan_lines(raw_material: list[str]) -> list[str]:
-        if "查询计划：" not in raw_material:
+        heading = "链接级采集计划：" if "链接级采集计划：" in raw_material else "查询计划："
+        if heading not in raw_material:
             return []
-        start = raw_material.index("查询计划：") + 1
+        start = raw_material.index(heading) + 1
         lines: list[str] = []
         for item in raw_material[start:]:
             if item in {"反思结论：", "官方文档优先：", "教程/补充资料："} or item.startswith("反思结论："):
@@ -374,14 +381,14 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 摘要",
                 "",
-                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 QueryEngine 执行前生成的查询计划、预期信息和执行状态。",
+                f"本文档保存 {context.domain} / {', '.join(context.subdomains)} 在本轮 QueryEngine 执行前生成的链接级采集计划、预期信息和执行状态。",
                 "它用于审计查询决策，不等同于已验证知识结论。",
                 "",
                 "## 关键结论",
                 "",
-                "- QueryEngine 已在检索前生成结构化查询计划。",
-                "- 每个查询问题保留 Google 风格查询语句、预期信息、满足标准和补查查询。",
-                "- 执行事件可用于判断哪些问题已满足、哪些仍需补检索。",
+                "- QueryEngine 已在检索前生成结构化链接级采集计划。",
+                "- 每个计划项保留目标 URL、所属子领域、预期信息、满足标准和计划保存路径。",
+                "- 执行事件可用于判断哪些文章级计划项已满足、哪些仍需补检索。",
                 "",
                 "## 背景与上下文",
                 "",
@@ -392,9 +399,9 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 正文",
                 "",
-                "### 查询计划",
+                "### 链接级采集计划",
                 "",
-                *(query_plan_lines or ["- 暂无结构化查询计划。"]),
+                *(query_plan_lines or ["- 暂无结构化链接级采集计划。"]),
                 "",
                 "### 执行事件",
                 "",
@@ -424,11 +431,11 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 冲突与不确定性",
                 "",
-                "- 查询计划只代表检索决策，不能替代已验证事实。",
+                "- 该计划只代表待执行的文章级采集决策，不能替代已验证事实。",
                 "",
                 "## 后续动作",
                 "",
-                "- 对 status=insufficient 的查询问题执行补检索或人工复核。",
+                "- 对 status=insufficient 的计划项执行补检索或人工复核。",
                 "",
                 "## 变更记录",
                 "",
@@ -499,6 +506,11 @@ class MarkdownKnowledgeWriter:
 
         body_sections = []
         for agent_name, output in outputs.items():
+            if agent_name == "QueryEngine":
+                aggregated_query_docs = self._render_saved_query_articles(context)
+                if aggregated_query_docs:
+                    body_sections.append(aggregated_query_docs)
+                    continue
             bullet_points = "\n".join(f"- {point}" for point in output.key_points)
             raw_material = "\n".join(f"- {item}" for item in self._readable_raw_material(agent_name, output.raw_material))
             body_sections.append(
@@ -607,6 +619,25 @@ class MarkdownKnowledgeWriter:
             ]
         )
 
+    def _render_saved_query_articles(self, context: RequestContext) -> str:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        realtime_docs = [
+            item for item in RealtimeFileReviewer.scan_realtime_documents(domain_dir) if item.get("agent") == "QueryEngine"
+        ]
+        if not realtime_docs:
+            return ""
+        lines = [
+            "### QueryEngine",
+            "以下内容基于已保存的文章级 Query 文档聚合，不再直接把原始查询计划当作主知识载体。",
+            "",
+            "#### 已保存文章",
+        ]
+        lines.extend(
+            f"- {item['title']} | {item['subdomain']} | {item['url']} | {item['path']}"
+            for item in realtime_docs[:10]
+        )
+        return "\n".join(lines)
+
     @staticmethod
     def _readable_raw_material(agent_name: str, raw_material: list[str]) -> list[str]:
         if agent_name != "QueryEngine":
@@ -615,7 +646,7 @@ class MarkdownKnowledgeWriter:
         skipping_query_plan = False
         skipped_plan_lines = 0
         for item in raw_material:
-            if item == "查询计划：":
+            if item in {"查询计划：", "链接级采集计划："}:
                 skipping_query_plan = True
                 continue
             if skipping_query_plan:

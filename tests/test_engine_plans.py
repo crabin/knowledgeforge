@@ -66,7 +66,7 @@ class FailingChatClient:
 
 class FailingCrawler:
     def search(self, **kwargs):
-        raise AssertionError("plan() must not call crawler.search")
+        raise AssertionError("plan() must call a crawler that can return candidate links")
 
     def fetch_documents(self, hits, *, max_documents: int = 8):
         raise AssertionError("plan() must not call crawler.fetch_documents")
@@ -77,8 +77,18 @@ class RecordingQueryCrawler:
         self.queries: list[str] = []
 
     def search(self, **kwargs):
+        from agent.QueryEngine.state.state import SearchHit
+
         self.queries.append(kwargs["query"])
-        return []
+        return [
+            SearchHit(
+                title=f"Hit for {kwargs['query']}",
+                url=f"https://example.com/{kwargs['query'].replace(' ', '-')}",
+                snippet="official reference",
+                source_type=kwargs.get("source_type", "official"),
+                score=1.0,
+            )
+        ]
 
     def fetch_documents(self, hits, *, max_documents: int = 8):
         return []
@@ -112,7 +122,7 @@ def test_three_engines_generate_plans_without_execution() -> None:
     chat_client = FakePlanChatClient()
 
     insight_plan = InsightEngine(chat_client=chat_client).plan(context, 1)
-    query_plan = QueryEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    query_plan = QueryEngine(chat_client=chat_client, crawler=RecordingQueryCrawler()).plan(context, 1)
     media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
 
     assert insight_plan.agent_name == "InsightEngine"
@@ -142,7 +152,7 @@ def test_query_and_media_plans_dedupe_repeated_queries() -> None:
             return payload
 
     chat_client = DuplicatePlanChatClient()
-    query_plan = QueryEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
+    query_plan = QueryEngine(chat_client=chat_client, crawler=RecordingQueryCrawler()).plan(context, 1)
     media_plan = MediaEngine(chat_client=chat_client, crawler=FailingCrawler()).plan(context, 1)
 
     assert len(query_plan.plan_items) == 1

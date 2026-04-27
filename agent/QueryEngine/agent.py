@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from agent.QueryEngine.nodes.base_node import QueryEventCallback
 from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
 from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
@@ -29,6 +31,7 @@ class QueryEngine(BaseEngine):
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
         task_queue: RetrievalTaskQueue | None = None,
+        save_root: Path | None = None,
     ) -> None:
         self._chat_client = chat_client
         self._embedding_client = embedding_client
@@ -40,6 +43,7 @@ class QueryEngine(BaseEngine):
             realtime_file_callback=realtime_file_callback,
             max_concurrent_network_tasks=max_concurrent_network_tasks,
             task_queue=task_queue,
+            save_root=save_root,
         )
         self._reflection_node = QueryReflectionNode(
             chat_client=self._chat_client,
@@ -126,13 +130,26 @@ class QueryEngine(BaseEngine):
             plan_items=[
                 EnginePlanItem(
                     plan_item_id=question.plan_item_id,
-                    title=question.question,
+                    title=question.article_title or question.question,
                     query_or_action=question.google_query,
                     targets=question.search_targets or question.expected_info,
                     success_criteria=question.success_criteria,
                     fallbacks=question.fallback_queries,
                     source_priority=question.source_priority,
-                    status="planned",
+                    status=question.status,
+                    metadata={
+                        "url": question.candidate_url,
+                        "subdomain": question.subdomain,
+                        "doc_type": question.doc_type,
+                        "publisher": question.publisher,
+                        "source_kind": question.source_kind,
+                        "planned_path": question.planned_path,
+                        "article_title": question.article_title,
+                        "review_status": question.review_status,
+                        "skip_reason": question.skip_reason,
+                        "existing_path": question.existing_path,
+                        "question": question.question,
+                    },
                 )
                 for question in questions
             ],
@@ -153,8 +170,18 @@ class QueryEngine(BaseEngine):
                 source_priority=item.source_priority,
                 success_criteria=item.success_criteria,
                 fallback_queries=item.fallbacks,
-                status="planned",
+                status=item.status if item.status != "approved" else "planned",
                 plan_item_id=item.plan_item_id,
+                subdomain=str(item.metadata.get("subdomain", "")),
+                doc_type=str(item.metadata.get("doc_type", "source")),
+                article_title=str(item.metadata.get("article_title", item.title)),
+                candidate_url=str(item.metadata.get("url", "")),
+                publisher=str(item.metadata.get("publisher", "")),
+                source_kind=str(item.metadata.get("source_kind", "")),
+                planned_path=str(item.metadata.get("planned_path", "")),
+                review_status=str(item.metadata.get("review_status", "")),
+                skip_reason=str(item.metadata.get("skip_reason", "")),
+                existing_path=str(item.metadata.get("existing_path", "")),
             )
             for item in deduped_items
         ]
@@ -179,9 +206,10 @@ class QueryEngine(BaseEngine):
     @staticmethod
     def _dedupe_search_questions(questions: list[SearchQuestion]) -> list[SearchQuestion]:
         deduped: list[SearchQuestion] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
         for question in questions:
             key = (
+                question.candidate_url.strip().lower(),
                 " ".join(question.google_query.lower().split()),
                 "|".join(sorted(" ".join(item.lower().split()) for item in question.search_targets)),
             )
@@ -194,9 +222,10 @@ class QueryEngine(BaseEngine):
     @staticmethod
     def _dedupe_plan_items(items: list[EnginePlanItem]) -> list[EnginePlanItem]:
         deduped: list[EnginePlanItem] = []
-        seen: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str, str, str]] = set()
         for item in items:
             key = (
+                str(item.metadata.get("url", "")).strip().lower(),
                 " ".join(item.query_or_action.lower().split()),
                 "|".join(sorted(" ".join(target.lower().split()) for target in item.targets)),
                 "|".join(sorted(" ".join(priority.lower().split()) for priority in item.source_priority)),

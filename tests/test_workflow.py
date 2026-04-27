@@ -263,7 +263,7 @@ def test_task_response_and_logs_include_query_execution_trace(tmp_path: Path) ->
     assert response.status_code == 201
     payload = response.get_json()
     query_output = payload["agent_outputs"]["QueryEngine"]
-    assert any(item == "查询计划：" for item in query_output["raw_material"])
+    assert any(item == "链接级采集计划：" for item in query_output["raw_material"])
     assert payload["execution_log"]
     assert any(entry["event"] == "query_plan_created" for entry in payload["execution_log"])
     assert any(entry["event"] == "query_search_executed" for entry in payload["execution_log"])

@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import json
+from pathlib import Path
 
 from collections.abc import Callable
 from typing import Any
@@ -24,6 +25,7 @@ from knowledgeforge.llms.openai_compatible import (
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
+from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso
 
 QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
@@ -55,6 +57,7 @@ class QuerySearchNode(BaseQueryNode):
         realtime_file_callback: QueryRealtimeFileCallback | None = None,
         max_concurrent_network_tasks: int = 5,
         task_queue: RetrievalTaskQueue | None = None,
+        save_root: Path | None = None,
     ) -> None:
         super().__init__(event_callback=event_callback)
         self._chat_client = chat_client
@@ -62,6 +65,7 @@ class QuerySearchNode(BaseQueryNode):
         self._realtime_file_callback = realtime_file_callback
         self._max_concurrent_network_tasks = max(1, max_concurrent_network_tasks)
         self._task_queue = task_queue
+        self._save_root = save_root
 
     def run(
         self,
@@ -139,15 +143,22 @@ class QuerySearchNode(BaseQueryNode):
             user_prompt=user_prompt,
         )
         self._record_event(state, "query_plan_llm_completed", {"payload_keys": sorted(payload.keys())})
-        questions = self._parse_questions(payload.get("questions", []))
+        question_templates = self._parse_questions(payload.get("questions", []), state)
         official_queries = [
             str(item).strip() for item in payload.get("official_queries", []) if str(item).strip()
         ]
         tutorial_queries = [
             str(item).strip() for item in payload.get("tutorial_queries", []) if str(item).strip()
         ]
-        if not questions:
+        if not question_templates:
             raise RuntimeError("QueryEngine LLM did not return any valid search questions.")
+        questions = self._expand_questions_to_article_plan(
+            state,
+            question_templates,
+            official_domains=[str(item).strip() for item in payload.get("official_domains", []) if str(item).strip()],
+        )
+        if not questions:
+            raise RuntimeError("QueryEngine could not expand search questions into article-level plan items.")
         return SearchPlan(
             official_queries=official_queries or [
                 question.google_query
@@ -211,6 +222,11 @@ class QuerySearchNode(BaseQueryNode):
                         "success_criteria": question.success_criteria,
                         "fallback_queries": question.fallback_queries,
                         "status": question.status,
+                        "url": question.candidate_url,
+                        "subdomain": question.subdomain,
+                        "planned_path": question.planned_path,
+                        "review_status": question.review_status,
+                        "skip_reason": question.skip_reason,
                     }
                     for question in plan_questions
                 ],
@@ -219,66 +235,81 @@ class QuerySearchNode(BaseQueryNode):
         if not plan_questions:
             return
         for question in plan_questions:
+            if question.status == "skipped":
+                self._record_event(
+                    state,
+                    "query_plan_item_skipped",
+                    self._question_log_details(question, status=question.status),
+                )
+                continue
             question.status = "in_progress"
-            source_type = self._question_source_type(question)
             self._record_event(
                 state,
                 "query_plan_item_started",
                 self._question_log_details(question, status=question.status),
             )
-        task_results = self._run_question_tasks(state, plan_questions, domain_phrases)
+        runnable_questions = [question for question in plan_questions if question.status != "skipped"]
+        task_results = self._run_question_tasks(state, runnable_questions, domain_phrases)
         for task_result in task_results:
-                question = task_result.question
-                question_hits = task_result.hits
-                for attempt in task_result.attempts:
-                    state.search_history.append(
-                        {
-                            "question": question.question,
-                            "query": attempt.query,
-                            "expected_info": question.expected_info,
-                            "source_type": task_result.source_type,
-                            "hits": len(attempt.hits),
-                            "status": attempt.status,
-                            "error": attempt.error,
-                        }
-                    )
-                    event_name = "query_search_failed" if attempt.status == "failed" else "query_search_executed"
-                    details = {
-                        "plan_item_id": question.plan_item_id,
+            question = task_result.question
+            question_hits = task_result.hits
+            for attempt in task_result.attempts:
+                state.search_history.append(
+                    {
                         "question": question.question,
                         "query": attempt.query,
-                        "search_targets": question.search_targets,
                         "expected_info": question.expected_info,
                         "source_type": task_result.source_type,
                         "hits": len(attempt.hits),
                         "status": attempt.status,
+                        "error": attempt.error,
+                        "url": question.candidate_url,
+                        "subdomain": question.subdomain,
                     }
-                    if attempt.error:
-                        details["error"] = attempt.error
-                        details["failure_category"] = "network_query_failed"
-                    self._record_event(state, event_name, details)
-                all_hits.extend(question_hits)
-                question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
-                if question.status == "completed":
-                    question.completed_at = now_iso()
-                self._record_event(
-                    state,
-                    "query_question_completed",
-                    {
-                        "plan_item_id": question.plan_item_id,
-                        "question": question.question,
-                        "search_targets": question.search_targets,
-                        "status": question.status,
-                        "total_hits": len(question_hits),
-                        "completed_at": question.completed_at,
-                    },
                 )
-                self._save_realtime_question_documents(
-                    state,
-                    question=question,
-                    source_type=task_result.source_type,
-                    hits=question_hits,
-                )
+                event_name = "query_search_failed" if attempt.status == "failed" else "query_search_executed"
+                details = {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "query": attempt.query,
+                    "search_targets": question.search_targets,
+                    "expected_info": question.expected_info,
+                    "source_type": task_result.source_type,
+                    "hits": len(attempt.hits),
+                    "status": attempt.status,
+                    "url": question.candidate_url,
+                    "subdomain": question.subdomain,
+                    "planned_path": question.planned_path,
+                }
+                if attempt.error:
+                    details["error"] = attempt.error
+                    details["failure_category"] = "network_query_failed"
+                self._record_event(state, event_name, details)
+            all_hits.extend(question_hits)
+            question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
+            if question.status == "completed":
+                question.completed_at = now_iso()
+            self._record_event(
+                state,
+                "query_question_completed",
+                {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "search_targets": question.search_targets,
+                    "status": question.status,
+                    "total_hits": len(question_hits),
+                    "completed_at": question.completed_at,
+                    "url": question.candidate_url,
+                    "subdomain": question.subdomain,
+                    "planned_path": question.planned_path,
+                },
+            )
+            self._save_realtime_question_documents(
+                state,
+                question=question,
+                source_type=task_result.source_type,
+                hits=question_hits,
+            )
         deduped_hits = self._dedupe_hits(all_hits)
         state.search_hits = deduped_hits
         state.candidate_official_domains = self._merge_candidate_domains(
@@ -286,6 +317,15 @@ class QuerySearchNode(BaseQueryNode):
             detect_candidate_official_domains(state.request_context.domain, deduped_hits),
         )
         state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
+        question_by_url = {question.candidate_url: question for question in plan_questions if question.candidate_url}
+        for document in state.crawled_documents:
+            matched_question = question_by_url.get(document.url)
+            if matched_question is None:
+                continue
+            document.subdomain = matched_question.subdomain
+            document.doc_type = matched_question.doc_type
+            document.planned_path = matched_question.planned_path
+            document.plan_item_id = matched_question.plan_item_id
         self._record_event(
             state,
             "query_documents_fetched",
@@ -374,8 +414,7 @@ class QuerySearchNode(BaseQueryNode):
             ordered_results.append(queued_result.network_result)
         return ordered_results
 
-    @staticmethod
-    def _parse_questions(items: object) -> list[SearchQuestion]:
+    def _parse_questions(self, items: object, state: QueryEngineState) -> list[SearchQuestion]:
         questions: list[SearchQuestion] = []
         if not isinstance(items, list):
             return questions
@@ -416,9 +455,103 @@ class QuerySearchNode(BaseQueryNode):
                         if str(value).strip()
                     ],
                     status="planned",
+                    subdomain=str(item.get("subdomain", "")).strip()
+                    or (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
+                    doc_type=str(item.get("doc_type", "source")).strip() or "source",
                 )
             )
         return questions
+
+    def _expand_questions_to_article_plan(
+        self,
+        state: QueryEngineState,
+        question_templates: list[SearchQuestion],
+        *,
+        official_domains: list[str],
+    ) -> list[SearchQuestion]:
+        existing_urls = self._existing_source_urls()
+        domain_phrases = self._domain_phrases(state)
+        questions: list[SearchQuestion] = []
+        seen_urls: set[str] = set()
+        for template in question_templates:
+            source_type = self._question_source_type(template)
+            hits = self._search(
+                query=template.google_query,
+                source_type=source_type,
+                official_domains=official_domains,
+                preferred_domains=[] if source_type == "official" else self._preferred_domains(),
+                max_results=3 if source_type == "official" else 2,
+                domain_phrases=domain_phrases,
+            )
+            if not hits:
+                questions.append(
+                    SearchQuestion(
+                        question=template.question,
+                        google_query=template.google_query,
+                        search_targets=list(template.search_targets),
+                        expected_info=list(template.expected_info),
+                        source_priority=list(template.source_priority),
+                        success_criteria=list(template.success_criteria),
+                        fallback_queries=list(template.fallback_queries),
+                        status="planned",
+                        subdomain=template.subdomain,
+                        doc_type=template.doc_type,
+                        article_title=template.question,
+                        source_kind=source_type,
+                        planned_path=self._planned_article_path(state, template.subdomain, template.question),
+                    )
+                )
+                continue
+            for hit in hits:
+                url = str(getattr(hit, "url", "")).strip()
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                planned_path = self._planned_article_path(state, template.subdomain, hit.title)
+                article_question = SearchQuestion(
+                    question=template.question,
+                    google_query=template.google_query,
+                    search_targets=list(template.search_targets),
+                    expected_info=list(template.expected_info),
+                    source_priority=list(template.source_priority),
+                    success_criteria=list(template.success_criteria),
+                    fallback_queries=list(template.fallback_queries),
+                    status="planned",
+                    subdomain=template.subdomain,
+                    doc_type=template.doc_type,
+                    article_title=hit.title,
+                    candidate_url=url,
+                    publisher=getattr(hit, "publisher", ""),
+                    source_kind=source_type,
+                    planned_path=planned_path,
+                )
+                if url in existing_urls:
+                    article_question.status = "skipped"
+                    article_question.review_status = "duplicate_url"
+                    article_question.skip_reason = "duplicate_url"
+                    article_question.existing_path = existing_urls[url]
+                questions.append(article_question)
+        self._prepare_plan_questions(questions)
+        return questions
+
+    def _existing_source_urls(self) -> dict[str, str]:
+        if self._save_root is None or not self._save_root.exists():
+            return {}
+        existing: dict[str, str] = {}
+        for path in self._save_root.glob("**/*.md"):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for line in text.splitlines():
+                if line.strip().startswith("url: "):
+                    existing[line.split("url:", 1)[1].strip().strip('"').strip("'")] = path.as_posix()
+        return existing
+
+    def _planned_article_path(self, state: QueryEngineState, subdomain: str, title: str) -> str:
+        domain_segment = sanitize_path_segment(state.request_context.domain, "domain")
+        subdomain_segment = sanitize_path_segment(subdomain or "通用", "general")
+        slug = slugify_filename(title, "article")
+        return f"{(self._save_root or Path('save')) / domain_segment / subdomain_segment / (slug + '.md')}".replace("\\", "/")
 
     def _questions_from_query_lists(
         self,
@@ -436,6 +569,7 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["命中相关官方或权威来源"],
                 fallback_queries=[],
+                subdomain=state.request_context.subdomains[0] if state.request_context.subdomains else "通用",
             )
             for query in official_queries
         ]
@@ -448,6 +582,7 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["tutorial", "technical blog", "reference guide"],
                 success_criteria=["命中相关教程或技术参考"],
                 fallback_queries=self._expand_preferred_queries([query])[1:],
+                subdomain=state.request_context.subdomains[0] if state.request_context.subdomains else "通用",
             )
             for query in tutorial_queries
         )
@@ -477,6 +612,7 @@ class QuerySearchNode(BaseQueryNode):
                     source_priority=["official documentation", "standard", "vendor docs"],
                     success_criteria=["补检索命中相关官方或权威来源"],
                     fallback_queries=[],
+                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
                 )
             )
         for query in tutorial_queries:
@@ -490,6 +626,7 @@ class QuerySearchNode(BaseQueryNode):
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["补检索命中相关实践资料"],
                     fallback_queries=[],
+                    subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
                 )
             )
         return questions
@@ -515,10 +652,17 @@ class QuerySearchNode(BaseQueryNode):
             "fallback_queries": question.fallback_queries,
             "status": status or question.status,
             "completed_at": question.completed_at,
+            "url": question.candidate_url,
+            "subdomain": question.subdomain,
+            "planned_path": question.planned_path,
+            "review_status": question.review_status,
+            "skip_reason": question.skip_reason,
         }
 
     @staticmethod
     def _question_source_type(question: SearchQuestion) -> str:
+        if question.source_kind:
+            return question.source_kind
         priority_text = " ".join(question.source_priority).lower()
         if any(token in priority_text for token in ["tutorial", "blog", "guide", "example", "practice"]):
             return "tutorial"
@@ -538,6 +682,27 @@ class QuerySearchNode(BaseQueryNode):
     ) -> QuestionTaskResult:
         attempts: list[SearchAttemptResult] = []
         question_hits: list[Any] = []
+        if question.candidate_url:
+            try:
+                hits = self._fetch_direct_hit(question=question, source_type=source_type)
+                status = "completed" if self._question_satisfied(hits) else "insufficient"
+                attempts.append(SearchAttemptResult(query=question.google_query, hits=hits, status=status))
+                question_hits.extend(hits)
+            except Exception as exc:
+                attempts.append(
+                    SearchAttemptResult(
+                        query=question.google_query,
+                        hits=[],
+                        status="failed",
+                        error=str(exc),
+                    )
+                )
+            return QuestionTaskResult(
+                question=question,
+                source_type=source_type,
+                hits=question_hits,
+                attempts=attempts,
+            )
         for index, query in enumerate(self._dedupe_terms([question.google_query, *question.fallback_queries])):
             if index > 0 and self._question_satisfied(question_hits):
                 break
@@ -568,6 +733,19 @@ class QuerySearchNode(BaseQueryNode):
             hits=question_hits,
             attempts=attempts,
         )
+
+    def _fetch_direct_hit(self, *, question: SearchQuestion, source_type: str) -> list[Any]:
+        from agent.QueryEngine.state.state import SearchHit
+
+        return [
+            SearchHit(
+                title=question.article_title or question.question,
+                url=question.candidate_url,
+                snippet=question.question,
+                source_type=source_type,
+                score=1.0,
+            )
+        ]
 
     def _search_for_question(
         self,
@@ -711,7 +889,12 @@ class QuerySearchNode(BaseQueryNode):
         if not task_id or self._realtime_file_callback is None or not hits:
             return
         try:
-            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=4)
+            documents = self._crawler.fetch_documents(self._dedupe_hits(hits), max_documents=1)
+            for document in documents:
+                document.subdomain = question.subdomain
+                document.doc_type = question.doc_type
+                document.planned_path = question.planned_path
+                document.plan_item_id = question.plan_item_id
             candidate = RealtimeReviewCandidate(
                 agent="QueryEngine",
                 round_number=state.round_number,
@@ -720,6 +903,11 @@ class QuerySearchNode(BaseQueryNode):
                 source_type=source_type,
                 documents=documents,
                 context=state.request_context,
+                subdomain=question.subdomain,
+                doc_type=question.doc_type,
+                planned_path=question.planned_path,
+                article_title=question.article_title or question.question,
+                url=question.candidate_url,
             )
             result = self._realtime_file_callback(task_id, candidate)
             self._record_event(
@@ -729,6 +917,10 @@ class QuerySearchNode(BaseQueryNode):
                     "plan_item_id": question.plan_item_id,
                     "question": question.question,
                     "query": question.google_query,
+                    "url": question.candidate_url,
+                    "subdomain": question.subdomain,
+                    "planned_path": question.planned_path,
+                    "review_status": result.status,
                     **result.to_dict(),
                 },
             )

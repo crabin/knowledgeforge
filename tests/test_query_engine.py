@@ -324,9 +324,10 @@ def test_query_engine_prioritizes_official_sources() -> None:
     assert any("官方文档优先" in item for item in result.key_points)
     assert any("术语归一化：" in item for item in result.raw_material)
     assert any("官方文档优先：" in item or item == "官方文档优先：" for item in result.raw_material)
-    assert any(item == "查询计划：" for item in result.raw_material)
+    assert any(item == "链接级采集计划：" for item in result.raw_material)
     assert any("☑ Q1 [completed]" in item for item in result.raw_material)
-    assert any("Google 查询：langgraph official documentation workflow orchestration" in item for item in result.raw_material)
+    assert any("查询：langgraph official documentation workflow orchestration" in item for item in result.raw_material)
+    assert any("URL：https://langchain-ai.github.io/langgraph/" in item for item in result.raw_material)
     assert any("查询内容：" in item and "核心 API" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方能力说明" in item for item in result.raw_material)
     assert any("满足标准：" in item and "命中官方文档" in item for item in result.raw_material)
@@ -410,9 +411,10 @@ def test_query_engine_llm_plan_emits_structured_questions() -> None:
 
     result = engine.run(context, round_number=1)
 
-    assert any(item == "查询计划：" for item in result.raw_material)
-    assert any("Machine Learning 在基础概念方面有哪些官方事实与权威说明？" in item for item in result.raw_material)
-    assert any("Google 查询：Machine Learning basic concepts official documentation standard" in item for item in result.raw_material)
+    assert any(item == "链接级采集计划：" for item in result.raw_material)
+    assert any("LangGraph Docs" in item or "LangGraph Tutorial" in item for item in result.raw_material)
+    assert any("查询：Machine Learning basic concepts official documentation standard" in item for item in result.raw_material)
+    assert any("URL：https://langchain-ai.github.io/langgraph/" in item or "URL：https://example.com/tutorial/langgraph" in item for item in result.raw_material)
     assert any("查询内容：" in item and "权威来源" in item for item in result.raw_material)
     assert any("预期信息：" in item and "官方定义" in item for item in result.raw_material)
     assert crawler.queries[0] == ("official", "Machine Learning basic concepts official documentation standard")
@@ -459,6 +461,7 @@ def test_query_engine_llm_plan_can_use_search_friendly_english_topics() -> None:
     assert any("basic concepts" in query for query in queries)
     assert any("core methods" in query for query in queries)
     assert not any("基础概念 tutorial" in query for query in queries)
+    assert len(plan.plan_items) == 2
 
 
 def test_query_engine_reflection_supplements_only_insufficient_questions() -> None:

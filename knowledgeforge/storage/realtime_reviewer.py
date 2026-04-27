@@ -27,6 +27,11 @@ class RealtimeReviewCandidate:
     documents: list[Any]
     context: RequestContext
     platform_type: str = ""
+    subdomain: str = ""
+    doc_type: str = "source"
+    planned_path: str = ""
+    article_title: str = ""
+    url: str = ""
 
 
 @dataclass(slots=True)
@@ -35,6 +40,8 @@ class RealtimeReviewResult:
     skipped_sources: list[dict[str, str]] = field(default_factory=list)
     failed_sources: list[dict[str, str]] = field(default_factory=list)
     index_path: str = ""
+    subdomain_index_path: str = ""
+    index_paths: list[str] = field(default_factory=list)
     status: RealtimeReviewStatus = "skipped"
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,6 +50,8 @@ class RealtimeReviewResult:
             "skipped_sources": self.skipped_sources,
             "failed_sources": self.failed_sources,
             "index_path": self.index_path,
+            "subdomain_index_path": self.subdomain_index_path,
+            "index_paths": self.index_paths,
             "status": self.status,
         }
 
@@ -57,12 +66,11 @@ class RealtimeFileReviewer:
             result = RealtimeReviewResult()
             context = candidate.context
             domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-            subdomain = context.subdomains[0] if context.subdomains else "通用"
+            subdomain = candidate.subdomain or (context.subdomains[0] if context.subdomains else "通用")
             subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
             ensure_directory(subdomain_dir)
 
             existing_urls = self._existing_source_urls(domain_dir)
-            accepted = []
             for document in candidate.documents:
                 review_error = self._review_document(document, candidate)
                 url = str(getattr(document, "url", "")).strip()
@@ -72,14 +80,13 @@ class RealtimeFileReviewer:
                 if url in existing_urls:
                     result.skipped_sources.append({"url": url, "reason": "duplicate_url"})
                     continue
-                accepted.append(document)
+                path = self._write_article_document(candidate, document, subdomain, subdomain_dir)
+                result.saved_paths.append(path)
                 existing_urls.add(url)
 
-            if accepted:
-                path = self._write_plan_item_document(candidate, accepted, subdomain, subdomain_dir)
-                result.saved_paths.append(path)
-
             result.index_path = self.refresh_domain_index(context)
+            result.subdomain_index_path = self.refresh_subdomain_index(context, subdomain)
+            result.index_paths = [path for path in [result.index_path, result.subdomain_index_path] if path]
             result.status = "saved" if result.saved_paths else "skipped"
             return result
 
@@ -90,17 +97,32 @@ class RealtimeFileReviewer:
         readme_path.write_text(self.render_domain_index(context, domain_dir), encoding="utf-8")
         return readme_path.as_posix()
 
+    def refresh_subdomain_index(self, context: RequestContext, subdomain: str) -> str:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        subdomain_dir = domain_dir / sanitize_path_segment(subdomain, "general")
+        ensure_directory(subdomain_dir)
+        readme_path = subdomain_dir / "README.md"
+        readme_path.write_text(self.render_subdomain_index(context, subdomain_dir, subdomain), encoding="utf-8")
+        return readme_path.as_posix()
+
     @staticmethod
     def render_domain_index(context: RequestContext, domain_dir: Path) -> str:
         timestamp = now_iso()
         realtime_docs = RealtimeFileReviewer.scan_realtime_documents(domain_dir)
-        sections = "\n".join(f"- {topic}" for topic in context.subdomains) or "- 通用"
+        subdomain_rows = []
+        subdomains = sorted({item["subdomain"] for item in realtime_docs if item.get("subdomain")})
+        if not subdomains:
+            subdomains = context.subdomains or ["通用"]
+        for topic in subdomains:
+            topic_segment = sanitize_path_segment(topic, "general")
+            subdomain_rows.append(f"| {topic} | {topic_segment}/README.md |")
         realtime_rows = [
-            "| {path} | {agent} | {plan_item_id} | {source_count} | {updated_at} |".format(
+            "| {path} | {subdomain} | {agent} | {plan_item_id} | {url} | {updated_at} |".format(
                 path=item["path"],
+                subdomain=item["subdomain"],
                 agent=item["agent"],
                 plan_item_id=item["plan_item_id"],
-                source_count=item["source_count"],
+                url=item["url"],
                 updated_at=item["updated_at"],
             )
             for item in realtime_docs
@@ -118,13 +140,52 @@ class RealtimeFileReviewer:
                 "",
                 "## 子主题",
                 "",
-                sections,
+                "| 子领域 | 索引 |",
+                "|---|---|",
+                *(subdomain_rows or ["| 通用 | 通用/README.md |"]),
                 "",
                 "## 实时保存文档",
                 "",
-                "| 路径 | Agent | 计划项 | 来源数 | 更新时间 |",
-                "|---|---|---|---|---|",
-                *(realtime_rows or ["| 暂无 | - | - | 0 | - |"]),
+                "| 路径 | 子领域 | Agent | 计划项 | URL | 更新时间 |",
+                "|---|---|---|---|---|---|",
+                *(realtime_rows or ["| 暂无 | - | - | - | - | - |"]),
+                "",
+            ]
+        )
+
+    @staticmethod
+    def render_subdomain_index(context: RequestContext, subdomain_dir: Path, subdomain: str) -> str:
+        timestamp = now_iso()
+        realtime_docs = [
+            item for item in RealtimeFileReviewer.scan_realtime_documents(subdomain_dir) if item.get("subdomain") == subdomain
+        ]
+        rows = [
+            "| {title} | {path} | {source_type} | {status} | {plan_item_id} | {url} | {updated_at} |".format(
+                title=item["title"],
+                path=item["path"],
+                source_type=item["source_type"],
+                status=item["status"],
+                plan_item_id=item["plan_item_id"],
+                url=item["url"],
+                updated_at=item["updated_at"],
+            )
+            for item in realtime_docs
+        ]
+        return "\n".join(
+            [
+                f"# {context.domain} / {subdomain}",
+                "",
+                "## 子领域概览",
+                "",
+                f"当前子领域用于保存 {subdomain} 的文章级知识文档。",
+                f"文章数量：{len(realtime_docs)}。",
+                f"索引更新时间：{timestamp}。",
+                "",
+                "## 文章列表",
+                "",
+                "| 标题 | 路径 | 来源类型 | 状态 | 计划项 | URL | 更新时间 |",
+                "|---|---|---|---|---|---|---|",
+                *(rows or ["| 暂无 | - | - | - | - | - | - |"]),
                 "",
             ]
         )
@@ -143,30 +204,36 @@ class RealtimeFileReviewer:
             documents.append(
                 {
                     "path": str(front_matter.get("path") or path.as_posix()),
+                    "title": str(front_matter.get("title") or path.stem),
                     "agent": str(front_matter.get("agent") or ""),
                     "plan_item_id": str(front_matter.get("plan_item_id") or ""),
+                    "subdomain": str(front_matter.get("subdomain") or ""),
                     "source_count": len(front_matter.get("sources") or []),
+                    "source_type": str(front_matter.get("source_type") or ""),
+                    "status": str(front_matter.get("status") or ""),
                     "updated_at": str(front_matter.get("updated_at") or ""),
+                    "url": str(front_matter.get("url") or ""),
                 }
             )
         return documents
 
-    def _write_plan_item_document(
+    def _write_article_document(
         self,
         candidate: RealtimeReviewCandidate,
-        documents: list[Any],
+        document: Any,
         subdomain: str,
         subdomain_dir: Path,
     ) -> str:
         timestamp = now_iso()
         context = candidate.context
         document_id = f"realtime-{uuid.uuid4().hex[:12]}"
-        title = f"{context.domain} {candidate.agent} {candidate.plan_item_id} 实时资料"
+        title = candidate.article_title or str(getattr(document, "title", "")).strip() or f"{context.domain} 资料"
         suffix = "media" if candidate.agent == "MediaEngine" else "query"
         filename = f"{today_compact()}-{slugify_filename(title, document_id)}-{suffix}.md"
         document_path = subdomain_dir / filename
         relative_path = document_path.as_posix()
-        doc_type = "trend" if candidate.agent == "MediaEngine" else "source"
+        doc_type = candidate.doc_type or ("trend" if candidate.agent == "MediaEngine" else "source")
+        document_url = str(getattr(document, "url", "")).strip()
         front_matter = {
             "id": document_id,
             "title": title,
@@ -186,19 +253,20 @@ class RealtimeFileReviewer:
             "plan_item_id": candidate.plan_item_id,
             "query": candidate.query,
             "platform_type": candidate.platform_type,
+            "url": document_url,
+            "planned_path": candidate.planned_path or relative_path,
             "sources": [
                 {
                     "title": str(getattr(document, "title", "")).strip(),
-                    "url": str(getattr(document, "url", "")).strip(),
+                    "url": document_url,
                     "publisher": str(getattr(document, "publisher", "")).strip() or "unknown",
                     "retrieved_at": timestamp,
                     "reliability": self._reliability(candidate, document),
                 }
-                for document in documents
             ],
         }
         document_path.write_text(
-            self._render_document(front_matter, title, candidate, documents, timestamp),
+            self._render_document(front_matter, title, candidate, document, timestamp),
             encoding="utf-8",
         )
         return relative_path
@@ -208,45 +276,40 @@ class RealtimeFileReviewer:
         front_matter: dict[str, Any],
         title: str,
         candidate: RealtimeReviewCandidate,
-        documents: list[Any],
+        document: Any,
         timestamp: str,
     ) -> str:
         front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
         key_points = [
-            f"{candidate.agent} 在计划项 {candidate.plan_item_id} 中获取到 {len(documents)} 个合格来源。",
-            f"本文件按计划项实时保存，原始查询为：{candidate.query}",
+            f"{candidate.agent} 在计划项 {candidate.plan_item_id} 中抓取并保存了 1 篇文章级资料。",
+            f"本文件按单链接实时保存，原始查询为：{candidate.query}",
             "内容仍为 draft，需等待后续完整性评估、结构化治理和质量检测。",
         ]
-        source_rows = []
-        body_sections = []
+        title_text = str(getattr(document, "title", "")).strip()
+        url = str(getattr(document, "url", "")).strip()
+        snippet = str(getattr(document, "snippet", "")).strip()
+        content = str(getattr(document, "content", "")).strip()
+        source_rows = [
+            f"| S1 | {title_text} | {self._table_text(snippet or content[:160])} | {front_matter['sources'][0]['reliability']} | {url} |"
+        ]
+        body_sections = [
+            "\n".join(
+                [
+                    f"### {title_text}",
+                    "",
+                    f"来源：{url}",
+                    "",
+                    snippet or "暂无摘要。",
+                    "",
+                    "#### 原始材料摘录",
+                    "",
+                    self._excerpt(content or snippet),
+                ]
+            )
+        ]
         entity_rows = [f"| {candidate.context.domain} | Domain | 目标领域 | S1 |"]
-        relation_rows = []
-        for index, document in enumerate(documents, start=1):
-            title_text = str(getattr(document, "title", "")).strip()
-            url = str(getattr(document, "url", "")).strip()
-            snippet = str(getattr(document, "snippet", "")).strip()
-            content = str(getattr(document, "content", "")).strip()
-            source_label = f"S{index}"
-            source_rows.append(
-                f"| {source_label} | {title_text} | {self._table_text(snippet or content[:160])} | {front_matter['sources'][index - 1]['reliability']} | {url} |"
-            )
-            body_sections.append(
-                "\n".join(
-                    [
-                        f"### {title_text}",
-                        "",
-                        f"来源：{url}",
-                        "",
-                        snippet or "暂无摘要。",
-                        "",
-                        "#### 原始材料摘录",
-                        "",
-                        self._excerpt(content or snippet),
-                    ]
-                )
-            )
-            entity_rows.append(f"| {title_text} | Source | 实时保存来源 | {source_label} |")
-            relation_rows.append(f"| {candidate.context.domain} | has_realtime_source | {title_text} | {source_label} |")
+        entity_rows.append(f"| {title_text} | Source | 实时保存来源 | S1 |")
+        relation_rows = [f"| {candidate.context.domain} | has_realtime_source | {title_text} | S1 |"]
 
         return "\n".join(
             [
@@ -268,11 +331,12 @@ class RealtimeFileReviewer:
                 "## 背景与上下文",
                 "",
                 f"领域：{candidate.context.domain}",
-                f"子领域：{', '.join(candidate.context.subdomains) if candidate.context.subdomains else '通用'}",
+                f"子领域：{candidate.subdomain or (candidate.context.subdomains[0] if candidate.context.subdomains else '通用')}",
                 f"计划项：{candidate.plan_item_id}",
                 f"查询：{candidate.query}",
                 f"来源类型：{candidate.source_type}",
                 f"平台类型：{candidate.platform_type or '无'}",
+                f"目标链接：{candidate.url or url}",
                 f"保存时间：{timestamp}",
                 "",
                 "## 正文",

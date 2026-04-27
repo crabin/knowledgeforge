@@ -120,6 +120,7 @@ class TaskService:
                 realtime_file_callback=self._review_realtime_file,
                 max_concurrent_network_tasks=config.max_query_network_concurrency,
                 task_queue=self._retrieval_task_queue,
+                save_root=config.save_root,
             ),
             media_engine=MediaEngine(
                 chat_client=execution_chat_client,

@@ -118,7 +118,7 @@ class EngineRunResult:
         return payload
 
 
-PlanItemStatus = Literal["planned", "approved", "in_progress", "completed", "insufficient"]
+PlanItemStatus = Literal["planned", "approved", "in_progress", "completed", "insufficient", "skipped"]
 PlanStatus = Literal["draft", "awaiting_confirmation", "approved"]
 WorkflowStepStatus = Literal["pending", "active", "completed", "blocked"]
 
@@ -133,6 +133,7 @@ class EnginePlanItem:
     fallbacks: list[str] = field(default_factory=list)
     source_priority: list[str] = field(default_factory=list)
     status: PlanItemStatus = "planned"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

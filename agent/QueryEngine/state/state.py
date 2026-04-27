@@ -8,7 +8,7 @@ from knowledgeforge.models import RequestContext
 from knowledgeforge.utils.time import now_iso
 
 
-QuestionStatus = Literal["planned", "in_progress", "completed", "insufficient"]
+QuestionStatus = Literal["planned", "in_progress", "completed", "insufficient", "skipped"]
 
 
 @dataclass(slots=True)
@@ -23,6 +23,16 @@ class SearchQuestion:
     plan_item_id: str = ""
     search_targets: list[str] = field(default_factory=list)
     completed_at: str = ""
+    subdomain: str = ""
+    doc_type: str = "source"
+    article_title: str = ""
+    candidate_url: str = ""
+    publisher: str = ""
+    source_kind: str = ""
+    planned_path: str = ""
+    review_status: str = ""
+    skip_reason: str = ""
+    existing_path: str = ""
 
 
 @dataclass(slots=True)
@@ -66,6 +76,10 @@ class CrawledDocument:
     publisher: str
     score: float
     embedding_dimensions: int = 0
+    subdomain: str = ""
+    doc_type: str = "source"
+    planned_path: str = ""
+    plan_item_id: str = ""
 
 
 @dataclass(slots=True)

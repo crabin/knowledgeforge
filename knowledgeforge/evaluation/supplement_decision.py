@@ -138,6 +138,11 @@ class SupplementDecisionPlanner:
                 fallbacks=defect.fallback_queries,
                 source_priority=defect.source_priority or ["official documentation", "standard", "vendor docs"],
                 status="approved",
+                metadata={
+                    "subdomain": defect.topic,
+                    "doc_type": "source",
+                    "source_kind": "official",
+                },
             )
             for index, defect in enumerate(decision.defects[:6], start=1)
             if defect.query.strip()
@@ -156,7 +161,7 @@ class SupplementDecisionPlanner:
         readme_path = domain_dir / "README.md"
         candidates = [readme_path]
         if domain_dir.exists():
-            candidates.extend(sorted(path for path in domain_dir.glob("**/*.md") if path.name != "README.md"))
+            candidates.extend(sorted(path for path in domain_dir.glob("**/*.md") if path != readme_path))
         contents: list[dict[str, str]] = []
         coverage_outline: list[str] = []
         remaining = self._max_index_chars
