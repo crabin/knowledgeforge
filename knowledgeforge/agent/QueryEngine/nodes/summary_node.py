@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
-from agent.QueryEngine.prompts.prompts import SUMMARY_SYSTEM_PROMPT
-from agent.QueryEngine.state.state import QueryEngineState
+from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
+from knowledgeforge.agent.QueryEngine.prompts.prompts import SUMMARY_SYSTEM_PROMPT
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.graph.neo4j_adapter import Neo4jPathMapper
 from knowledgeforge.models import DocumentArtifact, RequestContext, StructuredExtractionResult
-from agent.QueryEngine.state.state import CrawledDocument, SearchHit
+from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument, SearchHit
 
 
 class FakeChatClient:

@@ -99,3 +99,28 @@
 
 - 运行 `PYTHONPATH=. pytest tests/test_workflow.py tests/test_dashboard.py -q`
 - 结果：`31 passed`
+
+## 2026-04-28 项目结构重组
+
+- 将 Flask 后端工厂从 `knowledgeforge/api.py` 迁移到 `knowledgeforge/server/api.py`，新增 `knowledgeforge/server/__init__.py` 导出 `create_app`，根目录 `app.py` 继续作为启动入口。
+- 将前端模板与静态资源迁移到 `knowledgeforge/web/templates` 与 `knowledgeforge/web/static`，并在 Flask app 中显式配置资源目录，保留 `/static/...` URL 不变。
+- 将根目录 `agent/` 迁移为 `knowledgeforge/agent/`，同步更新项目代码、脚本和测试中的导入路径。
+- 更新 `README.md`、`AGENTS.md`、`CLAUDE.md` 与 `pyproject.toml`，使目录说明和 setuptools 包发现与新结构一致。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile app.py $(rg --files knowledgeforge scripts tests -g '*.py')`
+- 结果：通过。
+- 运行导入 smoke：`knowledgeforge.server.create_app`、`knowledgeforge.agent.QueryEngine`、`knowledgeforge.agent.MediaEngine`、`knowledgeforge.agent.InsightEngine`
+- 结果：通过，Flask template/static 目录指向 `knowledgeforge/web`。
+- 运行 `PYTHONPATH=. pytest tests/test_dashboard.py tests/test_workflow.py -q`
+- 结果：`31 passed`
+- 运行 `PYTHONPATH=. pytest tests/test_dashboard.py tests/test_workflow.py tests/test_ml_regression.py tests/test_query_engine.py tests/test_media_engine.py tests/test_integration_layers.py -q`
+- 结果：`58 passed`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`137 passed, 2 failed`。失败项为 `tests/test_supplement_decision.py::test_workflow_uses_index_decision_to_dispatch_query_supplement`（当前串行文件队列流程不再触发旧测试期望的第二轮三路 Engine run）与 `tests/test_workflow.py::test_async_task_falls_back_when_llm_generation_fails`（全量顺序下轮询撞到中间态 `filled`；该用例单独复跑通过）。
+
+## Follow-up
+
+- 后续需要将补检索决策相关旧测试同步到当前 `generate_files -> run_query_queue -> validate_round -> fill_evidence` 串行文件队列流程。
+- 可考虑把异步接口返回给前端的 `filled` 中间态继续归一为 `running`，减少测试和 UI 轮询对瞬时内部状态的敏感度。

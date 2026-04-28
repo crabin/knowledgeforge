@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent.base import BaseEngine
+from knowledgeforge.agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.utils.knowledge_tree import plan_path_for_role

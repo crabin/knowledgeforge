@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.MediaEngine.nodes.formatting_node import MediaFormattingNode
-from agent.MediaEngine.nodes.reflection_node import MediaReflectionNode
-from agent.MediaEngine.nodes.search_node import MediaEventCallback, MediaRealtimeFileCallback, MediaSearchNode
-from agent.MediaEngine.nodes.summary_node import MediaSummaryNode
-from agent.MediaEngine.state.state import MediaEngineState
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.base import BaseEngine
+from knowledgeforge.agent.MediaEngine.nodes.formatting_node import MediaFormattingNode
+from knowledgeforge.agent.MediaEngine.nodes.reflection_node import MediaReflectionNode
+from knowledgeforge.agent.MediaEngine.nodes.search_node import MediaEventCallback, MediaRealtimeFileCallback, MediaSearchNode
+from knowledgeforge.agent.MediaEngine.nodes.summary_node import MediaSummaryNode
+from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
 from knowledgeforge.runtime.task_queue import RetrievalTaskQueue
@@ -138,7 +138,7 @@ class MediaEngine(BaseEngine):
         )
 
     def _search_plan_from_engine_plan(self, plan: EnginePlan):
-        from agent.MediaEngine.state.state import MediaSearchPlan
+        from knowledgeforge.agent.MediaEngine.state.state import MediaSearchPlan
 
         deduped_items = MediaEngine._dedupe_plan_items(plan.plan_items)
         social_queries = self._search_node._dedupe_queries(

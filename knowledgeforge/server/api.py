@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from flask import Flask, jsonify, render_template, request
 
 from knowledgeforge.config import AppConfig
@@ -7,7 +9,13 @@ from knowledgeforge.services.task_service import TaskService
 
 
 def create_app(config: AppConfig | None = None) -> Flask:
-    app = Flask(__name__)
+    web_root = Path(__file__).resolve().parents[1] / "web"
+    app = Flask(
+        __name__,
+        template_folder=str(web_root / "templates"),
+        static_folder=str(web_root / "static"),
+        static_url_path="/static",
+    )
     service = TaskService(config or AppConfig.from_env())
 
     @app.get("/")

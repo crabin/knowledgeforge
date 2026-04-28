@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import base64
 
-from agent.MediaEngine.state.state import MediaSearchHit
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.MediaEngine.utils.ranking import classify_platform_type, reliability_for_platform_type
-from agent.QueryEngine.tools.crawler import resolve_bing_redirect_url
-from agent.QueryEngine.utils.ranking import is_result_relevant, reliability_for_source_type_and_url
+from knowledgeforge.agent.MediaEngine.state.state import MediaSearchHit
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.MediaEngine.utils.ranking import classify_platform_type, reliability_for_platform_type
+from knowledgeforge.agent.QueryEngine.tools.crawler import resolve_bing_redirect_url
+from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, reliability_for_source_type_and_url
 
 
 def test_resolve_bing_redirect_decodes_base64_u_param() -> None:

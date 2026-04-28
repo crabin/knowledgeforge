@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from knowledgeforge.api import create_app
+from knowledgeforge.server import create_app
 from knowledgeforge.config import AppConfig
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow

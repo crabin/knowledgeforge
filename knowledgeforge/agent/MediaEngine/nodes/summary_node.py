@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from agent.MediaEngine.nodes.base_node import BaseMediaNode
-from agent.MediaEngine.prompts.prompts import MEDIA_SUMMARY_SYSTEM_PROMPT
-from agent.MediaEngine.state.state import MediaEngineState
+from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
+from knowledgeforge.agent.MediaEngine.prompts.prompts import MEDIA_SUMMARY_SYSTEM_PROMPT
+from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 
 

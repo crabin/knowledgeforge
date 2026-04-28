@@ -7,11 +7,11 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from agent.InsightEngine.agent import InsightEngine
-from agent.MediaEngine.agent import MediaEngine
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.QueryEngine.agent import QueryEngine
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.InsightEngine.agent import InsightEngine
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.config import AppConfig
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
 from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
@@ -1053,7 +1053,7 @@ class TaskService:
 
 class _NoopQueryCrawler:
     def search(self, **kwargs):
-        from agent.QueryEngine.state.state import SearchHit
+        from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
         query = str(kwargs.get("query", "offline query"))
         source_type = str(kwargs.get("source_type", "reference"))
@@ -1068,7 +1068,7 @@ class _NoopQueryCrawler:
         ]
 
     def fetch_documents(self, hits, *, max_documents: int = 6):
-        from agent.QueryEngine.state.state import CrawledDocument
+        from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument
 
         return [
             CrawledDocument(

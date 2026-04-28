@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import tempfile
 
-from agent.MediaEngine.utils.ranking import classify_platform_type
-from agent.QueryEngine.utils.ranking import is_result_relevant, reliability_for_source_type_and_url
+from knowledgeforge.agent.MediaEngine.utils.ranking import classify_platform_type
+from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, reliability_for_source_type_and_url
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
 from knowledgeforge.models import (
     DocumentArtifact,

@@ -3,9 +3,9 @@ from __future__ import annotations
 import threading
 import time
 
-from agent.InsightEngine.agent import InsightEngine
-from agent.MediaEngine.agent import MediaEngine
-from agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.InsightEngine.agent import InsightEngine
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.models import EnginePlan, EnginePlanItem, RequestContext
 from knowledgeforge.storage.realtime_reviewer import RealtimeReviewResult
 
@@ -77,7 +77,7 @@ class RecordingQueryCrawler:
         self.queries: list[str] = []
 
     def search(self, **kwargs):
-        from agent.QueryEngine.state.state import SearchHit
+        from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
         self.queries.append(kwargs["query"])
         return [
@@ -99,7 +99,7 @@ class RecordingMediaCrawler:
         self.queries: list[tuple[str, str]] = []
 
     def search(self, **kwargs):
-        from agent.MediaEngine.state.state import MediaSearchHit
+        from knowledgeforge.agent.MediaEngine.state.state import MediaSearchHit
 
         self.queries.append((kwargs["platform_type"], kwargs["query"]))
         return [
@@ -252,7 +252,7 @@ def test_query_engine_reviews_files_after_plan_item_completion() -> None:
 
     class HitCrawler(RecordingQueryCrawler):
         def search(self, **kwargs):
-            from agent.QueryEngine.state.state import SearchHit
+            from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
             self.queries.append(kwargs["query"])
             return [
@@ -266,7 +266,7 @@ def test_query_engine_reviews_files_after_plan_item_completion() -> None:
             ]
 
         def fetch_documents(self, hits, *, max_documents: int = 8):
-            from agent.QueryEngine.state.state import CrawledDocument
+            from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument
 
             return [
                 CrawledDocument(
@@ -322,7 +322,7 @@ def test_query_engine_limits_concurrent_network_tasks_to_five() -> None:
             self.max_active = 0
 
         def search(self, **kwargs):
-            from agent.QueryEngine.state.state import SearchHit
+            from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
             with self._lock:
                 self.active += 1
@@ -342,7 +342,7 @@ def test_query_engine_limits_concurrent_network_tasks_to_five() -> None:
             ]
 
         def fetch_documents(self, hits, *, max_documents: int = 8):
-            from agent.QueryEngine.state.state import CrawledDocument
+            from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument
 
             return [
                 CrawledDocument(
@@ -391,7 +391,7 @@ def test_query_engine_uses_fallback_query_when_primary_search_fails() -> None:
 
     class FallbackCrawler(RecordingQueryCrawler):
         def search(self, **kwargs):
-            from agent.QueryEngine.state.state import SearchHit
+            from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
             self.queries.append(kwargs["query"])
             if kwargs["query"] == "primary query":
@@ -407,7 +407,7 @@ def test_query_engine_uses_fallback_query_when_primary_search_fails() -> None:
             ]
 
         def fetch_documents(self, hits, *, max_documents: int = 8):
-            from agent.QueryEngine.state.state import CrawledDocument
+            from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument
 
             return [
                 CrawledDocument(
@@ -496,7 +496,7 @@ def test_media_engine_reviews_files_after_query_item_completion() -> None:
 
     class HitMediaCrawler(RecordingMediaCrawler):
         def search(self, **kwargs):
-            from agent.MediaEngine.state.state import MediaSearchHit
+            from knowledgeforge.agent.MediaEngine.state.state import MediaSearchHit
 
             self.queries.append((kwargs["platform_type"], kwargs["query"]))
             return [
@@ -510,7 +510,7 @@ def test_media_engine_reviews_files_after_query_item_completion() -> None:
             ]
 
         def fetch_documents(self, hits, *, max_documents: int = 8):
-            from agent.MediaEngine.state.state import MediaCrawledDocument
+            from knowledgeforge.agent.MediaEngine.state.state import MediaCrawledDocument
 
             return [
                 MediaCrawledDocument(

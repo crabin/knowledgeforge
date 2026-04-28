@@ -9,11 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from agent.InsightEngine.agent import InsightEngine
-from agent.MediaEngine.agent import MediaEngine
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.QueryEngine.agent import QueryEngine
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.InsightEngine.agent import InsightEngine
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.config import AppConfig
 from knowledgeforge.intake.context_builder import ContextBuilder
 from knowledgeforge.llms.openai_compatible import (

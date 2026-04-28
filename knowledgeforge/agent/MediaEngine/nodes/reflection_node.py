@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-from agent.MediaEngine.nodes.base_node import BaseMediaNode
-from agent.MediaEngine.nodes.search_node import MediaSearchNode
-from agent.MediaEngine.prompts.prompts import MEDIA_REFLECTION_SYSTEM_PROMPT
-from agent.MediaEngine.state.state import MediaEngineState, MediaReflectionPlan
+from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
+from knowledgeforge.agent.MediaEngine.nodes.search_node import MediaSearchNode
+from knowledgeforge.agent.MediaEngine.prompts.prompts import MEDIA_REFLECTION_SYSTEM_PROMPT
+from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState, MediaReflectionPlan
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 
 

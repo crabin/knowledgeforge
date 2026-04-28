@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent.QueryEngine.agent import QueryEngine
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.models import RequestContext
 
 
@@ -228,7 +228,7 @@ class FakeCrawler(DomainKnowledgeCrawler):
         self.queries.append((source_type, query))
         if source_type == "official":
             return [
-                __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"]).SearchHit(
+                __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"]).SearchHit(
                     title="LangGraph Docs",
                     url="https://langchain-ai.github.io/langgraph/",
                     snippet="Official reference",
@@ -237,7 +237,7 @@ class FakeCrawler(DomainKnowledgeCrawler):
                 )
             ]
         return [
-            __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"]).SearchHit(
+            __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"]).SearchHit(
                 title="LangGraph Tutorial",
                 url="https://example.com/tutorial/langgraph",
                 snippet="Tutorial reference",
@@ -247,7 +247,7 @@ class FakeCrawler(DomainKnowledgeCrawler):
         ]
 
     def fetch_documents(self, hits, *, max_documents: int = 6):
-        CrawledDocument = __import__("agent.QueryEngine.state.state", fromlist=["CrawledDocument"]).CrawledDocument
+        CrawledDocument = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["CrawledDocument"]).CrawledDocument
         docs = []
         for hit in hits:
             docs.append(

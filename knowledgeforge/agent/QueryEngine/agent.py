@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.QueryEngine.nodes.base_node import QueryEventCallback
-from agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
-from agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
-from agent.QueryEngine.nodes.search_node import QueryRealtimeFileCallback, QuerySearchNode
-from agent.QueryEngine.nodes.summary_node import QuerySummaryNode
-from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-from agent.base import BaseEngine
+from knowledgeforge.agent.QueryEngine.nodes.base_node import QueryEventCallback
+from knowledgeforge.agent.QueryEngine.nodes.formatting_node import QueryFormattingNode
+from knowledgeforge.agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
+from knowledgeforge.agent.QueryEngine.nodes.search_node import QueryRealtimeFileCallback, QuerySearchNode
+from knowledgeforge.agent.QueryEngine.nodes.summary_node import QuerySummaryNode
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.base import BaseEngine
 from knowledgeforge.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,

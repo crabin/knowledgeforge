@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from agent.MediaEngine.nodes.base_node import BaseMediaNode
-from agent.MediaEngine.state.state import MediaEngineState
-from agent.MediaEngine.utils.ranking import reliability_for_platform_type
+from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
+from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState
+from knowledgeforge.agent.MediaEngine.utils.ranking import reliability_for_platform_type
 from knowledgeforge.models import EngineRunResult, SourceRecord
 
 

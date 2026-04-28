@@ -50,7 +50,7 @@ Use an upper-layer Router / Orchestrator to choose the target Engine. Engines sh
 Each Engine should keep a complete internal structure when the feature is non-trivial:
 
 ```text
-agent/
+knowledgeforge/agent/
   MediaEngine/
     agent.py
     nodes/

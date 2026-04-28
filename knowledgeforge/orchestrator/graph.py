@@ -7,9 +7,9 @@ from typing import Any
 import yaml
 from langgraph.graph import END, StateGraph
 
-from agent.InsightEngine.agent import InsightEngine
-from agent.MediaEngine.agent import MediaEngine
-from agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.InsightEngine.agent import InsightEngine
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
 from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
 from knowledgeforge.models import (

@@ -8,11 +8,11 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
-from agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
-from agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-from agent.QueryEngine.utils.ranking import (
+from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
+from knowledgeforge.agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.QueryEngine.utils.ranking import (
     PREFERRED_TECH_REFERENCE_DOMAINS,
     PREFERRED_TUTORIAL_DOMAINS,
     build_site_constrained_queries,
@@ -862,7 +862,7 @@ class QuerySearchNode(BaseQueryNode):
         )
 
     def _fetch_direct_hit(self, *, question: SearchQuestion, source_type: str) -> list[Any]:
-        from agent.QueryEngine.state.state import SearchHit
+        from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 
         return [
             SearchHit(

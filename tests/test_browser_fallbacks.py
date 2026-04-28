@@ -3,8 +3,8 @@ from __future__ import annotations
 import subprocess
 from urllib.parse import urlparse
 
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIFetchResult
 
@@ -47,7 +47,7 @@ def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         provider_calls.append(provider_name)
         if provider_name == "google":
             return []
-        state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
+        state = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"])
         return [
             state.SearchHit(
                 title="Fallback result",
@@ -82,7 +82,7 @@ def test_media_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         provider_calls.append(provider_name)
         if provider_name == "google":
             return []
-        state = __import__("agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
+        state = __import__("knowledgeforge.agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
         return [
             state.MediaSearchHit(
                 title="Fallback media result",
@@ -116,7 +116,7 @@ def test_query_crawler_fetch_documents_falls_back_after_crawl4ai_failure(monkeyp
     )
     crawler._browser = type("FakeBrowser", (), {"fetch_text": lambda self, url: "browser fallback content"})()
 
-    state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
+    state = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"])
     documents = crawler.fetch_documents(
         [
             state.SearchHit(
@@ -143,7 +143,7 @@ def test_media_crawler_fetch_documents_prefers_crawl4ai_markdown(monkeypatch) ->
     )
     crawler._browser = type("FakeBrowser", (), {"fetch_text": lambda self, url: "browser content"})()
 
-    state = __import__("agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
+    state = __import__("knowledgeforge.agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
     documents = crawler.fetch_documents(
         [
             state.MediaSearchHit(

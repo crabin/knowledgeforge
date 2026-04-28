@@ -1,6 +1,6 @@
 import os
 
-from knowledgeforge.api import create_app
+from knowledgeforge.server import create_app
 
 
 app = create_app()

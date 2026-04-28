@@ -8,11 +8,11 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from agent.QueryEngine.state.state import CrawledDocument, SearchHit
-from agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
-from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
-from agent.QueryEngine.utils.ranking import is_result_relevant, score_url
-from agent.QueryEngine.utils.text_processing import extract_main_text
+from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument, SearchHit
+from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
+from knowledgeforge.agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
+from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, score_url
+from knowledgeforge.agent.QueryEngine.utils.text_processing import extract_main_text
 from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
 

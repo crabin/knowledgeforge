@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from bs4 import BeautifulSoup
 
-from agent.QueryEngine.tools.crawler import (
+from knowledgeforge.agent.QueryEngine.tools.crawler import (
     SEARCH_PROVIDERS,
     DomainKnowledgeCrawler,
     parse_brave_results,
     parse_google_results,
 )
-from agent.QueryEngine.tools.supplemental_sources import (
+from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import (
     build_supplemental_source_targets,
     is_it_tutorial_query,
     probe_source_url,
 )
-from agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher, WikipediaResult
+from knowledgeforge.agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher, WikipediaResult
 
 
 GOOGLE_HTML = """
@@ -208,7 +208,7 @@ def test_probe_source_url_keeps_zhihu_unavailable_on_http_403_without_browser_fa
 
 
 def test_query_crawler_extends_with_supplemental_hits_when_zhihu_question_present(monkeypatch) -> None:
-    state = __import__("agent.QueryEngine.state.state", fromlist=["SearchHit"])
+    state = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"])
     crawler = DomainKnowledgeCrawler(timeout=0.1)
     zhihu_hit = state.SearchHit(
         title="如何形象又有趣的讲解对抗神经网络（GAN）是什么?",

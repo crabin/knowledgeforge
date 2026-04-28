@@ -35,6 +35,11 @@
 - docs/design-paradigms/agent-architecture.md
 - CLAUDE.md
 
+## 项目结构重组发现
+- 迁移前 Flask 工厂位于 `knowledgeforge/api.py`，根目录 `app.py` 只是启动入口；迁移后保留根入口并改为导入 `knowledgeforge.server.create_app`，避免破坏现有启动习惯。
+- 迁移前前端资源位于 `knowledgeforge/templates` 与 `knowledgeforge/static`，HTML 使用 `url_for('static', ...)`；迁移到 `knowledgeforge/web` 后在 Flask 构造函数中显式设置 `template_folder`、`static_folder` 和 `static_url_path="/static"`，保证 URL 不变。
+- 迁移前三路 Engine 位于仓库根目录 `agent/`，项目代码、脚本和测试都大量引用 `agent.*`；迁移到 `knowledgeforge/agent/` 后已统一替换导入路径，保持 Engine 内部结构不变。
+
 ## 视觉/浏览器发现
 - 当前问题仍是范围与阶段划分，不是视觉布局问题，暂不需要浏览器图示。
 

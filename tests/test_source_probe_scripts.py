@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from agent.QueryEngine.tools.supplemental_sources import SourceProbeResult
+from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import SourceProbeResult
 
 
 ROOT = Path(__file__).resolve().parent.parent

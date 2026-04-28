@@ -9,11 +9,11 @@ from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from agent.MediaEngine.nodes.base_node import BaseMediaNode
-from agent.MediaEngine.prompts.prompts import MEDIA_SEARCH_PLAN_SYSTEM_PROMPT
-from agent.MediaEngine.state.state import MediaEngineState, MediaPlanItem, MediaSearchPlan
-from agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
-from agent.MediaEngine.utils.ranking import is_technical_context
+from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
+from knowledgeforge.agent.MediaEngine.prompts.prompts import MEDIA_SEARCH_PLAN_SYSTEM_PROMPT
+from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState, MediaPlanItem, MediaSearchPlan
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.MediaEngine.utils.ranking import is_technical_context
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 from knowledgeforge.utils.query_normalization import normalize_query_term
@@ -396,7 +396,7 @@ class MediaSearchNode(BaseMediaNode):
     ) -> MediaQueryTaskResult:
         try:
             if item.candidate_url:
-                from agent.MediaEngine.state.state import MediaSearchHit
+                from knowledgeforge.agent.MediaEngine.state.state import MediaSearchHit
 
                 hits = [
                     MediaSearchHit(

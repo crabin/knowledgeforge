@@ -7,16 +7,16 @@ from urllib.parse import urlparse
 import httpx
 from bs4 import BeautifulSoup
 
-from agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
-from agent.MediaEngine.utils.ranking import classify_platform_type, score_media_url
-from agent.MediaEngine.utils.text_processing import extract_media_text
-from agent.QueryEngine.tools.crawler import (
+from knowledgeforge.agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
+from knowledgeforge.agent.MediaEngine.utils.ranking import classify_platform_type, score_media_url
+from knowledgeforge.agent.MediaEngine.utils.text_processing import extract_media_text
+from knowledgeforge.agent.QueryEngine.tools.crawler import (
     SEARCH_PROVIDERS,
     parse_brave_results,
     parse_google_results,
     resolve_bing_redirect_url,
 )
-from agent.QueryEngine.utils.ranking import is_result_relevant
+from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant
 from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
 from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
 
@@ -258,13 +258,13 @@ class MediaPerspectiveCrawler:
 
     @staticmethod
     def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:
-        from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+        from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 
         return DomainKnowledgeCrawler._parse_duckduckgo(soup)
 
     @staticmethod
     def _parse_bing(soup: BeautifulSoup) -> list[dict[str, str]]:
-        from agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+        from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 
         return DomainKnowledgeCrawler._parse_bing(soup)
 

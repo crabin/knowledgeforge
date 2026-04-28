@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from agent.MediaEngine.agent import MediaEngine
-from agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
-from agent.MediaEngine.utils.ranking import is_technical_context, score_media_url
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
+from knowledgeforge.agent.MediaEngine.utils.ranking import is_technical_context, score_media_url
 from knowledgeforge.models import RequestContext
 
 

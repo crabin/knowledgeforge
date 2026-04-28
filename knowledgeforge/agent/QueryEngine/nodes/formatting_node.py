@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from agent.QueryEngine.nodes.base_node import BaseQueryNode
-from agent.QueryEngine.state.state import QueryEngineState
-from agent.QueryEngine.utils.ranking import reliability_for_source_type_and_url
+from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState
+from knowledgeforge.agent.QueryEngine.utils.ranking import reliability_for_source_type_and_url
 from knowledgeforge.models import EngineRunResult, SourceRecord
 
 

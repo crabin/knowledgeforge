@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from agent.QueryEngine.state.state import QueryEngineState
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState
 from knowledgeforge.utils.time import now_iso
 
 

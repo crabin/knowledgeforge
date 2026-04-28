@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
+from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
 
 
 def main(argv: list[str] | None = None) -> int:

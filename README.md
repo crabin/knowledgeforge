@@ -77,8 +77,10 @@ uv run python app.py
 
 ## 目录说明
 
-- `knowledgeforge/`：Web 接口、服务层、编排图、后处理与基础配置
-- `agent/`：`InsightEngine`、`QueryEngine`、`MediaEngine` 的能力实现
+- `knowledgeforge/server/`：Flask 后端入口与 API 路由
+- `knowledgeforge/web/`：前端模板与静态资源
+- `knowledgeforge/agent/`：`InsightEngine`、`QueryEngine`、`MediaEngine` 的能力实现
+- `knowledgeforge/`：服务层、编排图、后处理与基础配置
 - `save/`：领域知识文档与 README 索引
 - `docs/`：需求、流程、格式规范与设计资料
 - `tests/`：自动化测试
