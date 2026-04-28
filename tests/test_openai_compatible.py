@@ -104,3 +104,37 @@ def test_chat_client_serializes_concurrent_llm_requests(monkeypatch) -> None:
     assert len(results) == 2
     assert metrics["call_count"] == 2
     assert metrics["max_active"] == 1
+
+
+def test_chat_client_emits_realtime_llm_events(monkeypatch) -> None:
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", REAL_COMPLETE_JSON)
+    monkeypatch.setattr(OpenAICompatibleChatClient, "_request_lock", threading.Lock())
+
+    events: list[dict[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> _FakeResponse:
+            return _FakeResponse('{"ok": true}')
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    client = OpenAICompatibleChatClient(
+        AppConfig().openai,
+        max_retries=0,
+        llm_event_callback=events.append,
+    )
+
+    result = client.complete_json(system_prompt="planner", user_prompt='{"domain":"ML"}')
+
+    assert result == {"ok": True}
+    assert [event["status"] for event in events] == ["started", "completed"]
+    assert all(event["operation"] == "chat.completions" for event in events)

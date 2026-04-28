@@ -110,3 +110,46 @@ def test_task_logs_include_realtime_token_usage_summary(tmp_path: Path) -> None:
     assert payload["token_usage"]["request_count"] == 1
     assert payload["token_usage"]["total_tokens"] == 18
     assert payload["logs"][0]["event"] == "token_usage_recorded"
+
+
+def test_task_logs_include_realtime_llm_lifecycle_events(tmp_path: Path) -> None:
+    service = TaskService(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    service._state_store.save(  # noqa: SLF001
+        "llm-task",
+        {
+            "task_id": "llm-task",
+            "task_status": "running",
+            "request_context": {"domain": "知识工程", "subdomains": []},
+        },
+    )
+
+    with token_tracking_context("llm-task"):
+        service._log_llm_event(  # noqa: SLF001
+            {
+                "request_id": "req-llm",
+                "kind": "chat",
+                "operation": "planning.chat_json",
+                "model": "gpt-5.4",
+                "status": "started",
+                "attempt": 1,
+                "max_attempts": 3,
+                "base_url": "http://localhost:8317/v1",
+                "timeout": 120.0,
+                "error": "",
+                "elapsed_ms": None,
+            }
+        )
+
+    payload = service.get_task_logs("llm-task")
+
+    assert payload is not None
+    events = [entry["event"] for entry in payload["logs"]]
+    assert "llm_call_started" in events

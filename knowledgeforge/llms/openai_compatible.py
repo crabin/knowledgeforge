@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from json import JSONDecodeError
 from threading import Lock
@@ -22,12 +23,14 @@ class OpenAICompatibleChatClient:
         *,
         operation: str = "chat.completions",
         token_usage_callback: Any | None = None,
+        llm_event_callback: Any | None = None,
         max_retries: int = 2,
     ) -> None:
         self._config = config
         self._timeout = timeout
         self._operation = operation
         self._token_usage_callback = token_usage_callback
+        self._llm_event_callback = llm_event_callback
         self._max_retries = max(0, max_retries)
 
     def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
@@ -52,7 +55,15 @@ class OpenAICompatibleChatClient:
             request_id = uuid.uuid4().hex
             usage_payload: dict[str, Any] | None = None
             content = ""
+            self._emit_llm_event(
+                request_id=request_id,
+                kind="chat",
+                status="started",
+                attempt=attempt,
+                max_attempts=attempts,
+            )
             try:
+                started_at = time.perf_counter()
                 with self._request_lock:
                     with httpx.Client(timeout=self._timeout) as client:
                         response = client.post(
@@ -65,6 +76,15 @@ class OpenAICompatibleChatClient:
                         usage_payload = response_payload.get("usage")
                         content = response_payload["choices"][0]["message"]["content"]
                         parsed = json.loads(content)
+                elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+                self._emit_llm_event(
+                    request_id=request_id,
+                    kind="chat",
+                    status="completed",
+                    attempt=attempt,
+                    max_attempts=attempts,
+                    elapsed_ms=elapsed_ms,
+                )
                 self._emit_token_usage(
                     request_id=request_id,
                     usage=usage_payload,
@@ -78,6 +98,14 @@ class OpenAICompatibleChatClient:
                 error_message = str(exc)
                 if attempt < attempts:
                     error_message = f"{error_message} (attempt {attempt}/{attempts})"
+                self._emit_llm_event(
+                    request_id=request_id,
+                    kind="chat",
+                    status="failed",
+                    attempt=attempt,
+                    max_attempts=attempts,
+                    error=error_message,
+                )
                 self._emit_token_usage(
                     request_id=request_id,
                     usage=usage_payload,
@@ -121,6 +149,35 @@ class OpenAICompatibleChatClient:
         if record and self._token_usage_callback:
             self._token_usage_callback(record)
 
+    def _emit_llm_event(
+        self,
+        *,
+        request_id: str,
+        kind: str,
+        status: str,
+        attempt: int,
+        max_attempts: int,
+        error: str = "",
+        elapsed_ms: int | None = None,
+    ) -> None:
+        if not self._llm_event_callback:
+            return
+        self._llm_event_callback(
+            {
+                "request_id": request_id,
+                "kind": kind,
+                "operation": self._operation,
+                "model": self._config.model,
+                "status": status,
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "base_url": self._config.base_url,
+                "timeout": self._timeout,
+                "error": error,
+                "elapsed_ms": elapsed_ms,
+            }
+        )
+
 
 class OpenAICompatibleEmbeddingClient:
     def __init__(
@@ -130,11 +187,13 @@ class OpenAICompatibleEmbeddingClient:
         *,
         operation: str = "embeddings",
         token_usage_callback: Any | None = None,
+        llm_event_callback: Any | None = None,
     ) -> None:
         self._config = config
         self._timeout = timeout
         self._operation = operation
         self._token_usage_callback = token_usage_callback
+        self._llm_event_callback = llm_event_callback
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         request_id = uuid.uuid4().hex
@@ -150,6 +209,7 @@ class OpenAICompatibleEmbeddingClient:
         }
         usage_payload: dict[str, Any] | None = None
         prompt_text = "\n".join(texts)
+        self._emit_llm_event(request_id=request_id, kind="embedding", status="started", error="")
         with httpx.Client(timeout=self._timeout) as client:
             try:
                 response = client.post(
@@ -162,6 +222,7 @@ class OpenAICompatibleEmbeddingClient:
                 usage_payload = response_payload.get("usage")
                 data = response_payload["data"]
             except Exception as exc:
+                self._emit_llm_event(request_id=request_id, kind="embedding", status="failed", error=str(exc))
                 self._emit_token_usage(
                     request_id=request_id,
                     usage=None,
@@ -170,6 +231,7 @@ class OpenAICompatibleEmbeddingClient:
                     estimated_prompt_text=prompt_text,
                 )
                 raise
+        self._emit_llm_event(request_id=request_id, kind="embedding", status="completed", error="")
         self._emit_token_usage(
             request_id=request_id,
             usage=usage_payload,
@@ -205,3 +267,26 @@ class OpenAICompatibleEmbeddingClient:
         )
         if record and self._token_usage_callback:
             self._token_usage_callback(record)
+
+    def _emit_llm_event(
+        self,
+        *,
+        request_id: str,
+        kind: str,
+        status: str,
+        error: str,
+    ) -> None:
+        if not self._llm_event_callback:
+            return
+        self._llm_event_callback(
+            {
+                "request_id": request_id,
+                "kind": kind,
+                "operation": self._operation,
+                "model": self._config.embedding_model,
+                "status": status,
+                "base_url": self._config.embedding_base_url,
+                "timeout": self._timeout,
+                "error": error,
+            }
+        )

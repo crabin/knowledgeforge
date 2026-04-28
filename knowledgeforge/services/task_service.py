@@ -84,18 +84,21 @@ class TaskService:
             timeout=config.plan_llm_timeout,
             operation="planning.chat_json",
             token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
         )
         execution_chat_client = OpenAICompatibleChatClient(
             config.openai,
             timeout=config.execution_llm_timeout,
             operation="execution.chat_json",
             token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
         )
         query_embedding_client = OpenAICompatibleEmbeddingClient(
             config.openai,
             timeout=2.0,
             operation="query.embeddings",
             token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
         )
         self._intake_clarifier = IntakeClarifier(
             OpenAICompatibleChatClient(
@@ -103,6 +106,7 @@ class TaskService:
                 timeout=1.0,
                 operation="intake.clarify",
                 token_usage_callback=self._record_token_usage,
+                llm_event_callback=self._log_llm_event,
             )
         )
         graph_client = Neo4jGraphClient(config.neo4j)
@@ -655,6 +659,30 @@ class TaskService:
     def _record_token_usage(self, record: TokenUsageRecord) -> None:
         self._audit_logger.log(record.task_id, "token_usage_recorded", record.to_dict())
 
+    def _log_llm_event(self, payload: dict[str, Any]) -> None:
+        from knowledgeforge.runtime.token_usage import current_token_task_id
+
+        task_id = str(payload.get("task_id") or current_token_task_id() or "")
+        if not task_id:
+            return
+        status = str(payload.get("status", "unknown"))
+        event = {
+            "started": "llm_call_started",
+            "completed": "llm_call_completed",
+            "failed": "llm_call_failed",
+        }.get(status, "llm_call_event")
+        self._audit_logger.log(task_id, event, payload)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "LLM",
+                "event": event,
+                "timestamp": now_iso(),
+                "node": "OpenAICompatibleClient",
+                "details": payload,
+            },
+        )
+
     def _attach_runtime_observability(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._attach_execution_log(payload)
         task_id = str(payload.get("task_id") or payload.get("session_id") or "")
@@ -848,6 +876,12 @@ class TaskService:
     def _describe_realtime_action(entry: dict[str, Any]) -> str:
         details = entry.get("details", {})
         event = entry.get("event", "")
+        if event == "llm_call_started":
+            return f"LLM 调用开始：{details.get('operation', '')} 第 {details.get('attempt', 1)}/{details.get('max_attempts', 1)} 次"
+        if event == "llm_call_completed":
+            return f"LLM 调用完成：{details.get('operation', '')}"
+        if event == "llm_call_failed":
+            return f"LLM 调用失败：{details.get('operation', '')}"
         if event == "file_generation_started":
             return f"正在生成文件：{details.get('file_path', '')}"
         if event == "file_generation_completed":
