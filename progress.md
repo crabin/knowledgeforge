@@ -124,3 +124,17 @@
 
 - 后续需要将补检索决策相关旧测试同步到当前 `generate_files -> run_query_queue -> validate_round -> fill_evidence` 串行文件队列流程。
 - 可考虑把异步接口返回给前端的 `filled` 中间态继续归一为 `running`，减少测试和 UI 轮询对瞬时内部状态的敏感度。
+
+## 2026-04-28 LLM 连通性测试脚本
+
+- 新增 `scripts/test_llm_available.py`，用于读取 `.env` 中的 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 并向 OpenAI-compatible `/chat/completions` 发送最小 smoke 请求。
+- 脚本支持 `--env-file`、`--prompt`、`--timeout` 参数，输出目标 base URL、模型、脱敏 API key、响应耗时、usage 与回复内容。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile scripts/test_llm_available.py`
+- 结果：通过。
+- 运行 `PYTHONPATH=. python scripts/test_llm_available.py --help`
+- 结果：参数帮助可正常显示。
+- 运行 `PYTHONPATH=. python scripts/test_llm_available.py`
+- 结果：`[OK] received reply in 1.45s`，回复内容为 `LLM 连接正常。`
