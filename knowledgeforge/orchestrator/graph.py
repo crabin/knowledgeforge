@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 import yaml
 from langgraph.graph import END, StateGraph
@@ -397,7 +400,8 @@ class KnowledgeGraphWorkflow:
                         ensure_ascii=False,
                     ),
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning("LLM generation failed for %s: %s", file_path, exc)
                 payload = {}
         return self._normalize_generated_payload(context, blueprint, spec, file_path, payload)
 
@@ -418,13 +422,7 @@ class KnowledgeGraphWorkflow:
             "query_tasks": payload.get("query_tasks", []) or self._default_query_tasks(blueprint, file_path, spec),
             "completion_status": payload.get("completion_status", {"state": "generated", "required": True}),
         }
-        markdown = str(payload.get("markdown", "")).strip()
-        if markdown and parse_contract_block(markdown) is None:
-            markdown = f"{markdown}\n\n{render_contract_block(contract)}\n"
-        if not markdown:
-            markdown = self._fallback_markdown(context, blueprint, spec, file_path, contract)
-        else:
-            markdown = replace_contract_block(markdown, contract)
+        markdown = self._fallback_markdown(context, blueprint, spec, file_path, contract)
         return {"markdown": markdown, "contract": contract}
 
     def _fallback_markdown(

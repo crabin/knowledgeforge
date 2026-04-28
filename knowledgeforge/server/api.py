@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import time
 
-from flask import Flask, g, jsonify, render_template, request
+import json as _json
+
+from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
 
 from knowledgeforge.config import AppConfig
 from knowledgeforge.services.task_service import TaskService
@@ -68,7 +71,10 @@ def create_app(config: AppConfig | None = None) -> Flask:
                         "latest_llm_attempt": latest_llm.get("attempt", ""),
                     }
                 )
-        app.logger.info("request_trace %s", details)
+        if request.method == "GET" and task_id:
+            app.logger.debug("request_trace %s", details)
+        else:
+            app.logger.info("request_trace %s", details)
         return response
 
     @app.get("/")
@@ -225,6 +231,37 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "task not found"}), 404
         return jsonify(logs), 200
 
+    _TERMINAL_STATUSES = frozenset([
+        "verified", "research_required", "repair_required",
+        "supplement_required", "max_rounds_reached", "failed", "plan_failed",
+    ])
+
+    @app.get("/tasks/<task_id>/stream")
+    def stream_task(task_id: str):
+        def generate():
+            last_updated_at = None
+            while True:
+                task = service.get_task(task_id)
+                if task is None:
+                    yield f"data: {_json.dumps({'error': 'task not found'})}\n\n"
+                    return
+                updated_at = task.get("updated_at", "")
+                if updated_at != last_updated_at:
+                    last_updated_at = updated_at
+                    logs = service.get_task_logs(task_id) or {}
+                    payload = {**task, **logs}
+                    yield f"data: {_json.dumps(payload, default=str)}\n\n"
+                    if task.get("task_status") in _TERMINAL_STATUSES:
+                        yield "event: done\ndata: {}\n\n"
+                        return
+                time.sleep(0.25)
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.post("/tasks/<task_id>/report")
     def generate_report(task_id: str):
         report = service.generate_report(task_id)
@@ -238,7 +275,8 @@ def create_app(config: AppConfig | None = None) -> Flask:
 def _configure_application_logger(app: Flask, config: AppConfig) -> None:
     log_root = config.app_log_root
     log_root.mkdir(parents=True, exist_ok=True)
-    log_path = log_root / "knowledgeforge-server.log"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = log_root / f"knowledgeforge-server-{timestamp}.log"
     handler_id = f"knowledgeforge-server::{log_path.as_posix()}"
     if any(getattr(handler, "name", "") == handler_id for handler in app.logger.handlers):
         return

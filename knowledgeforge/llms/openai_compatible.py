@@ -14,8 +14,6 @@ from knowledgeforge.runtime.token_usage import TokenUsageStatus, build_token_usa
 
 
 class OpenAICompatibleChatClient:
-    _request_lock = Lock()
-
     def __init__(
         self,
         config: OpenAIConfig,
@@ -32,6 +30,7 @@ class OpenAICompatibleChatClient:
         self._token_usage_callback = token_usage_callback
         self._llm_event_callback = llm_event_callback
         self._max_retries = max(0, max_retries)
+        self._request_lock = Lock()
 
     def complete_json(self, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         payload = {

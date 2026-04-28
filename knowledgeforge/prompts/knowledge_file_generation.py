@@ -91,10 +91,10 @@ def build_prompt_spec(blueprint: dict[str, Any]) -> KnowledgeFilePromptSpec:
 
 def build_generation_system_prompt() -> str:
     return (
-        "你是 KnowledgeForge 文件骨架生成器。"
-        "请基于给定文件规范输出严格 JSON，字段必须包含 markdown、query_tasks、claims、evidence_needed、completion_status。"
-        "markdown 必须是完整 Markdown 文本，包含 YAML front matter 与 “## 知识文件合同” JSON 代码块。"
-        "query_tasks 必须是数组，每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。"
+        “你是 KnowledgeForge 文件骨架生成器。”
+        “请基于给定文件规范输出严格 JSON，字段必须包含 query_tasks、claims、evidence_needed、completion_status。”
+        “query_tasks 必须是数组，每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。”
+        “claims 是该文件需要形成的核心结论列表，evidence_needed 是需要补充的证据类型列表。”
     )
 
 

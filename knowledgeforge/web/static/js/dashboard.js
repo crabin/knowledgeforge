@@ -1,8 +1,7 @@
 const state = {
   lastPayload: null,
-  pollTimer: null,
+  eventSource: null,
   pollTaskId: null,
-  pollCount: 0,
   workflowGraph: null,
   workflowGraphReady: false,
 };
@@ -717,36 +716,37 @@ function fillTaskUpdateForm(taskId) {
   }, null, 2);
 }
 
-function stopTaskPolling() {
-  if (state.pollTimer) clearInterval(state.pollTimer);
-  state.pollTimer = null;
-  state.pollTaskId = null;
-  state.pollCount = 0;
-}
-
-async function refreshRunningTask(taskId) {
-  const logsPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}/logs`);
-  let merged = mergeTaskPayload(logsPayload);
-  state.pollCount += 1;
-  if (state.pollCount % 3 === 0) {
-    const taskPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}`);
-    merged = mergeTaskPayload({ ...taskPayload, logs: logsPayload.logs });
-    if (isTerminalStatus(taskPayload.task_status)) stopTaskPolling();
+function stopTaskStream() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
   }
-  showPayload(merged);
+  state.pollTaskId = null;
 }
 
-function startTaskPolling(taskId) {
-  stopTaskPolling();
+function startTaskStream(taskId) {
+  stopTaskStream();
   state.pollTaskId = taskId;
-  state.pollTimer = setInterval(async () => {
+  const es = new EventSource(`/tasks/${encodeURIComponent(taskId)}/stream`);
+  state.eventSource = es;
+
+  es.onmessage = (e) => {
     try {
-      await refreshRunningTask(taskId);
-    } catch (error) {
-      stopTaskPolling();
-      showError(error);
+      const payload = JSON.parse(e.data);
+      if (payload.error) { showError(new Error(payload.error)); stopTaskStream(); return; }
+      showPayload(mergeTaskPayload(payload));
+    } catch (err) {
+      showError(err);
+      stopTaskStream();
     }
-  }, 900);
+  };
+
+  es.addEventListener("done", () => stopTaskStream());
+
+  es.onerror = () => {
+    showError(new Error("SSE 连接断开"));
+    stopTaskStream();
+  };
 }
 
 function isTerminalStatus(status) {
@@ -832,11 +832,11 @@ document.querySelector("#confirm-intake").addEventListener("click", async (event
     const payload = await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/confirm`, { method: "POST" });
     showPayload(payload);
     const taskId = payload.task?.task_id || payload.task_id || payload.intake_session?.task_id;
-    if (taskId) startTaskPolling(taskId);
-    else stopTaskPolling();
+    if (taskId) startTaskStream(taskId);
+    else stopTaskStream();
   } catch (error) {
     showError(error);
-    stopTaskPolling();
+    stopTaskStream();
   } finally {
     setBusy(button, false);
   }
@@ -851,11 +851,11 @@ document.querySelector("#direct-task-form").addEventListener("submit", async (ev
     const task = await requestJson("/tasks/async", { method: "POST", body: JSON.stringify(payload) });
     showPayload(task);
     const createdTaskId = task.task_id || task.task?.task_id;
-    if (createdTaskId) startTaskPolling(createdTaskId);
-    else stopTaskPolling();
+    if (createdTaskId) startTaskStream(createdTaskId);
+    else stopTaskStream();
   } catch (error) {
     showError(error);
-    stopTaskPolling();
+    stopTaskStream();
   } finally {
     setBusy(form, false);
   }
@@ -885,7 +885,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
       if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
-        startTaskPolling(activeTaskId);
+        startTaskStream(activeTaskId);
       }
     } catch (error) {
       showError(error);
@@ -920,7 +920,7 @@ document.querySelector("#delete-task").addEventListener("click", async (event) =
   if (!window.confirm(`确认删除任务 ${taskId}？`)) return;
   setBusy(button, true);
   try {
-    stopTaskPolling();
+    stopTaskStream();
     const deleted = await requestJson(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
     const listed = await requestJson("/tasks");
     showPayload({ ...deleted, tasks: listed.tasks, count: listed.count });
