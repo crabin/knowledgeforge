@@ -12,7 +12,7 @@ from agent.QueryEngine.tools.supplemental_sources import build_supplemental_sour
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
-    query = " ".join(args).strip() or "GAN"
+    query = " ".join(args).strip() or "Generative Adversarial Network"
     target = next(item for item in build_supplemental_source_targets(query) if item.key == "zh_wikipedia")
     result = probe_source_url(target)
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))

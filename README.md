@@ -69,6 +69,12 @@ uv run python app.py
 
 ![KnowledgeForge 运行中状态](docs/images/knowledgeforge-dashboard-runtime.png)
 
+### 爬取结束状态
+
+展示治理链路完成后的结果状态，包括质量检查、冻结版本、保存文件数与已完成的三路 Agent 执行计划。
+
+![KnowledgeForge 爬取结束状态](docs/images/knowledgeforge-dashboard-finished.png)
+
 ## 目录说明
 
 - `knowledgeforge/`：Web 接口、服务层、编排图、后处理与基础配置
