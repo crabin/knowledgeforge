@@ -87,6 +87,15 @@ class TaskService:
             operation="planning.chat_json",
             token_usage_callback=self._record_token_usage,
             llm_event_callback=self._log_llm_event,
+            max_retries=config.plan_llm_max_retries,
+        )
+        generation_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.generation_llm_timeout,
+            operation="generation.chat_json",
+            token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
+            max_retries=config.generation_llm_max_retries,
         )
         execution_chat_client = OpenAICompatibleChatClient(
             config.openai,
@@ -94,6 +103,7 @@ class TaskService:
             operation="execution.chat_json",
             token_usage_callback=self._record_token_usage,
             llm_event_callback=self._log_llm_event,
+            max_retries=config.execution_llm_max_retries,
         )
         query_embedding_client = OpenAICompatibleEmbeddingClient(
             config.openai,
@@ -109,6 +119,7 @@ class TaskService:
                 operation="intake.clarify",
                 token_usage_callback=self._record_token_usage,
                 llm_event_callback=self._log_llm_event,
+                max_retries=config.intake_llm_max_retries,
             )
         )
         graph_client = Neo4jGraphClient(config.neo4j)
@@ -157,6 +168,7 @@ class TaskService:
             ),
             workflow_event_callback=self._log_workflow_step_event,
             state_update_callback=self._persist_running_state_update,
+            generation_chat_client=generation_chat_client,
         )
         self._tasks: dict[str, WorkflowState] = {}
         self._task_lock = Lock()
@@ -842,6 +854,8 @@ class TaskService:
         }
         for entry in task.get("execution_log", []):
             event = str(entry.get("event", "agent_execution_event"))
+            if event.startswith("llm_call_"):
+                continue
             details = dict(entry.get("details", {}))
             details["agent"] = entry.get("agent")
             details["node"] = entry.get("node")

@@ -138,3 +138,37 @@ def test_chat_client_emits_realtime_llm_events(monkeypatch) -> None:
     assert result == {"ok": True}
     assert [event["status"] for event in events] == ["started", "completed"]
     assert all(event["operation"] == "chat.completions" for event in events)
+
+
+def test_chat_client_does_not_retry_on_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", REAL_COMPLETE_JSON)
+    monkeypatch.setattr(OpenAICompatibleChatClient, "_request_lock", threading.Lock())
+
+    post_calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> _FakeResponse:
+            post_calls.append(url)
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    client = OpenAICompatibleChatClient(AppConfig().openai, max_retries=2)
+
+    try:
+        client.complete_json(system_prompt="planner", user_prompt='{"domain":"ML"}')
+    except httpx.ReadTimeout:
+        pass
+    else:
+        raise AssertionError("expected ReadTimeout")
+
+    assert len(post_calls) == 1

@@ -122,6 +122,8 @@ class OpenAICompatibleChatClient:
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
+        if isinstance(exc, httpx.TimeoutException):
+            return False
         return isinstance(exc, (JSONDecodeError, httpx.HTTPError, KeyError, TypeError, ValueError))
 
     def _emit_token_usage(

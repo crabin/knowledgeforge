@@ -88,7 +88,12 @@ class AppConfig:
     strict_graph_sync: bool = False
     enable_live_crawlers: bool = False
     plan_llm_timeout: float = 120.0
+    generation_llm_timeout: float = 120.0
     execution_llm_timeout: float = 5.0
+    plan_llm_max_retries: int = 1
+    generation_llm_max_retries: int = 0
+    execution_llm_max_retries: int = 1
+    intake_llm_max_retries: int = 0
     max_query_network_concurrency: int = 5
     max_network_task_concurrency: int = 5
     max_llm_task_concurrency: int = 2
@@ -129,7 +134,12 @@ class AppConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
             plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 120.0),
+            generation_llm_timeout=_get_float("GENERATION_LLM_TIMEOUT", _get_float("PLAN_LLM_TIMEOUT", 120.0)),
             execution_llm_timeout=_get_float("EXECUTION_LLM_TIMEOUT", 5.0),
+            plan_llm_max_retries=_get_int("PLAN_LLM_MAX_RETRIES", 1),
+            generation_llm_max_retries=_get_int("GENERATION_LLM_MAX_RETRIES", 0),
+            execution_llm_max_retries=_get_int("EXECUTION_LLM_MAX_RETRIES", 1),
+            intake_llm_max_retries=_get_int("INTAKE_LLM_MAX_RETRIES", 0),
             max_query_network_concurrency=_get_int("MAX_QUERY_NETWORK_CONCURRENCY", 5),
             max_network_task_concurrency=_get_int("MAX_NETWORK_TASK_CONCURRENCY", 5),
             max_llm_task_concurrency=_get_int("MAX_LLM_TASK_CONCURRENCY", 2),
@@ -192,7 +202,12 @@ class AppConfig:
                 "max_rounds": self.max_rounds,
                 "log_level": self.log_level,
                 "plan_llm_timeout": self.plan_llm_timeout,
+                "generation_llm_timeout": self.generation_llm_timeout,
                 "execution_llm_timeout": self.execution_llm_timeout,
+                "plan_llm_max_retries": self.plan_llm_max_retries,
+                "generation_llm_max_retries": self.generation_llm_max_retries,
+                "execution_llm_max_retries": self.execution_llm_max_retries,
+                "intake_llm_max_retries": self.intake_llm_max_retries,
                 "max_query_network_concurrency": self.max_query_network_concurrency,
                 "max_network_task_concurrency": self.max_network_task_concurrency,
                 "max_llm_task_concurrency": self.max_llm_task_concurrency,

@@ -412,6 +412,54 @@ def test_task_logs_backfill_saved_execution_log_entries(tmp_path: Path) -> None:
     assert "query_plan_created" in saved_events
 
 
+def test_task_logs_do_not_backfill_duplicate_llm_events(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["日志去重"]})
+    state = service._create_initial_state(context, audit_source="api_async")
+    task_id = state["task_id"]
+    payload = service._serialize_state(state)
+    payload["execution_log"] = [
+        {
+            "agent": "LLM",
+            "event": "llm_call_started",
+            "timestamp": "2026-04-28T17:13:03+09:00",
+            "node": "OpenAICompatibleClient",
+            "details": {
+                "request_id": "req-1",
+                "operation": "generation.chat_json",
+                "status": "started",
+                "attempt": 1,
+                "max_attempts": 1,
+            },
+        }
+    ]
+    service._state_store.save(task_id, payload)
+    service._audit_logger.log(
+        task_id,
+        "llm_call_started",
+        {
+            "request_id": "req-1",
+            "operation": "generation.chat_json",
+            "status": "started",
+            "attempt": 1,
+            "max_attempts": 1,
+        },
+    )
+
+    logs = service.get_task_logs(task_id)
+    audit_file = config.audit_root / f"{task_id}.jsonl"
+
+    assert logs is not None
+    saved_events = [json.loads(line)["event"] for line in audit_file.read_text(encoding="utf-8").splitlines()]
+    assert saved_events.count("llm_call_started") == 1
+
+
 def test_task_logs_include_latest_runtime_snapshot(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

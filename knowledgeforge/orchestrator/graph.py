@@ -46,6 +46,7 @@ class KnowledgeGraphWorkflow:
         supplement_planner: SupplementDecisionPlanner,
         writer: MarkdownKnowledgeWriter,
         post_storage_pipeline: PostStoragePipeline,
+        generation_chat_client=None,
         workflow_event_callback=None,
         state_update_callback=None,
     ) -> None:
@@ -56,6 +57,7 @@ class KnowledgeGraphWorkflow:
         self._supplement_planner = supplement_planner
         self._writer = writer
         self._post_storage_pipeline = post_storage_pipeline
+        self._generation_chat_client = generation_chat_client
         self._workflow_event_callback = workflow_event_callback
         self._state_update_callback = state_update_callback
         self._queue_store = DomainTaskQueueStore()
@@ -314,7 +316,7 @@ class KnowledgeGraphWorkflow:
                 "completed_tasks": len([task for task in queue.get("tasks", []) if str(task.get("status", "")) == "completed"]),
                 "total_tasks": len(queue.get("tasks", [])),
             },
-            "task_status": "filled",
+            "task_status": "running",
             "current_step": "evidence_filling",
             "current_action": "所有已验证依据已统一回填到知识文件。",
         }
@@ -351,7 +353,7 @@ class KnowledgeGraphWorkflow:
         return "repair_required"
 
     def _generate_single_file(self, context: RequestContext, blueprint: dict[str, Any], spec, file_path: Path) -> dict[str, Any]:
-        chat_client = getattr(self._insight_engine, "_chat_client", None)
+        chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
         payload: dict[str, Any] = {}
         if chat_client is not None:
             try:

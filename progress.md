@@ -138,3 +138,18 @@
 - 结果：参数帮助可正常显示。
 - 运行 `PYTHONPATH=. python scripts/test_llm_available.py`
 - 结果：`[OK] received reply in 1.45s`，回复内容为 `LLM 连接正常。`
+
+## 2026-04-28 LLM 调用机制优化
+
+- 为串行文件骨架生成增加专用 `generation.chat_json` client，不再复用通用 planning client；生成链路默认 `0` 次重试，单次失败直接回退到本地固定骨架，避免一个文件在 LLM 超时时卡住多个完整超时窗口。
+- 为 planning / execution / intake 增加独立的 `*_llm_max_retries` 配置项，并新增 `generation_llm_timeout`，让不同阶段可以分别调优。
+- 调整 OpenAI-compatible chat client：`httpx.TimeoutException` 不再进入盲目重试，超时后立即失败并交由上层 fallback 或下一步流程处理。
+- 修复 audit 回填重复问题：`llm_call_started` / `llm_call_completed` / `llm_call_failed` 不再从 `execution_log` 二次写入 audit，避免实时日志出现成对重复记录。
+- 收敛 `fill_evidence` 的中间态：统一继续保持 `running`，减少前端轮询和异步测试误把内部中间态当成终态。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/config.py knowledgeforge/llms/openai_compatible.py knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest tests/test_openai_compatible.py tests/test_workflow.py tests/test_token_usage.py -q`
+- 结果：`38 passed in 13.42s`
