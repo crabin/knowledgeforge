@@ -87,7 +87,7 @@ class AppConfig:
     log_level: str = "INFO"
     strict_graph_sync: bool = False
     enable_live_crawlers: bool = False
-    plan_llm_timeout: float = 45.0
+    plan_llm_timeout: float = 120.0
     execution_llm_timeout: float = 5.0
     max_query_network_concurrency: int = 5
     max_network_task_concurrency: int = 5
@@ -128,7 +128,7 @@ class AppConfig:
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
-            plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 45.0),
+            plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 120.0),
             execution_llm_timeout=_get_float("EXECUTION_LLM_TIMEOUT", 5.0),
             max_query_network_concurrency=_get_int("MAX_QUERY_NETWORK_CONCURRENCY", 5),
             max_network_task_concurrency=_get_int("MAX_NETWORK_TASK_CONCURRENCY", 5),
