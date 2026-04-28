@@ -424,8 +424,8 @@ function getWorkflowEdgeAttrs(status) {
 
 function renderQueuePanel(payload) {
   if (!queueOutput) return;
-  const generation = payload.generation_progress || payload.task?.generation_progress || {};
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
   const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
   const counts = summarizeQueueCounts(tasks);
@@ -516,7 +516,8 @@ function renderQueuePanel(payload) {
 }
 
 function summarizeGenerationProgress(payload) {
-  const generation = payload.generation_progress || payload.task?.generation_progress || {};
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
   if (!Object.keys(generation).length) return "";
   return `${generation.completed_files || 0}/${generation.total_files || 0} 文件已生成`;
 }

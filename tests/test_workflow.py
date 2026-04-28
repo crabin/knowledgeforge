@@ -7,6 +7,7 @@ from pathlib import Path
 from knowledgeforge.api import create_app
 from knowledgeforge.config import AppConfig
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.services.task_service import TaskService
 
 
@@ -433,6 +434,93 @@ def test_task_logs_include_latest_runtime_snapshot(tmp_path: Path) -> None:
     assert logs["task_status"] == "running"
     assert logs["current_step"] == "evaluating"
     assert logs["current_action"] == "完整性评估已完成。"
+
+
+def test_task_detail_refreshes_queue_snapshot_from_queue_file(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["队列状态"]})
+    state = service._create_initial_state(context, audit_source="api_async")
+    task_id = state["task_id"]
+    queue_path = config.save_root / "知识工程" / "knowledge_task_queue.json"
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        json.dumps(
+            {
+                "domain": "知识工程",
+                "queue_version": "v1",
+                "generation_status": {
+                    "total_files": 2,
+                    "completed_files": 1,
+                    "current_file": "module.md",
+                    "last_saved_path": "save/知识工程/module.md",
+                },
+                "current_round": 1,
+                "tasks": [{"task_id": "q1", "status": "running", "query_text": "状态显示"}],
+                "round_summaries": [],
+                "final_status": "generated",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    state["task_queue_path"] = queue_path.as_posix()
+    state["task_queue_snapshot"] = {"tasks": []}
+    service._state_store.save(task_id, service._serialize_state(state))
+
+    task = service.get_task(task_id)
+    plan = service.get_task_plan(task_id)
+
+    assert task is not None
+    assert task["generation_progress"]["completed_files"] == 1
+    assert task["task_queue_snapshot"]["tasks"][0]["status"] == "running"
+    assert plan is not None
+    assert plan["task_queue_snapshot"]["final_status"] == "generated"
+
+
+def test_round_validation_creates_retry_tasks_instead_of_empty_loop(tmp_path: Path) -> None:
+    service = TaskService(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    context = service._context_builder.build({"domain": "知识工程", "subdomains": ["流程控制"]})
+    workflow = KnowledgeGraphWorkflow.__new__(KnowledgeGraphWorkflow)
+    workflow._insight_engine = object()
+    queue = {
+        "current_round": 1,
+        "tasks": [
+            {
+                "task_id": "q1",
+                "task_type": "query",
+                "target_file_path": "save/知识工程/a.md",
+                "target_section": "证据与来源",
+                "claim_or_gap": "缺少依据",
+                "query_text": "知识工程 权威资料",
+                "expected_evidence": ["权威来源"],
+                "status": "insufficient",
+                "attempts": 1,
+                "round_number": 1,
+                "citations": [],
+            }
+        ],
+    }
+
+    validation = workflow._validate_queue_round(context, queue, max_rounds=3)
+
+    assert validation.is_complete is False
+    assert validation.new_tasks
+    assert validation.new_tasks[0]["task_id"] == "q1-r2"
+    assert validation.new_tasks[0]["round_number"] == 2
+    assert validation.new_tasks[0]["status"] == "pending"
 
 
 def test_task_list_returns_saved_task_summaries(tmp_path: Path) -> None:

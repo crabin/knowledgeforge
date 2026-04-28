@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from threading import Lock, Thread
 import uuid
 from dataclasses import asdict, is_dataclass
+from pathlib import Path
 from typing import Any
 
 from agent.InsightEngine.agent import InsightEngine
@@ -218,6 +220,7 @@ class TaskService:
         task = self.get_task(task_id)
         if task is None:
             return None
+        self._refresh_task_queue_snapshot_from_path(task)
         return {
             "task_id": task_id,
             "task_status": task.get("task_status", "unknown"),
@@ -684,11 +687,28 @@ class TaskService:
         )
 
     def _attach_runtime_observability(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._refresh_task_queue_snapshot_from_path(payload)
         self._attach_execution_log(payload)
         task_id = str(payload.get("task_id") or payload.get("session_id") or "")
         if task_id:
             payload["token_usage"] = summarize_token_usage(self._audit_logger.read(task_id))
         return payload
+
+    @staticmethod
+    def _refresh_task_queue_snapshot_from_path(payload: dict[str, Any]) -> None:
+        queue_path = str(payload.get("task_queue_path") or "").strip()
+        if not queue_path:
+            return
+        path = Path(queue_path)
+        if not path.exists():
+            return
+        try:
+            queue = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        payload["task_queue_snapshot"] = queue
+        if isinstance(queue.get("generation_status"), dict):
+            payload["generation_progress"] = queue["generation_status"]
 
     @staticmethod
     def _finalize_successful_plan_statuses(state: WorkflowState) -> None:

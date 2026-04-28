@@ -93,7 +93,7 @@ class KnowledgeGraphWorkflow:
         context = state["request_context"]
         context.prompt_profile_version = PROMPT_PROFILE_VERSION
         domain_dir = self._domain_dir(context)
-        queue = self._queue_store.load(domain_dir) or self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
+        queue = self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
         context.generation_queue_path = self._queue_store.queue_path(domain_dir).as_posix()
         self._emit_workflow_event(state, "blueprint_ready", "知识文件蓝图已准备", "active")
         file_states = self._writer.materialize_knowledge_base(context=context, round_number=state.get("round_number", 1))
@@ -119,6 +119,13 @@ class KnowledgeGraphWorkflow:
                 "last_saved_path": queue.get("generation_status", {}).get("last_saved_path", ""),
             }
             self._queue_store.save(domain_dir, queue)
+            self._commit_queue_snapshot(
+                state,
+                domain_dir,
+                queue,
+                current_step="llm_generating",
+                current_action=f"正在生成文件骨架：{relative_path}",
+            )
             generated = self._generate_single_file(context, blueprint, spec, file_path)
             file_path.write_text(generated["markdown"], encoding="utf-8")
             query_tasks = self._extract_queue_tasks(generated["contract"], blueprint, file_path, queue.get("current_round", 1))
@@ -131,6 +138,13 @@ class KnowledgeGraphWorkflow:
                 "last_saved_path": file_path.as_posix(),
             }
             self._queue_store.save(domain_dir, queue)
+            self._commit_queue_snapshot(
+                state,
+                domain_dir,
+                queue,
+                current_step="llm_generating",
+                current_action=f"文件骨架已保存：{relative_path}",
+            )
             self._emit_workflow_event(
                 state,
                 "llm_generating",
@@ -171,6 +185,13 @@ class KnowledgeGraphWorkflow:
             queue["tasks"][index]["status"] = "running"
             queue["tasks"][index]["attempts"] = int(task.get("attempts", 0)) + 1
             self._queue_store.save(domain_dir, queue)
+            self._commit_queue_snapshot(
+                state,
+                domain_dir,
+                queue,
+                current_step="query_queue_running",
+                current_action=f"正在执行队列任务：{task.get('task_id', '')}",
+            )
             self._emit_workflow_event(
                 state,
                 "query_queue_running",
@@ -188,6 +209,14 @@ class KnowledgeGraphWorkflow:
             )
             outputs[result["agent_name"]] = self._merge_engine_output(outputs.get(result["agent_name"]), result["engine_output"])
             self._queue_store.save(domain_dir, queue)
+            self._commit_queue_snapshot(
+                state,
+                domain_dir,
+                queue,
+                current_step="query_queue_running",
+                current_action=f"队列任务已完成：{task.get('task_id', '')}",
+                extra_updates={"agent_outputs": outputs},
+            )
             self._emit_workflow_event(
                 state,
                 "query_queue_running",
@@ -300,7 +329,7 @@ class KnowledgeGraphWorkflow:
             state["request_context"],
             state.get("agent_outputs", {}),
         )
-        task_status = "verified" if result.status == "passed" else "repair_required"
+        task_status = self._task_status_from_post_storage(result)
         updates = {
             "post_storage_result": result,
             "task_status": task_status,
@@ -311,6 +340,15 @@ class KnowledgeGraphWorkflow:
         self._emit_workflow_event(state, "governing", "结构化治理与质量检测", "completed" if task_status == "verified" else "blocked")
         self._emit_workflow_event(state, "versioning", "版本冻结与研报资格", "completed" if task_status == "verified" else "pending")
         return updates
+
+    @staticmethod
+    def _task_status_from_post_storage(result) -> str:
+        if result.status == "passed":
+            return "verified"
+        flows = set(result.remediation_flows or [])
+        if "research_flow" in flows and "repair_flow" not in flows:
+            return "research_required"
+        return "repair_required"
 
     def _generate_single_file(self, context: RequestContext, blueprint: dict[str, Any], spec, file_path: Path) -> dict[str, Any]:
         chat_client = getattr(self._insight_engine, "_chat_client", None)
@@ -534,6 +572,11 @@ class KnowledgeGraphWorkflow:
 
     def _validate_queue_round(self, context: RequestContext, queue: dict[str, Any], max_rounds: int) -> RoundValidationResult:
         chat_client = getattr(self._insight_engine, "_chat_client", None)
+        current_round = int(queue.get("current_round", 1))
+        incomplete = [task for task in queue.get("tasks", []) if str(task.get("status", "")) != "completed"]
+        current_round_incomplete = [
+            task for task in incomplete if str(task.get("round_number", 1)) == str(current_round)
+        ]
         if chat_client is not None:
             try:
                 payload = chat_client.complete_json(
@@ -547,37 +590,90 @@ class KnowledgeGraphWorkflow:
                         ensure_ascii=False,
                     ),
                 )
+                is_complete = bool(payload.get("is_complete"))
+                new_tasks = self._normalize_validation_tasks(
+                    [item for item in payload.get("new_tasks", []) if isinstance(item, dict)],
+                    next_round=current_round + 1,
+                )
+                if not is_complete and current_round >= max_rounds:
+                    return self._max_round_validation(queue)
+                if not is_complete and not new_tasks:
+                    new_tasks = self._build_retry_tasks(current_round_incomplete, next_round=current_round + 1)
                 return RoundValidationResult(
-                    is_complete=bool(payload.get("is_complete")),
+                    is_complete=is_complete,
                     missing_evidence=[str(item) for item in payload.get("missing_evidence", []) if str(item).strip()],
-                    new_tasks=[item for item in payload.get("new_tasks", []) if isinstance(item, dict)],
+                    new_tasks=new_tasks,
                     reasoning=str(payload.get("reasoning", "")).strip() or "LLM 已完成本轮验证。",
                     file_status_updates=[item for item in payload.get("file_status_updates", []) if isinstance(item, dict)],
                 )
             except Exception:
                 pass
-        incomplete = [task for task in queue.get("tasks", []) if str(task.get("status", "")) != "completed"]
-        if incomplete and int(queue.get("current_round", 1)) >= max_rounds:
-            return RoundValidationResult(
-                is_complete=True,
-                missing_evidence=[str(task.get("claim_or_gap", "")) for task in incomplete],
-                new_tasks=[],
-                reasoning="已达到最大轮次，现有结果将进入统一回填并保留未决缺口说明。",
-                file_status_updates=[
-                    {"file_path": str(task.get("target_file_path", "")), "status": "partially_completed"}
-                    for task in queue.get("tasks", [])
-                ],
-            )
+        if incomplete and current_round >= max_rounds:
+            return self._max_round_validation(queue)
+        retry_tasks = self._build_retry_tasks(current_round_incomplete, next_round=current_round + 1)
         return RoundValidationResult(
             is_complete=not incomplete,
             missing_evidence=[str(task.get("claim_or_gap", "")) for task in incomplete],
-            new_tasks=[],
+            new_tasks=retry_tasks,
             reasoning="当前轮次已根据队列状态完成验证。" if not incomplete else "仍有未完成的依据任务，需要继续补充。",
             file_status_updates=[
                 {"file_path": str(task.get("target_file_path", "")), "status": "completed" if not incomplete else "partially_completed"}
                 for task in queue.get("tasks", [])
             ],
         )
+
+    @staticmethod
+    def _max_round_validation(queue: dict[str, Any]) -> RoundValidationResult:
+        incomplete = [task for task in queue.get("tasks", []) if str(task.get("status", "")) != "completed"]
+        return RoundValidationResult(
+            is_complete=True,
+            missing_evidence=[str(task.get("claim_or_gap", "")) for task in incomplete],
+            new_tasks=[],
+            reasoning="已达到最大轮次，现有结果将进入统一回填并保留未决缺口说明。",
+            file_status_updates=[
+                {"file_path": str(task.get("target_file_path", "")), "status": "partially_completed"}
+                for task in queue.get("tasks", [])
+            ],
+        )
+
+    @staticmethod
+    def _normalize_validation_tasks(tasks: list[dict[str, Any]], *, next_round: int) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for index, task in enumerate(tasks, start=1):
+            query_text = str(task.get("query_text", task.get("query", ""))).strip()
+            if not query_text:
+                continue
+            item = dict(task)
+            item["task_id"] = str(item.get("task_id") or f"round-{next_round}-task-{index}")
+            item["task_type"] = "media" if str(item.get("task_type", "query")) == "media" else "query"
+            item["query_text"] = query_text
+            item["status"] = "pending"
+            item["attempts"] = 0
+            item["round_number"] = next_round
+            item.setdefault("expected_evidence", [])
+            item.setdefault("citations", [])
+            target_path = str(item.get("target_file_path", "")).strip()
+            if not target_path:
+                item["target_file_path"] = str(item.get("file_path", ""))
+            item.setdefault("target_section", "证据与来源")
+            item.setdefault("claim_or_gap", query_text)
+            normalized.append(item)
+        return normalized
+
+    @staticmethod
+    def _build_retry_tasks(incomplete: list[dict[str, Any]], *, next_round: int) -> list[dict[str, Any]]:
+        retry_tasks: list[dict[str, Any]] = []
+        for task in incomplete:
+            base_id = str(task.get("task_id", "task")).strip() or "task"
+            retry = dict(task)
+            retry["task_id"] = f"{base_id}-r{next_round}"
+            retry["status"] = "pending"
+            retry["attempts"] = 0
+            retry["round_number"] = next_round
+            retry["result_summary"] = ""
+            retry["citations"] = []
+            retry_tasks.append(retry)
+        return retry_tasks
 
     def _apply_file_status_update(self, update: dict[str, Any]) -> None:
         file_path = Path(str(update.get("file_path", "")).strip())
@@ -636,6 +732,28 @@ class KnowledgeGraphWorkflow:
         state.update(updates)
         if self._state_update_callback is not None:
             self._state_update_callback(state["task_id"], state)
+
+    def _commit_queue_snapshot(
+        self,
+        state: WorkflowState,
+        domain_dir: Path,
+        queue: dict[str, Any],
+        *,
+        current_step: str,
+        current_action: str,
+        extra_updates: dict[str, Any] | None = None,
+    ) -> None:
+        updates = {
+            "generation_progress": queue.get("generation_status", {}),
+            "task_queue_path": self._queue_store.queue_path(domain_dir).as_posix(),
+            "task_queue_snapshot": queue,
+            "task_status": state.get("task_status", "running"),
+            "current_step": current_step,
+            "current_action": current_action,
+        }
+        if extra_updates:
+            updates.update(extra_updates)
+        self._commit_state(state, updates)
 
     @staticmethod
     def _make_workflow_event(step_id: str, label: str, status: str, details: dict[str, Any] | None = None) -> WorkflowStepEvent:

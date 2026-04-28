@@ -300,3 +300,4 @@
 - 单引擎真实联调日志需额外满足“记录每次 LLM / Embedding / browser / httpx 调用的 endpoint、耗时、状态或失败原因，并按时间保存到 `logs/`”。
 - Intake 收口阶段需额外满足“创建与追加都返回完整 intake session、confirm 返回 `{ intake_session, task }`、非知识采集 intent 不允许直接启动任务”。
 - Token 记录模块需额外满足“每次 tracked LLM / Embedding 调用写入可归属 task/session 的 token 使用审计，任务日志接口返回实时汇总，前端用左下角可收起悬浮窗展示发送、接收、总计和调用次数；provider usage 缺失时必须估算并标记来源”。
+- 生成与查询队列状态需额外满足“`knowledge_task_queue.json`、运行中 task snapshot、`/tasks/{task_id}` 与 `/tasks/{task_id}/plan` 对同一活动队列保持一致；轮次验证不允许产生无下一步任务的空转循环；治理失败必须按 `research_flow` / `repair_flow` 映射任务终态”。

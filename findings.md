@@ -256,6 +256,13 @@
 - 前端 token 展示更适合做左下角悬浮窗，默认收起，不占用主流程和计划展示空间；展开后只保留发送、接收、总计和调用次数四项，降低噪音。
 - Provider 未返回 usage 时，Chat 调用按发送 prompt 与接收 content 估算；Embedding 调用按 input 文本估算发送 token，接收 token 记为 0。记录需标记 `source=estimated`，避免和 provider 精确 usage 混淆。
 
+## 生成与查询队列状态结论
+- 队列 JSON 写入不等于前端可见状态；运行中 task snapshot 必须和 `knowledge_task_queue.json` 在关键状态点同步，否则 `/tasks/{task_id}` 会显示旧进度。
+- “查看队列”接口应以 `task_queue_path` 指向的本地队列文件作为兜底事实源，这符合领域级队列作为持久化协议的定位，也能避免任务状态短暂滞后。
+- 领域级 `knowledge_task_queue.json` 是当前任务活动队列，不是历史记录；新任务启动时应重新初始化，否则同领域旧任务的 `final_status`、生成进度和任务列表会污染当前流程。
+- 轮次验证返回“不完整”时必须携带下一步可执行任务；如果没有 LLM 新任务，应把当前轮未完成项显式转成下一轮 retry 任务。否则 LangGraph 会在空队列轮次里循环，前端表现为查询队列卡住。
+- 质量治理的任务状态要跟 remediation flow 对齐：证据不足、弱来源、断裂引用属于 `research_required`；结构化抽取、元数据、图谱路径问题属于 `repair_required`。
+
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
