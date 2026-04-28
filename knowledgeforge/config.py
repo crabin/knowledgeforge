@@ -79,6 +79,7 @@ class AppConfig:
         )
     )
     save_root: Path = Path("save")
+    app_log_root: Path = Path("logs")
     task_state_root: Path = Path(".knowledgeforge/tasks")
     intake_session_root: Path = Path(".knowledgeforge/intake_sessions")
     audit_root: Path = Path(".knowledgeforge/audit")
@@ -131,6 +132,7 @@ class AppConfig:
             database=DatabaseConfig(
                 mysql_database_url=_get_required("MYSQL_DATABASE_URL"),
             ),
+            app_log_root=Path(os.getenv("APP_LOG_ROOT", "logs")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             enable_live_crawlers=_get_bool("ENABLE_LIVE_CRAWLERS", True),
             plan_llm_timeout=_get_float("PLAN_LLM_TIMEOUT", 120.0),
@@ -175,6 +177,7 @@ class AppConfig:
             },
             "storage": {
                 "save_root": str(self.save_root),
+                "app_log_root": str(self.app_log_root),
                 "task_state_root": str(self.task_state_root),
                 "intake_session_root": str(self.intake_session_root),
                 "audit_root": str(self.audit_root),

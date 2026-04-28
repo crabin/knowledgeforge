@@ -15,7 +15,7 @@ class AuditLogger:
 
     def log(self, task_id: str, event: str, details: dict[str, Any]) -> None:
         ensure_directory(self._root)
-        audit_path = self._root / f"{task_id}.jsonl"
+        audit_path = self.path_for(task_id)
         entry = {
             "task_id": task_id,
             "event": event,
@@ -26,7 +26,7 @@ class AuditLogger:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def read(self, task_id: str) -> list[dict[str, Any]]:
-        audit_path = self._root / f"{task_id}.jsonl"
+        audit_path = self.path_for(task_id)
         if not audit_path.exists():
             return []
         entries: list[dict[str, Any]] = []
@@ -40,3 +40,6 @@ class AuditLogger:
                 except json.JSONDecodeError:
                     entries.append({"raw": line})
         return entries
+
+    def path_for(self, task_id: str) -> Path:
+        return self._root / f"{task_id}.jsonl"

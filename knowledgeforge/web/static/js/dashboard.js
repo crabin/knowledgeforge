@@ -122,6 +122,9 @@ function getNested(payload, path) {
 
 function renderSummary(payload) {
   if (!summaryStrip) return;
+  const queueSummary = payload.queue_summary || {};
+  const latestLlmDetails = payload.llm_activity?.latest_event?.details || {};
+  const latestError = (payload.recent_errors || []).at(-1) || {};
   const items = [
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
@@ -131,11 +134,16 @@ function renderSummary(payload) {
     ["生成进度", summarizeGenerationProgress(payload)],
     ["队列进度", summarizeQueueProgress(payload)],
     ["轮次验证", summarizeValidationRounds(payload)],
+    ["队列状态", queueSummary.final_status],
+    ["队列统计", summarizeQueueCounts(queueSummary.counts)],
+    ["最新 LLM", summarizeLatestLlm(latestLlmDetails)],
+    ["最近错误", latestError.error || latestError.event],
     ["文档路径", getNested(payload, "document_artifact.path")],
     ["质量检查", getNested(payload, "post_storage_result.quality_check.status")],
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
     ["Token", summarizeTokenUsageLabel(payload)],
+    ["日志文件", payload.log_files?.application_log],
     ["错误", payload.error],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
@@ -581,6 +589,28 @@ function summarizeTokenUsageLabel(payload) {
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
 }
 
+function summarizeQueueCounts(counts = {}) {
+  const total = Number(counts.total || 0);
+  if (!total) return "";
+  return [
+    `总 ${formatNumber(total)}`,
+    `待处理 ${formatNumber(counts.pending || 0)}`,
+    `运行中 ${formatNumber(counts.running || 0)}`,
+    `完成 ${formatNumber(counts.completed || 0)}`,
+    `补充 ${formatNumber(counts.insufficient || 0)}`,
+  ].join(" · ");
+}
+
+function summarizeLatestLlm(details = {}) {
+  const operation = details.operation || "";
+  const status = details.status || "";
+  if (!operation && !status) return "";
+  const parts = [operation, status];
+  if (details.attempt && details.max_attempts) parts.push(`第 ${details.attempt}/${details.max_attempts} 次`);
+  if (details.error) parts.push(details.error);
+  return parts.filter(Boolean).join(" · ");
+}
+
 function renderTokenUsage(payload) {
   if (!tokenUsageOutput) return;
   const usage = payload.token_usage || payload.task?.token_usage || {};
@@ -607,15 +637,45 @@ function renderExecutionLog(payload) {
     return;
   }
   executionLogOutput.innerHTML = logs
-    .slice(-24)
-    .map((entry) => {
-      const event = entry.event || "event";
-      const timestamp = entry.timestamp || "";
-      const agent = entry.agent || entry.details?.agent || "";
-      const details = entry.details ? JSON.stringify(entry.details) : "";
-      return `<div class="trace-item"><strong>${escapeHtml(event)}</strong><span>${escapeHtml([timestamp, agent].filter(Boolean).join(" · "))}</span><code>${escapeHtml(details)}</code></div>`;
-    })
+    .slice(-36)
+    .map((entry) => renderExecutionLogEntry(entry))
     .join("");
+}
+
+function renderExecutionLogEntry(entry) {
+  const event = entry.event || "event";
+  const timestamp = entry.timestamp || "";
+  const details = entry.details || {};
+  const agent = entry.agent || details.agent || "";
+  const meta = [
+    timestamp,
+    agent,
+    details.operation,
+    details.step_id,
+    details.task_id,
+    details.status,
+  ].filter(Boolean).join(" · ");
+  const highlights = buildLogHighlights(details);
+  const error = details.error ? `<div class="trace-error">${escapeHtml(String(details.error))}</div>` : "";
+  const detailBlock = highlights.length
+    ? `<div class="trace-meta-grid">${highlights.map(([label, value]) => `<span><strong>${escapeHtml(label)}</strong>${escapeHtml(String(value))}</span>`).join("")}</div>`
+    : "";
+  const rawJson = `<code>${escapeHtml(JSON.stringify(details, null, 2))}</code>`;
+  return `<div class="trace-item ${details.error ? "is-error" : ""}"><strong>${escapeHtml(event)}</strong><span>${escapeHtml(meta)}</span>${detailBlock}${error}${rawJson}</div>`;
+}
+
+function buildLogHighlights(details = {}) {
+  const items = [
+    ["文件", details.file_path || details.target_file_path],
+    ["章节", details.target_section],
+    ["查询", details.query || details.query_text],
+    ["轮次", details.round_number || details.round],
+    ["尝试", details.attempt && details.max_attempts ? `${details.attempt}/${details.max_attempts}` : details.attempts],
+    ["来源数", details.document_count],
+    ["任务类型", details.task_type],
+    ["当前文件", details.current_file],
+  ];
+  return items.filter(([, value]) => value !== undefined && value !== null && value !== "");
 }
 
 function renderTaskList(payload) {

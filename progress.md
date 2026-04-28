@@ -153,3 +153,19 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest tests/test_openai_compatible.py tests/test_workflow.py tests/test_token_usage.py -q`
 - 结果：`38 passed in 13.42s`
+
+## 2026-04-28 日志展示与应用日志增强
+
+- 扩展 `/tasks/{task_id}/logs` 返回结构，新增 `queue_summary`、`log_summary`、`llm_activity`、`recent_errors`、`log_files`、`generation_progress`，让前端和接口调用方直接看到队列状态、最近一次 LLM 调用、失败摘要和日志文件路径。
+- 为 `AuditLogger` 增加 `path_for(...)`，统一输出 audit JSONL 路径，便于接口返回和日志追踪。
+- Flask 服务新增应用级请求日志文件 `logs/knowledgeforge-server.log`，对 `/tasks/...` 和 `/tasks/.../logs` 这类轮询接口额外记录 `task_status`、`current_step`、`current_action`、队列统计和最近一次 LLM 调用状态，不再只有终端里那种简陋的 `GET ... 200`。
+- 前端日志面板升级为更易读的诊断视图：摘要区新增“队列状态 / 队列统计 / 最新 LLM / 最近错误 / 日志文件”，执行日志区会高亮文件、查询、轮次、尝试次数和错误信息，而不是只堆一行原始 JSON。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/config.py knowledgeforge/runtime/audit.py knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest tests/test_workflow.py tests/test_token_usage.py -q`
+- 结果：`35 passed in 16.80s`

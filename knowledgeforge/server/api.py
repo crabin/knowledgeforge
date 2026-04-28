@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, g, jsonify, render_template, request
 
 from knowledgeforge.config import AppConfig
 from knowledgeforge.services.task_service import TaskService
 
 
 def create_app(config: AppConfig | None = None) -> Flask:
+    active_config = config or AppConfig.from_env()
     web_root = Path(__file__).resolve().parents[1] / "web"
     app = Flask(
         __name__,
@@ -16,7 +20,54 @@ def create_app(config: AppConfig | None = None) -> Flask:
         static_folder=str(web_root / "static"),
         static_url_path="/static",
     )
-    service = TaskService(config or AppConfig.from_env())
+    _configure_application_logger(app, active_config)
+    service = TaskService(active_config)
+
+    @app.before_request
+    def _start_request_timer() -> None:
+        g.request_started_at = time.perf_counter()
+
+    @app.after_request
+    def _log_request_response(response):
+        duration_ms = round((time.perf_counter() - getattr(g, "request_started_at", time.perf_counter())) * 1000, 2)
+        details = {
+            "method": request.method,
+            "path": request.path,
+            "status": response.status_code,
+            "duration_ms": duration_ms,
+            "remote_addr": request.headers.get("X-Forwarded-For", request.remote_addr or ""),
+        }
+        task_id = request.view_args.get("task_id") if request.view_args else None
+        if task_id:
+            task = service.get_task(task_id)
+            if task:
+                details.update(
+                    {
+                        "task_id": task_id,
+                        "task_status": task.get("task_status", ""),
+                        "current_step": task.get("current_step", ""),
+                        "current_action": task.get("current_action", ""),
+                    }
+                )
+        if request.path.endswith("/logs") and task_id:
+            logs_payload = service.get_task_logs(task_id)
+            if logs_payload:
+                queue_summary = logs_payload.get("queue_summary", {}) or {}
+                counts = queue_summary.get("counts", {}) or {}
+                llm_activity = logs_payload.get("llm_activity", {}) or {}
+                latest_llm = (llm_activity.get("latest_event") or {}).get("details", {}) or {}
+                details.update(
+                    {
+                        "log_events": logs_payload.get("log_summary", {}).get("total_events", 0),
+                        "queue_round": queue_summary.get("current_round", 1),
+                        "queue_counts": counts,
+                        "latest_llm_operation": latest_llm.get("operation", ""),
+                        "latest_llm_status": latest_llm.get("status", ""),
+                        "latest_llm_attempt": latest_llm.get("attempt", ""),
+                    }
+                )
+        app.logger.info("request_trace %s", details)
+        return response
 
     @app.get("/")
     def index():
@@ -180,3 +231,18 @@ def create_app(config: AppConfig | None = None) -> Flask:
         return jsonify(report), 200
 
     return app
+
+
+def _configure_application_logger(app: Flask, config: AppConfig) -> None:
+    log_root = config.app_log_root
+    log_root.mkdir(parents=True, exist_ok=True)
+    log_path = log_root / "knowledgeforge-server.log"
+    handler_id = f"knowledgeforge-server::{log_path.as_posix()}"
+    if any(getattr(handler, "name", "") == handler_id for handler in app.logger.handlers):
+        return
+    handler = RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=5, encoding="utf-8")
+    handler.set_name(handler_id)
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    app.logger.setLevel(logging.INFO)
+    app.logger.addHandler(handler)

@@ -313,6 +313,38 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     assert final_payload["task_status"] != "running"
 
 
+def test_task_logs_include_rich_summary_and_application_log(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        app_log_root=tmp_path / "logs",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["日志增强"]})
+
+    assert response.status_code == 202
+    task_id = response.get_json()["task_id"]
+    logs_response = client.get(f"/tasks/{task_id}/logs")
+
+    assert logs_response.status_code == 200
+    payload = logs_response.get_json()
+    assert "queue_summary" in payload
+    assert "log_summary" in payload
+    assert "llm_activity" in payload
+    assert "log_files" in payload
+    assert payload["log_files"]["application_log"].endswith("knowledgeforge-server.log")
+
+    app_log = config.app_log_root / "knowledgeforge-server.log"
+    assert app_log.exists()
+    log_text = app_log.read_text(encoding="utf-8")
+    assert "request_trace" in log_text
+    assert f"/tasks/{task_id}/logs" in log_text
+
+
 def test_async_task_falls_back_when_llm_generation_fails(tmp_path: Path, monkeypatch) -> None:
     def fail_plan(self, *, system_prompt: str, user_prompt: str):
         raise RuntimeError("planner llm down")

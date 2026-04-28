@@ -582,6 +582,7 @@ class TaskService:
         audit_logs = self._audit_logger.read(task_id)
         self._backfill_audit_logs_from_task(task_id, task, audit_logs)
         refreshed_logs = self._audit_logger.read(task_id)
+        queue_snapshot = task.get("task_queue_snapshot", {}) or {}
         return {
             "task_id": task_id,
             "task_status": task.get("task_status"),
@@ -590,6 +591,16 @@ class TaskService:
             "round_number": task.get("round_number"),
             "agent_plans": task.get("agent_plans", {}),
             "workflow_events": task.get("workflow_events", []),
+            "generation_progress": task.get("generation_progress", {}),
+            "task_queue_snapshot": queue_snapshot,
+            "queue_summary": self._build_queue_summary(queue_snapshot),
+            "log_summary": self._build_log_summary(refreshed_logs),
+            "llm_activity": self._build_llm_activity(refreshed_logs),
+            "recent_errors": self._collect_recent_errors(refreshed_logs),
+            "log_files": {
+                "audit_jsonl": self._audit_logger.path_for(task_id).as_posix(),
+                "application_log": (self._config.app_log_root / "knowledgeforge-server.log").as_posix(),
+            },
             "logs": refreshed_logs,
             "token_usage": summarize_token_usage(refreshed_logs),
         }
@@ -705,6 +716,104 @@ class TaskService:
         if task_id:
             payload["token_usage"] = summarize_token_usage(self._audit_logger.read(task_id))
         return payload
+
+    @staticmethod
+    def _build_queue_summary(queue: dict[str, Any]) -> dict[str, Any]:
+        tasks = queue.get("tasks", []) if isinstance(queue, dict) else []
+        counts = {
+            "total": len(tasks),
+            "pending": 0,
+            "running": 0,
+            "completed": 0,
+            "insufficient": 0,
+            "blocked": 0,
+        }
+        current_task = None
+        for task in tasks:
+            status = str(task.get("status", "pending"))
+            if status in counts:
+                counts[status] += 1
+            if current_task is None and status == "running":
+                current_task = {
+                    "task_id": task.get("task_id"),
+                    "task_type": task.get("task_type"),
+                    "target_file_path": task.get("target_file_path"),
+                    "target_section": task.get("target_section"),
+                    "query_text": task.get("query_text"),
+                    "attempts": task.get("attempts"),
+                    "round_number": task.get("round_number"),
+                }
+        return {
+            "final_status": queue.get("final_status") if isinstance(queue, dict) else "",
+            "current_round": queue.get("current_round") if isinstance(queue, dict) else 1,
+            "generation_status": queue.get("generation_status", {}) if isinstance(queue, dict) else {},
+            "counts": counts,
+            "current_task": current_task or {},
+            "round_summaries": queue.get("round_summaries", []) if isinstance(queue, dict) else [],
+        }
+
+    @staticmethod
+    def _build_log_summary(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        llm_events = [entry for entry in logs if str(entry.get("event", "")).startswith("llm_call_")]
+        failed_events = [
+            entry
+            for entry in logs
+            if "failed" in str(entry.get("event", "")).lower() or str(entry.get("details", {}).get("status", "")).lower() in {"failed", "blocked"}
+        ]
+        last_event = logs[-1] if logs else {}
+        return {
+            "total_events": len(logs),
+            "workflow_steps": len([entry for entry in logs if entry.get("event") == "workflow_step"]),
+            "llm_event_count": len(llm_events),
+            "failed_event_count": len(failed_events),
+            "last_event": {
+                "event": last_event.get("event", ""),
+                "timestamp": last_event.get("timestamp", ""),
+            },
+        }
+
+    @staticmethod
+    def _build_llm_activity(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        llm_events = [entry for entry in logs if str(entry.get("event", "")).startswith("llm_call_")]
+        latest = llm_events[-1] if llm_events else {}
+        in_flight = 0
+        request_state: dict[str, str] = {}
+        for entry in llm_events:
+            details = entry.get("details", {}) or {}
+            request_id = str(details.get("request_id", ""))
+            if not request_id:
+                continue
+            request_state[request_id] = str(details.get("status", ""))
+        for status in request_state.values():
+            if status == "started":
+                in_flight += 1
+        return {
+            "in_flight_requests": in_flight,
+            "latest_event": latest,
+            "recent_events": llm_events[-5:],
+        }
+
+    @staticmethod
+    def _collect_recent_errors(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        recent_errors: list[dict[str, Any]] = []
+        for entry in reversed(logs):
+            event = str(entry.get("event", ""))
+            details = entry.get("details", {}) or {}
+            error = str(details.get("error", "")).strip()
+            if "failed" not in event and not error:
+                continue
+            recent_errors.append(
+                {
+                    "event": event,
+                    "timestamp": entry.get("timestamp", ""),
+                    "error": error,
+                    "agent": details.get("agent", ""),
+                    "operation": details.get("operation", ""),
+                }
+            )
+            if len(recent_errors) >= 5:
+                break
+        return list(reversed(recent_errors))
 
     @staticmethod
     def _refresh_task_queue_snapshot_from_path(payload: dict[str, Any]) -> None:

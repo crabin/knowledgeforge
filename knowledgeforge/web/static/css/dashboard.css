@@ -546,6 +546,33 @@ h3 {
   white-space: pre-wrap;
 }
 
+.trace-item.is-error {
+  border-left: 3px solid var(--red);
+  background: rgba(169, 72, 63, 0.06);
+}
+
+.trace-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.trace-meta-grid span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.trace-error {
+  margin-top: 8px;
+  color: var(--red);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 .plan-card {
   display: grid;
   gap: 10px;
