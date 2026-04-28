@@ -15,8 +15,8 @@ const healthLabel = document.querySelector("#health-label");
 const intakeSessionInput = document.querySelector("#intake-session-id");
 const taskIdInput = document.querySelector("#task-id");
 const taskUpdateInput = document.querySelector("#task-update-payload");
-const agentPlanOutput = document.querySelector("#agent-plan-output");
-const planPanelHint = document.querySelector("#plan-panel-hint");
+const queueOutput = document.querySelector("#agent-plan-output");
+const queuePanelHint = document.querySelector("#plan-panel-hint");
 const tokenUsageOutput = document.querySelector("#token-usage-output");
 const tokenFloat = document.querySelector("#token-float");
 const tokenFloatToggle = document.querySelector("#token-float-toggle");
@@ -38,10 +38,7 @@ const workflowSteps = [
 
 async function requestJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (options.body && !headers["Content-Type"]) {
-    headers["Content-Type"] = "application/json";
-  }
-
+  if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
   const response = await fetch(path, { ...options, headers });
   const text = await response.text();
   let payload = {};
@@ -52,7 +49,6 @@ async function requestJson(path, options = {}) {
       payload = { raw: text };
     }
   }
-
   if (!response.ok) {
     const message = payload.error || `${response.status} ${response.statusText}`;
     const error = new Error(message);
@@ -60,7 +56,6 @@ async function requestJson(path, options = {}) {
     error.status = response.status;
     throw error;
   }
-
   return payload;
 }
 
@@ -77,7 +72,22 @@ function showPayload(payload) {
   syncKnownIds(payload);
   renderSummary(payload);
   renderWorkflowMap(payload);
-  renderAgentPlans(payload);
+  renderQueuePanel(payload);
+  renderTokenUsage(payload);
+  renderExecutionLog(payload);
+  renderTaskList(payload);
+}
+
+function showError(error) {
+  const payload = {
+    error: error.message,
+    status: error.status || "client_error",
+    details: error.payload || null,
+  };
+  output.textContent = JSON.stringify(payload, null, 2);
+  renderSummary(payload);
+  renderWorkflowMap(payload);
+  renderQueuePanel(payload);
   renderTokenUsage(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
@@ -96,61 +106,37 @@ function mergeTaskPayload(payload) {
   };
 }
 
-function showError(error) {
-  const payload = {
-    error: error.message,
-    status: error.status || "client_error",
-    details: error.payload || null,
-  };
-  output.textContent = JSON.stringify(payload, null, 2);
-  renderSummary(payload);
-  renderWorkflowMap(payload);
-  renderAgentPlans(payload);
-  renderTokenUsage(payload);
-  renderExecutionLog(payload);
-  renderTaskList(payload);
-}
-
 function syncKnownIds(payload) {
   const sessionId = payload.session_id || payload.intake_session?.session_id;
   const taskId = payload.task_id || payload.task?.task_id || payload.intake_session?.task_id;
-
-  if (sessionId) {
-    intakeSessionInput.value = sessionId;
-  }
-  if (taskId) {
-    taskIdInput.value = taskId;
-  }
+  if (sessionId) intakeSessionInput.value = sessionId;
+  if (taskId) taskIdInput.value = taskId;
 }
 
 function getNested(payload, path) {
   return path.split(".").reduce((value, key) => {
-    if (value && Object.prototype.hasOwnProperty.call(value, key)) {
-      return value[key];
-    }
+    if (value && Object.prototype.hasOwnProperty.call(value, key)) return value[key];
     return undefined;
   }, payload);
 }
 
 function renderSummary(payload) {
   if (!summaryStrip) return;
-  const progress = summarizePlanProgress(payload);
-  const realtime = summarizeRealtimeSaves(payload);
   const items = [
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
-    ["当前动作", payload.current_action || payload.task?.current_action],
     ["当前步骤", payload.current_step || payload.task?.current_step],
+    ["当前动作", payload.current_action || payload.task?.current_action],
+    ["生成进度", summarizeGenerationProgress(payload)],
+    ["队列进度", summarizeQueueProgress(payload)],
+    ["轮次验证", summarizeValidationRounds(payload)],
     ["文档路径", getNested(payload, "document_artifact.path")],
     ["质量检查", getNested(payload, "post_storage_result.quality_check.status")],
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
-    ["错误", payload.error],
-    ["计划进度", progress],
-    ["补检索分析", summarizeSupplementDecision(payload)],
-    ["实时保存", realtime],
     ["Token", summarizeTokenUsageLabel(payload)],
+    ["错误", payload.error],
   ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   if (!items.length) {
@@ -159,10 +145,7 @@ function renderSummary(payload) {
   }
 
   summaryStrip.innerHTML = items
-    .map(([label, value]) => {
-      const rendered = typeof value === "boolean" ? (value ? "是" : "否") : String(value);
-      return `<div class="summary-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(rendered)}</span></div>`;
-    })
+    .map(([label, value]) => `<div class="summary-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value))}</span></div>`)
     .join("");
 }
 
@@ -173,7 +156,6 @@ function renderConfig(payload) {
     configGrid.innerHTML = '<div class="empty-state">未返回配置状态。</div>';
     return;
   }
-
   configGrid.innerHTML = entries
     .filter(([key]) => key !== "legacy")
     .map(([key, value]) => renderConfigGroup(key, value))
@@ -186,9 +168,7 @@ function renderConfigGroup(key, value) {
     return `<div class="config-item"><strong>${escapeHtml(label)}</strong>${renderConfigValue(value)}</div>`;
   }
   const rows = flattenConfig(value)
-    .map(([itemKey, itemValue]) => {
-      return `<div class="config-row"><span>${escapeHtml(formatConfigLabel(itemKey))}</span>${renderConfigValue(itemValue)}</div>`;
-    })
+    .map(([itemKey, itemValue]) => `<div class="config-row"><span>${escapeHtml(formatConfigLabel(itemKey))}</span>${renderConfigValue(itemValue)}</div>`)
     .join("");
   return `<div class="config-item config-group"><strong>${escapeHtml(label)}</strong>${rows}</div>`;
 }
@@ -197,22 +177,15 @@ function flattenConfig(value, prefix = "") {
   const rows = [];
   Object.entries(value).forEach(([key, item]) => {
     const nextKey = prefix ? `${prefix}.${key}` : key;
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      rows.push(...flattenConfig(item, nextKey));
-    } else {
-      rows.push([nextKey, item]);
-    }
+    if (item && typeof item === "object" && !Array.isArray(item)) rows.push(...flattenConfig(item, nextKey));
+    else rows.push([nextKey, item]);
   });
   return rows;
 }
 
 function renderConfigValue(value) {
-  if (typeof value === "boolean") {
-    return `<span class="${value ? "tone-ok" : "tone-bad"}">${value ? "是" : "否"}</span>`;
-  }
-  if (Array.isArray(value)) {
-    return `<span>${escapeHtml(value.join(", "))}</span>`;
-  }
+  if (typeof value === "boolean") return `<span class="${value ? "tone-ok" : "tone-bad"}">${value ? "是" : "否"}</span>`;
+  if (Array.isArray(value)) return `<span>${escapeHtml(value.join(", "))}</span>`;
   return `<span>${escapeHtml(value ?? "")}</span>`;
 }
 
@@ -237,6 +210,17 @@ function formatConfigLabel(key) {
     "embedding.api_key_present": "Embedding Key",
   };
   return labels[key] || String(key).replaceAll("_", " ").replaceAll(".", " / ");
+}
+
+function normalizeWorkflowEvents(payload) {
+  const taskEvents = payload.workflow_events || payload.task?.workflow_events || [];
+  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
+  const logEvents = logs.filter((entry) => entry.event === "workflow_step").map((entry) => entry.details || {});
+  return [...taskEvents, ...logEvents].filter((event) => event.step_id);
+}
+
+function getCurrentWorkflowStep(payload, events) {
+  return payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "blueprint_ready";
 }
 
 function renderWorkflowMap(payload) {
@@ -279,7 +263,6 @@ function renderWorkflowX6(byStep, current) {
 function ensureWorkflowGraph() {
   if (!workflowX6Container || !window.X6?.Graph) return null;
   if (state.workflowGraph) return state.workflowGraph;
-
   const { Graph } = window.X6;
   state.workflowGraph = new Graph({
     container: workflowX6Container,
@@ -294,16 +277,12 @@ function ensureWorkflowGraph() {
       vertexMovable: false,
       magnetConnectable: false,
     },
-    background: {
-      color: "#fffdf8",
-    },
+    background: { color: "#fffdf8" },
     grid: {
       size: 12,
       visible: true,
       type: "dot",
-      args: {
-        color: "rgba(23, 33, 31, 0.12)",
-      },
+      args: { color: "rgba(23, 33, 31, 0.12)" },
     },
   });
   state.workflowGraphReady = true;
@@ -362,15 +341,10 @@ function buildWorkflowGraphData(byStep, current) {
 }
 
 function getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap) {
-  if (compact) {
-    return { x: startX, y: startY + index * (nodeHeight + rowGap) };
-  }
+  if (compact) return { x: startX, y: startY + index * (nodeHeight + rowGap) };
   const row = Math.floor(index / 4);
   const column = index % 4;
-  return {
-    x: startX + column * columnGap,
-    y: startY + row * (nodeHeight + rowGap),
-  };
+  return { x: startX + column * columnGap, y: startY + row * (nodeHeight + rowGap) };
 }
 
 function getWorkflowStepStatus(stepId, byStep, current) {
@@ -418,11 +392,7 @@ function getWorkflowNodeAttrs(step, status) {
       refWidth: -32,
       textAnchor: "start",
       textVerticalAnchor: "top",
-      textWrap: {
-        width: -32,
-        height: 34,
-        ellipsis: true,
-      },
+      textWrap: { width: -32, height: 34, ellipsis: true },
     },
     description: {
       text: step.description,
@@ -435,83 +405,97 @@ function getWorkflowNodeAttrs(step, status) {
       refWidth: -32,
       textAnchor: "start",
       textVerticalAnchor: "top",
-      textWrap: {
-        width: -32,
-        height: 40,
-        ellipsis: true,
-      },
+      textWrap: { width: -32, height: 40, ellipsis: true },
     },
   };
 }
 
 function getWorkflowEdgeAttrs(status) {
-  const color = {
-    pending: "#d8d1c2",
-    active: "#2f5f91",
-    completed: "#1e7b64",
-    blocked: "#a9483f",
-  }[status] || "#d8d1c2";
+  const color = { pending: "#d8d1c2", active: "#2f5f91", completed: "#1e7b64", blocked: "#a9483f" }[status] || "#d8d1c2";
   return {
     line: {
       stroke: color,
       strokeWidth: status === "active" ? 3 : 2,
-      targetMarker: {
-        name: "classic",
-        size: 8,
-      },
+      targetMarker: { name: "classic", size: 8 },
       strokeDasharray: status === "pending" ? "6 5" : "",
     },
   };
 }
 
-function normalizeWorkflowEvents(payload) {
-  const taskEvents = payload.workflow_events || payload.task?.workflow_events || [];
-  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const logEvents = logs
-    .filter((entry) => entry.event === "workflow_step")
-    .map((entry) => entry.details || {});
-  return [...taskEvents, ...logEvents].filter((event) => event.step_id);
-}
-
-function getCurrentWorkflowStep(payload, events) {
-  return payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "blueprint_ready";
-}
-
-function renderAgentPlans(payload) {
-  if (!agentPlanOutput) return;
+function renderQueuePanel(payload) {
+  if (!queueOutput) return;
   const generation = payload.generation_progress || payload.task?.generation_progress || {};
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
+  const counts = summarizeQueueCounts(tasks);
+  const runningTask = tasks.find((task) => task.status === "running");
 
-  if (planPanelHint) {
-    planPanelHint.textContent = queue.final_status ? `队列状态：${queue.final_status}` : "";
+  if (queuePanelHint) {
+    queuePanelHint.textContent = buildQueueStatusHint(queue.final_status, queue.current_round, runningTask);
   }
 
   if (!Object.keys(generation).length && !tasks.length) {
-    agentPlanOutput.innerHTML = '<div class="empty-state">暂无文件生成或查询队列状态。</div>';
+    queueOutput.innerHTML = '<div class="empty-state">暂无文件生成或查询队列状态。</div>';
     return;
   }
-  const summaryCard = `<article class="plan-card active">
-    <div class="plan-card-head">
-      <span class="checkmark" aria-hidden="true"></span>
-      <div>
-        <strong>LLM 生成进度</strong>
-        <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 文件`)}</span>
+
+  const cards = [
+    `<article class="plan-card active">
+      <div class="plan-card-head">
+        <span class="checkmark" aria-hidden="true"></span>
+        <div>
+          <strong>LLM 生成进度</strong>
+          <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 文件`)}</span>
+        </div>
       </div>
-    </div>
-    <div class="plan-query">${escapeHtml(generation.current_file || "等待生成任务")}</div>
-    <div class="plan-lists">
-      <div><b>最近保存</b><ul><li>${escapeHtml(generation.last_saved_path || "暂无")}</li></ul></div>
-      <div><b>当前轮次</b><ul><li>${escapeHtml(String(queue.current_round || 1))}</li></ul></div>
-    </div>
-  </article>`;
-  const taskCards = tasks.slice(0, 16).map((item) => {
+      <div class="plan-query">${escapeHtml(generation.current_file || "等待生成任务")}</div>
+      <div class="plan-lists">
+        <div><b>最近保存</b><ul><li>${escapeHtml(generation.last_saved_path || "暂无")}</li></ul></div>
+        <div><b>当前轮次</b><ul><li>${escapeHtml(String(queue.current_round || 1))}</li></ul></div>
+      </div>
+    </article>`,
+    `<article class="plan-card active">
+      <div class="plan-card-head">
+        <span class="checkmark" aria-hidden="true"></span>
+        <div>
+          <strong>查询队列概况</strong>
+          <span>${escapeHtml(buildQueueCountLabel(counts))}</span>
+        </div>
+      </div>
+      <div class="plan-query">${escapeHtml(runningTask?.query_text || "当前没有运行中的队列任务")}</div>
+      <div class="plan-lists">
+        <div><b>当前任务</b><ul><li>${escapeHtml(runningTask?.task_id || "暂无")}</li></ul></div>
+        <div><b>目标位置</b><ul><li>${escapeHtml(runningTask?.target_file_path || "暂无")}</li></ul></div>
+      </div>
+    </article>`,
+  ];
+
+  if (rounds.length) {
+    const lastRound = rounds.at(-1);
+    cards.push(`<article class="plan-card active">
+      <div class="plan-card-head">
+        <span class="checkmark" aria-hidden="true"></span>
+        <div>
+          <strong>轮次验证记录</strong>
+          <span>${escapeHtml(`${rounds.length} 轮`)}</span>
+        </div>
+      </div>
+      <div class="plan-query">${escapeHtml(lastRound?.reasoning || "暂无验证摘要")}</div>
+      <div class="plan-lists">
+        <div><b>最近一轮</b><ul><li>${escapeHtml(formatRoundSummary(lastRound))}</li></ul></div>
+        <div><b>缺口数量</b><ul><li>${escapeHtml(String((lastRound?.missing_evidence || []).length))}</li></ul></div>
+      </div>
+    </article>`);
+  }
+
+  tasks.slice(0, 20).forEach((item) => {
     const done = item.status === "completed";
     const active = item.status === "running";
     const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补充" : "待执行";
     const citations = (item.citations || []).map((citation) => `<li>${escapeHtml(citation.title || citation.url || "来源")}</li>`).join("");
     const expected = (item.expected_evidence || []).map((value) => `<li>${escapeHtml(value)}</li>`).join("");
-    return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
+    cards.push(`<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
       <div class="plan-card-head">
         <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
         <div>
@@ -525,225 +509,75 @@ function renderAgentPlans(payload) {
         <div><b>预期补充</b><ul>${expected || "<li>未提供</li>"}</ul></div>
       </div>
       ${citations ? `<div class="plan-saves"><b>已收集来源</b><ul>${citations}</ul></div>` : ""}
-    </article>`;
-  }).join("");
-  agentPlanOutput.innerHTML = `${summaryCard}${taskCards}`;
-}
-
-function dedupePlanItems(items) {
-  const deduped = new Map();
-  items.forEach((item) => {
-    const key = planItemDedupeKey(item);
-    const existing = deduped.get(key);
-    if (!existing) {
-      deduped.set(key, item);
-      return;
-    }
-    deduped.set(key, {
-      ...existing,
-      ...item,
-      title: existing.title || item.title || item.question,
-      query_or_action: existing.query_or_action || item.query_or_action || item.google_query,
-      targets: mergeUnique(existing.targets, item.targets || item.search_targets || item.expected_info),
-      success_criteria: mergeUnique(existing.success_criteria, item.success_criteria),
-      attempts: mergeAttempts(existing.attempts, item.attempts),
-      saved_paths: mergeUnique(existing.saved_paths, item.saved_paths),
-      skipped_sources: mergeUnique(existing.skipped_sources, item.skipped_sources),
-    });
+    </article>`);
   });
-  return Array.from(deduped.values());
+
+  queueOutput.innerHTML = cards.join("");
 }
 
-function planItemDedupeKey(item) {
-  const agent = item.agent_name || "";
-  if (item.plan_item_id) return `${agent}:${item.plan_item_id}`;
-  const query = normalizePlanText(item.query_or_action || item.google_query || item.query || item.question || "");
-  const targets = (item.targets || item.search_targets || item.expected_info || []).map(normalizePlanText).sort().join("|");
-  return `${agent}:${query}:${targets}`;
-}
-
-function normalizePlanText(value) {
-  return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function mergeUnique(a, b) {
-  const values = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
-  const seen = new Set();
-  return values.filter((value) => {
-    const key = normalizePlanText(value);
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function mergeAttempts(a, b) {
-  const attempts = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])];
-  const seen = new Set();
-  return attempts.filter((attempt) => {
-    const key = `${normalizePlanText(attempt.query)}:${attempt.hits}:${attempt.status}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function buildQueryPlanItems(logs) {
-  const items = new Map();
-  logs.forEach((entry) => {
-    const details = entry.details || {};
-    if (entry.event === "query_plan_created" && Array.isArray(details.questions)) {
-      details.questions.forEach((question, index) => {
-        const key = question.plan_item_id || `Q${index + 1}`;
-        items.set(key, {
-          ...question,
-          plan_item_id: key,
-          status: question.status || "planned",
-        });
-      });
-    }
-    if (entry.event === "query_plan_item_started" || entry.event === "query_question_completed") {
-      const key = details.plan_item_id || details.question;
-      if (!key) return;
-      const existing = items.get(key) || {};
-      items.set(key, {
-        ...existing,
-        ...details,
-        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
-      });
-    }
-    if (entry.event === "query_search_executed") {
-      const key = details.plan_item_id || details.question;
-      if (!key) return;
-      const existing = items.get(key) || {};
-      const attempts = existing.attempts || [];
-      items.set(key, {
-        ...existing,
-        ...details,
-        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
-        status: details.status === "completed" ? "in_progress" : existing.status || "in_progress",
-        attempts: [...attempts, { query: details.query, hits: details.hits, status: details.status }],
-      });
-    }
-    if (entry.event === "query_realtime_file_reviewed" || entry.event === "query_realtime_file_failed") {
-      const key = details.plan_item_id || details.question;
-      if (!key) return;
-      const existing = items.get(key) || {};
-      items.set(key, {
-        ...existing,
-        ...details,
-        plan_item_id: details.plan_item_id || existing.plan_item_id || key,
-        realtime_status: entry.event.endsWith("_failed") ? "failed" : details.status || "saved",
-        saved_paths: details.saved_paths || existing.saved_paths || [],
-        skipped_sources: details.skipped_sources || existing.skipped_sources || [],
-      });
-    }
-  });
-  return Array.from(items.values());
-}
-
-function buildMediaPlanItems(logs) {
-  const items = new Map();
-  logs.forEach((entry) => {
-    const details = entry.details || {};
-    if (entry.event === "media_plan_item_started" || entry.event === "media_search_executed") {
-      const key = details.plan_item_id || mediaPlanItemId(details.platform_type, details.query, items);
-      if (!key) return;
-      const existing = items.get(key) || {};
-      const attempts = existing.attempts || [];
-      items.set(key, {
-        ...existing,
-        plan_item_id: key,
-        title: mediaPlanTitle(details.platform_type),
-        query_or_action: details.query || existing.query_or_action,
-        targets: mediaTargets(details.platform_type),
-        success_criteria: ["命中相关来源", "结果能补充观点或趋势语境"],
-        status: entry.event === "media_search_executed" ? "in_progress" : "in_progress",
-        attempts: entry.event === "media_search_executed"
-          ? [...attempts, { query: details.query, hits: details.hits, status: "completed" }]
-          : attempts,
-      });
-    }
-    if (entry.event === "media_realtime_file_reviewed" || entry.event === "media_realtime_file_failed") {
-      const key = details.plan_item_id || mediaPlanItemId(details.platform_type, details.query, items);
-      if (!key) return;
-      const existing = items.get(key) || {};
-      items.set(key, {
-        ...existing,
-        ...details,
-        plan_item_id: key,
-        title: existing.title || mediaPlanTitle(details.platform_type),
-        query_or_action: existing.query_or_action || details.query,
-        targets: existing.targets || mediaTargets(details.platform_type),
-        success_criteria: existing.success_criteria || ["命中相关来源", "结果能补充观点或趋势语境"],
-        status: details.status === "saved" ? "completed" : existing.status || "in_progress",
-        realtime_status: entry.event.endsWith("_failed") ? "failed" : details.status || "saved",
-        saved_paths: details.saved_paths || existing.saved_paths || [],
-        skipped_sources: details.skipped_sources || existing.skipped_sources || [],
-      });
-    }
-  });
-  return Array.from(items.values());
-}
-
-function mediaPlanItemId(platformType, query, items) {
-  const prefix = { social: "M-S", community: "M-C", blog: "M-B" }[platformType];
-  if (!prefix || !query) return "";
-  const existing = Array.from(items.values()).find((item) => item.query_or_action === query && item.plan_item_id?.startsWith(prefix));
-  if (existing) return existing.plan_item_id;
-  const count = Array.from(items.keys()).filter((key) => key.startsWith(prefix)).length + 1;
-  return `${prefix}${count}`;
-}
-
-function mediaPlanTitle(platformType) {
-  return {
-    social: "社交媒体观点检索",
-    community: "技术社区讨论检索",
-    blog: "博客与长文趋势检索",
-  }[platformType] || "媒体观点检索";
-}
-
-function mediaTargets(platformType) {
-  return {
-    social: ["社交讨论", "实时观点", "采用信号"],
-    community: ["社区共识", "争议点", "实践反馈"],
-    blog: ["趋势分析", "落地案例", "未来方向"],
-  }[platformType] || ["观点与趋势"];
-}
-
-function formatRealtimeStatus(status, skippedCount) {
-  if (status === "saved") return "已实时保存";
-  if (status === "skipped") return skippedCount ? `已审查，跳过 ${skippedCount} 个来源` : "已审查";
-  if (status === "failed") return "保存失败";
-  return status;
-}
-
-function summarizePlanProgress(payload) {
+function summarizeGenerationProgress(payload) {
   const generation = payload.generation_progress || payload.task?.generation_progress || {};
   if (!Object.keys(generation).length) return "";
   return `${generation.completed_files || 0}/${generation.total_files || 0} 文件已生成`;
 }
 
-function summarizeRealtimeSaves(payload) {
+function summarizeQueueProgress(payload) {
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
   if (!tasks.length) return "";
-  const completed = tasks.filter((task) => task.status === "completed").length;
-  const pending = tasks.filter((task) => task.status === "pending" || task.status === "running").length;
-  return `${completed}/${tasks.length} 任务完成${pending ? `，${pending} 个处理中` : ""}`;
+  return buildQueueCountLabel(summarizeQueueCounts(tasks));
+}
+
+function summarizeValidationRounds(payload) {
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
+  if (!rounds.length) return "";
+  return formatRoundSummary(rounds.at(-1));
+}
+
+function summarizeQueueCounts(tasks) {
+  return {
+    total: tasks.length,
+    completed: tasks.filter((task) => task.status === "completed").length,
+    running: tasks.filter((task) => task.status === "running").length,
+    pending: tasks.filter((task) => task.status === "pending").length,
+    insufficient: tasks.filter((task) => task.status === "insufficient").length,
+  };
+}
+
+function buildQueueCountLabel(counts) {
+  if (!counts.total) return "暂无任务";
+  const labels = [`${counts.completed}/${counts.total} 完成`];
+  if (counts.running) labels.push(`${counts.running} 执行中`);
+  if (counts.pending) labels.push(`${counts.pending} 待执行`);
+  if (counts.insufficient) labels.push(`${counts.insufficient} 需补充`);
+  return labels.join("，");
+}
+
+function buildQueueStatusHint(finalStatus, currentRound, runningTask) {
+  const labels = {
+    pending: "等待生成",
+    generated: "文件生成完成",
+    needs_more_evidence: "等待下一轮补充",
+    ready_for_fill: "可执行统一回填",
+  };
+  const parts = [];
+  if (finalStatus) parts.push(`队列状态：${labels[finalStatus] || finalStatus}`);
+  if (currentRound) parts.push(`第 ${currentRound} 轮`);
+  if (runningTask?.task_id) parts.push(`当前任务：${runningTask.task_id}`);
+  return parts.join(" · ");
+}
+
+function formatRoundSummary(round) {
+  if (!round) return "暂无验证结果";
+  const status = round.is_complete ? "已完成" : "待补充";
+  return `第 ${round.round_number || "?"} 轮 · ${status}`;
 }
 
 function summarizeTokenUsageLabel(payload) {
   const usage = payload.token_usage || payload.task?.token_usage;
   if (!usage || !usage.request_count) return "";
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
-}
-
-function summarizeSupplementDecision(payload) {
-  const decision = payload.completeness?.supplement_decision || payload.task?.completeness?.supplement_decision;
-  if (!decision || !Array.isArray(decision.defects) || !decision.defects.length) return "";
-  const docCount = Array.isArray(decision.reviewed_documents) ? decision.reviewed_documents.length : 0;
-  return `${docCount || 0} 篇文档已审阅，新增 ${decision.defects.length} 个补检索缺口`;
 }
 
 function renderTokenUsage(payload) {
@@ -755,7 +589,6 @@ function renderTokenUsage(payload) {
     tokenUsageOutput.innerHTML = '<div class="empty-state">暂无 token 记录。</div>';
     return;
   }
-
   tokenUsageOutput.innerHTML = `
     <div class="token-metrics">
       <div class="token-metric"><span>发送</span><strong>${escapeHtml(formatNumber(usage.prompt_tokens))}</strong></div>
@@ -765,11 +598,6 @@ function renderTokenUsage(payload) {
     </div>`;
 }
 
-function formatNumber(value) {
-  const number = Number(value || 0);
-  return Number.isFinite(number) ? number.toLocaleString("en-US") : "0";
-}
-
 function renderExecutionLog(payload) {
   if (!executionLogOutput) return;
   const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
@@ -777,7 +605,6 @@ function renderExecutionLog(payload) {
     executionLogOutput.innerHTML = '<div class="empty-state">暂无调用或执行日志。</div>';
     return;
   }
-
   executionLogOutput.innerHTML = logs
     .slice(-24)
     .map((entry) => {
@@ -790,50 +617,6 @@ function renderExecutionLog(payload) {
     .join("");
 }
 
-function isTerminalStatus(status) {
-  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed", "plan_failed"].includes(status);
-}
-
-function isSuccessfulTerminalStatus(status) {
-  return status === "verified";
-}
-
-function stopTaskPolling() {
-  if (state.pollTimer) {
-    clearInterval(state.pollTimer);
-  }
-  state.pollTimer = null;
-  state.pollTaskId = null;
-  state.pollCount = 0;
-}
-
-async function refreshRunningTask(taskId) {
-  const logsPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}/logs`);
-  let merged = mergeTaskPayload(logsPayload);
-  state.pollCount += 1;
-  if (state.pollCount % 3 === 0) {
-    const taskPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}`);
-    merged = mergeTaskPayload({ ...taskPayload, logs: logsPayload.logs });
-    if (isTerminalStatus(taskPayload.task_status)) {
-      stopTaskPolling();
-    }
-  }
-  showPayload(merged);
-}
-
-function startTaskPolling(taskId) {
-  stopTaskPolling();
-  state.pollTaskId = taskId;
-  state.pollTimer = setInterval(async () => {
-    try {
-      await refreshRunningTask(taskId);
-    } catch (error) {
-      stopTaskPolling();
-      showError(error);
-    }
-  }, 900);
-}
-
 function renderTaskList(payload) {
   if (!taskListOutput) return;
   const tasks = payload.tasks || payload.task_list || [];
@@ -841,20 +624,14 @@ function renderTaskList(payload) {
     taskListOutput.innerHTML = '<div class="empty-state">暂无已保存任务。</div>';
     return;
   }
-
   taskListOutput.innerHTML = tasks
     .map((task) => {
       const title = task.domain || task.normalized_domain || task.task_id;
-      const meta = [
-        task.task_status,
-        task.version,
-        task.updated_at,
-      ].filter(Boolean).join(" · ");
+      const meta = [task.task_status, task.version, task.updated_at].filter(Boolean).join(" · ");
       const subdomains = Array.isArray(task.subdomains) ? task.subdomains.join(", ") : "";
       return `<button class="task-list-item" type="button" data-task-id="${escapeHtml(task.task_id)}"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta)}</span><small>${escapeHtml(subdomains || task.document_path || task.task_id)}</small></button>`;
     })
     .join("");
-
   taskListOutput.querySelectorAll("[data-task-id]").forEach((button) => {
     button.addEventListener("click", () => {
       taskIdInput.value = button.dataset.taskId || "";
@@ -879,6 +656,47 @@ function fillTaskUpdateForm(taskId) {
   }, null, 2);
 }
 
+function stopTaskPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
+  state.pollTaskId = null;
+  state.pollCount = 0;
+}
+
+async function refreshRunningTask(taskId) {
+  const logsPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}/logs`);
+  let merged = mergeTaskPayload(logsPayload);
+  state.pollCount += 1;
+  if (state.pollCount % 3 === 0) {
+    const taskPayload = await requestJson(`/tasks/${encodeURIComponent(taskId)}`);
+    merged = mergeTaskPayload({ ...taskPayload, logs: logsPayload.logs });
+    if (isTerminalStatus(taskPayload.task_status)) stopTaskPolling();
+  }
+  showPayload(merged);
+}
+
+function startTaskPolling(taskId) {
+  stopTaskPolling();
+  state.pollTaskId = taskId;
+  state.pollTimer = setInterval(async () => {
+    try {
+      await refreshRunningTask(taskId);
+    } catch (error) {
+      stopTaskPolling();
+      showError(error);
+    }
+  }, 900);
+}
+
+function isTerminalStatus(status) {
+  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed", "plan_failed"].includes(status);
+}
+
+function formatNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toLocaleString("en-US") : "0";
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -894,7 +712,7 @@ async function refreshStatus() {
     healthDot.classList.remove("fail");
     healthDot.classList.add("ok");
     healthLabel.textContent = health.status === "ok" ? "运行正常" : health.status;
-  } catch (error) {
+  } catch {
     healthDot.classList.remove("ok");
     healthDot.classList.add("fail");
     healthLabel.textContent = "连接失败";
@@ -922,10 +740,7 @@ document.querySelector("#create-intake-form").addEventListener("submit", async (
   const message = form.elements.message.value.trim();
   setBusy(form, true);
   try {
-    showPayload(await requestJson("/intake/sessions", {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    }));
+    showPayload(await requestJson("/intake/sessions", { method: "POST", body: JSON.stringify({ message }) }));
   } catch (error) {
     showError(error);
   } finally {
@@ -940,10 +755,7 @@ document.querySelector("#append-intake-form").addEventListener("submit", async (
   const message = form.elements.message.value.trim();
   setBusy(form, true);
   try {
-    showPayload(await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    }));
+    showPayload(await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/messages`, { method: "POST", body: JSON.stringify({ message }) }));
   } catch (error) {
     showError(error);
   } finally {
@@ -956,14 +768,11 @@ document.querySelector("#confirm-intake").addEventListener("click", async (event
   const sessionId = intakeSessionInput.value.trim();
   setBusy(button, true);
   try {
-    const payload = await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/confirm`, {
-      method: "POST",
-    });
+    const payload = await requestJson(`/intake/sessions/${encodeURIComponent(sessionId)}/confirm`, { method: "POST" });
     showPayload(payload);
     const taskId = payload.task?.task_id || payload.task_id || payload.intake_session?.task_id;
-    if (taskId) {
-      stopTaskPolling();
-    }
+    if (taskId) startTaskPolling(taskId);
+    else stopTaskPolling();
   } catch (error) {
     showError(error);
     stopTaskPolling();
@@ -978,17 +787,11 @@ document.querySelector("#direct-task-form").addEventListener("submit", async (ev
   setBusy(form, true);
   try {
     const payload = JSON.parse(form.elements.payload.value);
-    const task = await requestJson("/tasks/async", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    const task = await requestJson("/tasks/async", { method: "POST", body: JSON.stringify(payload) });
     showPayload(task);
     const createdTaskId = task.task_id || task.task?.task_id;
-    if (createdTaskId) {
-      startTaskPolling(createdTaskId);
-    } else {
-      stopTaskPolling();
-    }
+    if (createdTaskId) startTaskPolling(createdTaskId);
+    else stopTaskPolling();
   } catch (error) {
     showError(error);
     stopTaskPolling();
@@ -1001,9 +804,14 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     const taskId = taskIdInput.value.trim();
     const action = button.dataset.taskAction;
+    if (action !== "list" && !taskId) {
+      showError(new Error("请先选择或输入 Task ID。"));
+      return;
+    }
     const route = {
       list: ["/tasks", "GET"],
       get: [`/tasks/${encodeURIComponent(taskId)}`, "GET"],
+      queue: [`/tasks/${encodeURIComponent(taskId)}/plan`, "GET"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
@@ -1015,7 +823,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if (action === "resume" && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
+      if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
         startTaskPolling(activeTaskId);
       }
     } catch (error) {
@@ -1033,10 +841,7 @@ document.querySelector("#task-manage-form").addEventListener("submit", async (ev
   setBusy(form, true);
   try {
     const payload = JSON.parse(form.elements.payload.value);
-    showPayload(await requestJson(`/tasks/${encodeURIComponent(taskId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }));
+    showPayload(await requestJson(`/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify(payload) }));
   } catch (error) {
     showError(error);
   } finally {
@@ -1051,9 +856,7 @@ document.querySelector("#delete-task").addEventListener("click", async (event) =
     showError(new Error("请先选择或输入 Task ID。"));
     return;
   }
-  if (!window.confirm(`确认删除任务 ${taskId}？`)) {
-    return;
-  }
+  if (!window.confirm(`确认删除任务 ${taskId}？`)) return;
   setBusy(button, true);
   try {
     stopTaskPolling();
@@ -1071,7 +874,5 @@ refreshStatus();
 initializeWorkflowMap();
 
 window.addEventListener("resize", () => {
-  if (state.workflowGraphReady) {
-    renderWorkflowMap(state.lastPayload || {});
-  }
+  if (state.workflowGraphReady) renderWorkflowMap(state.lastPayload || {});
 });

@@ -37,6 +37,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "token-float collapsed" in body
     assert "token-float-toggle" in body
     assert "任务列表" in body
+    assert "查看队列" in body
     assert "原始响应 JSON" in body
     assert "查看任务列表" in body
     assert "/static/css/dashboard.css" in body
