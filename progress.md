@@ -169,3 +169,19 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest tests/test_workflow.py tests/test_token_usage.py -q`
 - 结果：`35 passed in 16.80s`
+
+## 2026-04-28 生成阶段实时进度修正
+
+- 生成阶段的 LLM 生命周期事件现在会自动携带 `current_file`、`completed_files`、`total_files`，所以 `current_action` 不再一直停在同一句 `generation.chat_json 第 1/1 次`，而是会带上当前文件和文件序号，例如 `"[2/116] index.md · LLM 调用开始..."`。
+- 串行文件生成阶段补发了更明确的文件级事件元数据，生成开始和保存完成都带上当前文件、总文件数和已完成数量，方便前端和日志统一展示。
+- 应用日志 `request_trace` 现在也附带 `generation_progress`，排查时能直接看到当前生成到哪个文件。
+- 修复前端队列面板里队列统计函数重名的问题，避免“生成进度/队列统计”摘要被覆盖后看起来一直不动。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/orchestrator/graph.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest tests/test_token_usage.py tests/test_workflow.py -q`
+- 结果：`36 passed in 20.58s`

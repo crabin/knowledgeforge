@@ -41,12 +41,14 @@ def create_app(config: AppConfig | None = None) -> Flask:
         if task_id:
             task = service.get_task(task_id)
             if task:
+                generation = task.get("generation_progress", {}) or {}
                 details.update(
                     {
                         "task_id": task_id,
                         "task_status": task.get("task_status", ""),
                         "current_step": task.get("current_step", ""),
                         "current_action": task.get("current_action", ""),
+                        "generation_progress": generation,
                     }
                 )
         if request.path.endswith("/logs") and task_id:

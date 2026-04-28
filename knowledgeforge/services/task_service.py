@@ -60,6 +60,19 @@ from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
 
+def _format_generation_prefix(details: dict[str, Any]) -> str:
+    current_file = str(details.get("current_file", "") or "").strip()
+    completed_files = details.get("completed_files")
+    total_files = details.get("total_files")
+    progress = ""
+    if total_files not in {None, ""}:
+        current_index = int(completed_files or 0) + 1
+        progress = f"[{current_index}/{total_files}] "
+    if current_file:
+        return f"{progress}{current_file} · "
+    return progress
+
+
 class TaskService:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
@@ -691,13 +704,21 @@ class TaskService:
         task_id = str(payload.get("task_id") or current_token_task_id() or "")
         if not task_id:
             return
+        enriched_payload = dict(payload)
+        task_snapshot = self.get_task(task_id)
+        if task_snapshot is not None:
+            generation = task_snapshot.get("generation_progress", {}) or {}
+            if generation:
+                enriched_payload.setdefault("current_file", generation.get("current_file", ""))
+                enriched_payload.setdefault("completed_files", generation.get("completed_files", 0))
+                enriched_payload.setdefault("total_files", generation.get("total_files", 0))
         status = str(payload.get("status", "unknown"))
         event = {
             "started": "llm_call_started",
             "completed": "llm_call_completed",
             "failed": "llm_call_failed",
         }.get(status, "llm_call_event")
-        self._audit_logger.log(task_id, event, payload)
+        self._audit_logger.log(task_id, event, enriched_payload)
         self._refresh_running_task_snapshot(
             task_id,
             {
@@ -705,7 +726,7 @@ class TaskService:
                 "event": event,
                 "timestamp": now_iso(),
                 "node": "OpenAICompatibleClient",
-                "details": payload,
+                "details": enriched_payload,
             },
         )
 
@@ -1020,15 +1041,20 @@ class TaskService:
         details = entry.get("details", {})
         event = entry.get("event", "")
         if event == "llm_call_started":
-            return f"LLM 调用开始：{details.get('operation', '')} 第 {details.get('attempt', 1)}/{details.get('max_attempts', 1)} 次"
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用开始：{details.get('operation', '')} 第 {details.get('attempt', 1)}/{details.get('max_attempts', 1)} 次"
         if event == "llm_call_completed":
-            return f"LLM 调用完成：{details.get('operation', '')}"
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用完成：{details.get('operation', '')}"
         if event == "llm_call_failed":
-            return f"LLM 调用失败：{details.get('operation', '')}"
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用失败：{details.get('operation', '')}"
         if event == "file_generation_started":
-            return f"正在生成文件：{details.get('file_path', '')}"
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}正在生成文件：{details.get('file_path', '')}"
         if event == "file_generation_completed":
-            return f"文件生成完成：{details.get('file_path', '')}"
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}文件生成完成：{details.get('file_path', '')}"
         if event == "queue_task_started":
             return f"正在执行队列任务：{details.get('task_id', '')}"
         if event == "queue_task_completed":

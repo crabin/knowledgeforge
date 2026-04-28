@@ -110,6 +110,20 @@ class KnowledgeGraphWorkflow:
             self._emit_workflow_event(
                 state,
                 "llm_generating",
+                f"开始生成文件：{relative_path}",
+                "active",
+                {
+                    "event": "file_generation_started",
+                    "file_path": file_path.as_posix(),
+                    "relative_path": relative_path,
+                    "completed_files": generated_count,
+                    "total_files": total_files,
+                    "current_file": relative_path,
+                },
+            )
+            self._emit_workflow_event(
+                state,
+                "llm_generating",
                 f"生成文件骨架：{relative_path}",
                 "active",
                 {"file_path": file_path.as_posix()},
@@ -152,7 +166,15 @@ class KnowledgeGraphWorkflow:
                 "llm_generating",
                 f"文件骨架已保存：{relative_path}",
                 "completed",
-                {"file_path": file_path.as_posix(), "enqueued_tasks": len(query_tasks)},
+                {
+                    "event": "file_generation_completed",
+                    "file_path": file_path.as_posix(),
+                    "relative_path": relative_path,
+                    "enqueued_tasks": len(query_tasks),
+                    "completed_files": generated_count,
+                    "total_files": total_files,
+                    "current_file": relative_path,
+                },
             )
         queue["final_status"] = "generated"
         queue_path = self._queue_store.save(domain_dir, queue)

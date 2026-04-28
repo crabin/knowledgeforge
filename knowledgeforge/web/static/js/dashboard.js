@@ -135,7 +135,7 @@ function renderSummary(payload) {
     ["队列进度", summarizeQueueProgress(payload)],
     ["轮次验证", summarizeValidationRounds(payload)],
     ["队列状态", queueSummary.final_status],
-    ["队列统计", summarizeQueueCounts(queueSummary.counts)],
+    ["队列统计", summarizeQueueCountSummary(queueSummary.counts)],
     ["最新 LLM", summarizeLatestLlm(latestLlmDetails)],
     ["最近错误", latestError.error || latestError.event],
     ["文档路径", getNested(payload, "document_artifact.path")],
@@ -436,7 +436,7 @@ function renderQueuePanel(payload) {
   const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
   const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
-  const counts = summarizeQueueCounts(tasks);
+  const counts = summarizeQueueTaskCounts(tasks);
   const runningTask = tasks.find((task) => task.status === "running");
 
   if (queuePanelHint) {
@@ -534,7 +534,7 @@ function summarizeQueueProgress(payload) {
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
   if (!tasks.length) return "";
-  return buildQueueCountLabel(summarizeQueueCounts(tasks));
+  return buildQueueCountLabel(summarizeQueueTaskCounts(tasks));
 }
 
 function summarizeValidationRounds(payload) {
@@ -544,7 +544,7 @@ function summarizeValidationRounds(payload) {
   return formatRoundSummary(rounds.at(-1));
 }
 
-function summarizeQueueCounts(tasks) {
+function summarizeQueueTaskCounts(tasks) {
   return {
     total: tasks.length,
     completed: tasks.filter((task) => task.status === "completed").length,
@@ -589,7 +589,7 @@ function summarizeTokenUsageLabel(payload) {
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
 }
 
-function summarizeQueueCounts(counts = {}) {
+function summarizeQueueCountSummary(counts = {}) {
   const total = Number(counts.total || 0);
   if (!total) return "";
   return [

@@ -153,3 +153,54 @@ def test_task_logs_include_realtime_llm_lifecycle_events(tmp_path: Path) -> None
     assert payload is not None
     events = [entry["event"] for entry in payload["logs"]]
     assert "llm_call_started" in events
+
+
+def test_llm_lifecycle_event_includes_generation_progress_context(tmp_path: Path) -> None:
+    service = TaskService(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    service._state_store.save(  # noqa: SLF001
+        "generation-task",
+        {
+            "task_id": "generation-task",
+            "task_status": "running",
+            "request_context": {"domain": "知识工程", "subdomains": []},
+            "generation_progress": {
+                "total_files": 116,
+                "completed_files": 1,
+                "current_file": "index.md",
+                "last_saved_path": "save/知识工程/README.md",
+            },
+        },
+    )
+
+    with token_tracking_context("generation-task"):
+        service._log_llm_event(  # noqa: SLF001
+            {
+                "request_id": "req-generation",
+                "kind": "chat",
+                "operation": "generation.chat_json",
+                "model": "gpt-5.4",
+                "status": "started",
+                "attempt": 1,
+                "max_attempts": 1,
+                "base_url": "http://localhost:8317/v1",
+                "timeout": 120.0,
+                "error": "",
+                "elapsed_ms": None,
+            }
+        )
+
+    payload = service.get_task_logs("generation-task")
+
+    assert payload is not None
+    latest = payload["llm_activity"]["latest_event"]["details"]
+    assert latest["current_file"] == "index.md"
+    assert latest["completed_files"] == 1
+    assert latest["total_files"] == 116
