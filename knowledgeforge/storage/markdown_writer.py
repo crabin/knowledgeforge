@@ -212,6 +212,29 @@ class MarkdownKnowledgeWriter:
         document_path.write_text(document_body, encoding="utf-8")
         return artifact
 
+    def apply_output_artifacts(self, context: RequestContext, outputs: dict[str, EngineRunResult]) -> None:
+        self._apply_output_artifacts(context, outputs)
+
+    def build_domain_artifact(self, context: RequestContext) -> DocumentArtifact:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        readme_path = domain_dir / "README.md"
+        return DocumentArtifact(
+            document_id=f"{sanitize_path_segment(context.domain, 'domain')}-domain-readme",
+            title=f"{context.domain} Overview",
+            domain=context.domain,
+            subdomain=context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用"),
+            path=readme_path.as_posix(),
+            status="draft",
+            version="v1",
+            module_id="overview",
+            module_label="Overview",
+            doc_role="domain_overview",
+            generated_files=[
+                str(self._config.save_root / sanitize_path_segment(context.domain, "domain") / str(item.get("relative_path", "")))
+                for item in context.knowledge_blueprint
+            ],
+        )
+
     def _render_blueprint_skeleton(
         self,
         *,

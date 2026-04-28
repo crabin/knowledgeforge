@@ -23,6 +23,11 @@ class WorkflowState(TypedDict, total=False):
     agent_plans: dict[str, EnginePlan]
     plan_document_paths: dict[str, str]
     knowledge_file_states: list[dict]
+    generation_progress: dict
+    task_queue_path: str
+    task_queue_snapshot: dict
+    validation_round: int
+    fill_progress: dict
     workflow_events: list[WorkflowStepEvent]
     current_step: str
     current_action: str

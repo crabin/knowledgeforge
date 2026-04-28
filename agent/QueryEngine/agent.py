@@ -278,3 +278,40 @@ class QueryEngine(BaseEngine):
                 }
             ],
         )
+
+    def run_evidence_task(
+        self,
+        *,
+        context: RequestContext,
+        round_number: int,
+        task: dict[str, object],
+    ) -> EngineRunResult:
+        plan = EnginePlan(
+            agent_name=self.name,
+            plan_items=[
+                EnginePlanItem(
+                    plan_item_id=str(task.get("task_id", "Q1")),
+                    title=str(task.get("claim_or_gap", task.get("query_text", "补充证据"))),
+                    query_or_action=str(task.get("query_text", "")),
+                    targets=[str(item) for item in task.get("expected_evidence", []) if str(item).strip()],
+                    success_criteria=[str(item) for item in task.get("acceptance_criteria", []) if str(item).strip()],
+                    fallbacks=[],
+                    source_priority=[str(item) for item in task.get("preferred_source_types", []) if str(item).strip()],
+                    status="approved",
+                    metadata={
+                        "target_file_path": str(task.get("target_file_path", "")),
+                        "planned_path": str(task.get("target_file_path", "")),
+                        "target_section": str(task.get("target_section", "证据与来源")),
+                        "subdomain": str(task.get("subdomain", "")),
+                        "doc_role": str(task.get("doc_role", "module_doc")),
+                        "module_id": str(task.get("module_id", "core_topics")),
+                        "module_label": str(task.get("module_label", "Core Topics")),
+                    },
+                )
+            ],
+            reasoning="队列模式：执行单个文件级证据任务。",
+            status="approved",
+            created_at=now_iso(),
+            approved_at=now_iso(),
+        )
+        return self.run(context, round_number, plan)

@@ -161,14 +161,8 @@ class TaskService:
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         request_context = self._context_builder.build(payload)
         initial_state = self._create_initial_state(request_context, audit_source="api")
-        try:
-            with token_tracking_context(initial_state["task_id"]):
-                planned_state = self._workflow.generate_plans(initial_state)
-        except Exception as exc:
-            return self._persist_plan_failed(initial_state, exc)
-        approved_state = self._approve_plans_in_state(planned_state)
         with token_tracking_context(initial_state["task_id"]):
-            final_state = self._workflow.run(approved_state)
+            final_state = self._workflow.run(initial_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -177,21 +171,17 @@ class TaskService:
 
     def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
-        try:
-            with token_tracking_context(initial_state["task_id"]):
-                planned_state = self._workflow.generate_plans(initial_state)
-        except Exception as exc:
-            return self._persist_plan_failed(initial_state, exc)
         task_id = initial_state["task_id"]
         with self._task_lock:
-            self._tasks[task_id] = planned_state
-        payload_dict = self._serialize_state(planned_state)
+            self._tasks[task_id] = initial_state
+        payload_dict = self._serialize_state(initial_state)
         self._state_store.save(task_id, payload_dict)
         self._audit_logger.log(
             task_id,
-            "agent_plans_created",
-            {"status": "awaiting_plan_confirmation", "source": "api_async", "round": planned_state.get("round_number", 1)},
+            "task_started_async",
+            {"status": "running", "source": "api_async", "round": initial_state.get("round_number", 1)},
         )
+        Thread(target=self._run_started_task, args=(initial_state,), daemon=True).start()
         return self._attach_runtime_observability(payload_dict)
 
     def _persist_plan_failed(self, state: WorkflowState, exc: Exception) -> dict[str, Any]:
@@ -227,8 +217,8 @@ class TaskService:
         return {
             "task_id": task_id,
             "task_status": task.get("task_status", "unknown"),
-            "agent_plans": task.get("agent_plans", {}),
-            "plan_approved_at": task.get("plan_approved_at", ""),
+            "task_queue_path": task.get("task_queue_path", ""),
+            "task_queue_snapshot": task.get("task_queue_snapshot", {}),
         }
 
     def update_plan_item(
@@ -241,31 +231,7 @@ class TaskService:
         stored = self._state_store.load(task_id)
         if stored is None:
             return None
-        if stored.get("task_status") != "awaiting_plan_confirmation":
-            raise ValueError("计划项只能在等待确认阶段修改。")
-        plans = stored.get("agent_plans", {})
-        plan = plans.get(agent_name)
-        if plan is None:
-            raise ValueError(f"未找到 Agent '{agent_name}' 的计划。")
-        matched = next(
-            (item for item in plan.get("plan_items", []) if item.get("plan_item_id") == plan_item_id),
-            None,
-        )
-        if matched is None:
-            raise ValueError(f"未找到计划项 '{plan_item_id}'。")
-        allowed = {"title", "query_or_action", "targets", "success_criteria", "fallbacks", "source_priority"}
-        for key in allowed:
-            if key in payload:
-                matched[key] = payload[key]
-        self._sync_plan_document(stored, agent_name)
-        self._state_store.save(task_id, stored)
-        self._audit_logger.log(task_id, "plan_item_updated", {"agent": agent_name, "plan_item_id": plan_item_id})
-        return {
-            "task_id": task_id,
-            "task_status": stored["task_status"],
-            "agent_plans": stored.get("agent_plans", {}),
-            "plan_document_paths": stored.get("plan_document_paths", {}),
-        }
+        raise ValueError("当前流程已改为直接执行，不再支持计划项编辑。")
 
     def delete_plan_item(
         self,
@@ -276,58 +242,13 @@ class TaskService:
         stored = self._state_store.load(task_id)
         if stored is None:
             return None
-        if stored.get("task_status") != "awaiting_plan_confirmation":
-            raise ValueError("计划项只能在等待确认阶段删除。")
-        plans = stored.get("agent_plans", {})
-        plan = plans.get(agent_name)
-        if plan is None:
-            raise ValueError(f"未找到 Agent '{agent_name}' 的计划。")
-        items = plan.get("plan_items", [])
-        new_items = [item for item in items if item.get("plan_item_id") != plan_item_id]
-        if len(new_items) == len(items):
-            raise ValueError(f"未找到计划项 '{plan_item_id}'。")
-        plan["plan_items"] = new_items
-        self._sync_plan_document(stored, agent_name)
-        self._state_store.save(task_id, stored)
-        self._audit_logger.log(task_id, "plan_item_deleted", {"agent": agent_name, "plan_item_id": plan_item_id})
-        return {
-            "task_id": task_id,
-            "task_status": stored["task_status"],
-            "agent_plans": stored.get("agent_plans", {}),
-            "plan_document_paths": stored.get("plan_document_paths", {}),
-        }
+        raise ValueError("当前流程已改为直接执行，不再支持计划项删除。")
 
     def confirm_task_plan(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
         if stored is None:
             return None
-        if stored.get("task_status") != "awaiting_plan_confirmation":
-            raise ValueError("task is not awaiting plan confirmation.")
-        request_context = self._deserialize_request_context(stored["request_context"])
-        request_context.task_id = task_id
-        state: WorkflowState = {
-            "task_id": task_id,
-            "request_context": request_context,
-            "messages": self._deserialize_messages(stored.get("messages", [])),
-            "round_number": int(stored.get("round_number", 1)),
-            "max_rounds": int(stored.get("max_rounds", self._config.max_rounds)),
-            "task_status": "running",
-            "agent_plans": self._deserialize_engine_plans(stored.get("agent_plans", {})),
-            "plan_document_paths": stored.get("plan_document_paths", {}),
-            "workflow_events": [
-                WorkflowStepEvent(**event)
-                for event in stored.get("workflow_events", [])
-                if isinstance(event, dict)
-            ],
-        }
-        state = self._approve_plans_in_state(state)
-        with self._task_lock:
-            self._tasks[task_id] = state
-        payload_dict = self._serialize_state(state)
-        self._state_store.save(task_id, payload_dict)
-        self._audit_logger.log(task_id, "agent_plans_confirmed", {"approved_at": state["plan_approved_at"]})
-        Thread(target=self._run_started_task, args=(state,), daemon=True).start()
-        return self._attach_runtime_observability(payload_dict)
+        raise ValueError("当前流程已改为直接执行，不再需要确认计划。")
 
     def list_tasks(self) -> dict[str, Any]:
         tasks = self._state_store.list()
@@ -568,6 +489,8 @@ class TaskService:
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
             "task_status": "running" if audit_source == "api_async" else "created",
+            "current_step": "blueprint_ready",
+            "current_action": "知识文件蓝图已创建，等待进入串行生成。",
         }
         self._audit_logger.log(
             task_id,
@@ -671,8 +594,6 @@ class TaskService:
             return None
 
         round_number = int(stored.get("round_number", 1))
-        if stored.get("task_status") == "awaiting_plan_confirmation":
-            raise ValueError("task plan must be confirmed before resume.")
         if round_number >= self._config.max_rounds:
             stored["task_status"] = "max_rounds_reached"
             self._state_store.save(task_id, stored)
@@ -927,6 +848,22 @@ class TaskService:
     def _describe_realtime_action(entry: dict[str, Any]) -> str:
         details = entry.get("details", {})
         event = entry.get("event", "")
+        if event == "file_generation_started":
+            return f"正在生成文件：{details.get('file_path', '')}"
+        if event == "file_generation_completed":
+            return f"文件生成完成：{details.get('file_path', '')}"
+        if event == "queue_task_started":
+            return f"正在执行队列任务：{details.get('task_id', '')}"
+        if event == "queue_task_completed":
+            return f"队列任务已完成：{details.get('task_id', '')}"
+        if event == "queue_round_validation_started":
+            return "正在进行本轮完整性验证"
+        if event == "queue_round_validation_completed":
+            return "本轮完整性验证已完成"
+        if event == "evidence_fill_started":
+            return "正在统一回填依据到知识文件"
+        if event == "evidence_fill_completed":
+            return "知识文件依据回填完成"
         if event == "query_plan_created":
             return f"QueryEngine 已生成 {details.get('question_count', 0)} 个查询计划项"
         if event == "query_plan_item_started":
@@ -1057,7 +994,7 @@ class TaskService:
 
     @staticmethod
     def _is_running_status(status: object) -> bool:
-        return str(status) in {"running", "resumed"}
+        return str(status) in {"running", "resumed", "supplementing", "filled"}
 
 
 class _NoopQueryCrawler:

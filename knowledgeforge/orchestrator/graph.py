@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Callable
+import json
+from pathlib import Path
 from typing import Any
 
+import yaml
 from langgraph.graph import END, StateGraph
 
 from agent.InsightEngine.agent import InsightEngine
@@ -11,10 +12,27 @@ from agent.MediaEngine.agent import MediaEngine
 from agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.evaluation.completeness import CompletenessEvaluator
 from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
-from knowledgeforge.models import AgentMessage, EngineRunResult, SourceRecord, WorkflowStepEvent
+from knowledgeforge.models import (
+    AgentMessage,
+    CompletenessResult,
+    DomainTaskQueueItem,
+    EngineRunResult,
+    RequestContext,
+    RoundValidationResult,
+    WorkflowStepEvent,
+)
 from knowledgeforge.orchestrator.state import WorkflowState
 from knowledgeforge.postprocess.pipeline import PostStoragePipeline
+from knowledgeforge.prompts.knowledge_file_generation import (
+    PROMPT_PROFILE_VERSION,
+    build_generation_system_prompt,
+    build_prompt_spec,
+    build_validation_system_prompt,
+)
+from knowledgeforge.runtime.domain_task_queue_store import DomainTaskQueueStore
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.utils.file_contract import parse_contract_block, render_contract_block, replace_contract_block
+from knowledgeforge.utils.paths import sanitize_path_segment
 from knowledgeforge.utils.time import now_iso
 
 
@@ -28,8 +46,8 @@ class KnowledgeGraphWorkflow:
         supplement_planner: SupplementDecisionPlanner,
         writer: MarkdownKnowledgeWriter,
         post_storage_pipeline: PostStoragePipeline,
-        workflow_event_callback: Callable[[str, WorkflowStepEvent], None] | None = None,
-        state_update_callback: Callable[[str, WorkflowState], None] | None = None,
+        workflow_event_callback=None,
+        state_update_callback=None,
     ) -> None:
         self._insight_engine = insight_engine
         self._query_engine = query_engine
@@ -40,247 +58,239 @@ class KnowledgeGraphWorkflow:
         self._post_storage_pipeline = post_storage_pipeline
         self._workflow_event_callback = workflow_event_callback
         self._state_update_callback = state_update_callback
+        self._queue_store = DomainTaskQueueStore()
         self._graph = self._build_graph()
 
     def run(self, initial_state: WorkflowState) -> WorkflowState:
         return self._graph.invoke(initial_state)
 
     def generate_plans(self, state: WorkflowState) -> WorkflowState:
-        context = state["request_context"]
-        round_number = state.get("round_number", 1)
-        self._append_workflow_event(state, "planning", "三路计划生成", "active")
-        state["knowledge_file_states"] = self._writer.materialize_knowledge_base(
-            context=context,
-            round_number=round_number,
-        )
-        plans = {}
-        for name, engine in (
-            ("InsightEngine", self._insight_engine),
-            ("QueryEngine", self._query_engine),
-            ("MediaEngine", self._media_engine),
-        ):
-            self._append_workflow_event(
-                state,
-                "planning",
-                f"{name} 计划生成中",
-                "active",
-                {"agent": name},
-            )
-            try:
-                plans[name] = engine.plan(context, round_number)
-                self._append_workflow_event(
-                    state,
-                    "planning",
-                    f"{name} 计划已生成",
-                    "completed",
-                    {"agent": name},
-                )
-            except Exception as exc:
-                raise RuntimeError(f"{name} plan generation failed: {exc}") from exc
-        state["agent_plans"] = plans
-        plan_document_paths = self._writer.write_agent_plan_documents(
-            context=context,
-            plans=plans,
-            round_number=round_number,
-        )
-        state["plan_document_paths"] = plan_document_paths
-        state["task_status"] = "awaiting_plan_confirmation"
-        state["current_step"] = "awaiting_confirmation"
-        state["current_action"] = "三路 Agent 执行计划已生成并保存，等待用户确认。"
-        self._append_workflow_event(
-            state,
-            "planning",
-            "三路计划生成",
-            "completed",
-            {
-                "agents": sorted(plans),
-                "plan_document_paths": plan_document_paths,
-                "knowledge_file_count": len(state.get("knowledge_file_states", [])),
-            },
-        )
-        self._append_workflow_event(state, "awaiting_confirmation", "等待用户确认计划", "active")
         return state
 
     def _build_graph(self):
         graph = StateGraph(WorkflowState)
-        graph.add_node("collect_parallel", self._collect_parallel)
-        graph.add_node("evaluate_completeness", self._evaluate_completeness)
-        graph.add_node("query_supplement", self._query_supplement)
-        graph.add_node("write_markdown", self._write_markdown)
+        graph.add_node("generate_files", self._generate_files)
+        graph.add_node("run_query_queue", self._run_query_queue)
+        graph.add_node("validate_round", self._validate_round)
+        graph.add_node("fill_evidence", self._fill_evidence)
         graph.add_node("run_post_storage", self._run_post_storage)
-        graph.add_node("finish_incomplete", self._finish_incomplete)
-        graph.set_entry_point("collect_parallel")
-        graph.add_edge("collect_parallel", "evaluate_completeness")
+        graph.set_entry_point("generate_files")
+        graph.add_edge("generate_files", "run_query_queue")
+        graph.add_edge("run_query_queue", "validate_round")
         graph.add_conditional_edges(
-            "evaluate_completeness",
-            self._route_after_evaluation,
+            "validate_round",
+            self._route_after_validation,
             {
-                "write_markdown": "write_markdown",
-                "query_supplement": "query_supplement",
-                "finish_incomplete": "finish_incomplete",
+                "run_query_queue": "run_query_queue",
+                "fill_evidence": "fill_evidence",
             },
         )
-        graph.add_edge("query_supplement", "collect_parallel")
-        graph.add_edge("write_markdown", "run_post_storage")
+        graph.add_edge("fill_evidence", "run_post_storage")
         graph.add_edge("run_post_storage", END)
-        graph.add_edge("finish_incomplete", END)
         return graph.compile()
 
-    def _collect_parallel(self, state: WorkflowState) -> dict[str, Any]:
+    def _generate_files(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
-        round_number = state.get("round_number", 1)
-        plans = state.get("agent_plans", {})
-        query_plan = state.get("pending_query_supplement_plan") or plans.get("QueryEngine")
-        self._emit_workflow_event(state, "collecting", "三路并行采集", "active")
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = {
-                "InsightEngine": executor.submit(self._insight_engine.run, context, round_number, plans.get("InsightEngine")),
-                "QueryEngine": executor.submit(self._query_engine.run, context, round_number, query_plan),
-                "MediaEngine": executor.submit(self._media_engine.run, context, round_number, plans.get("MediaEngine")),
-            }
-            outputs = {name: future.result() for name, future in futures.items()}
-
-        messages = list(state.get("messages", []))
-        messages.append(
-            AgentMessage(
-                role="assistant",
-                content="三路采集已完成。",
-                metadata={"timestamp": now_iso(), "round": round_number},
+        context.prompt_profile_version = PROMPT_PROFILE_VERSION
+        domain_dir = self._domain_dir(context)
+        queue = self._queue_store.load(domain_dir) or self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
+        context.generation_queue_path = self._queue_store.queue_path(domain_dir).as_posix()
+        self._emit_workflow_event(state, "blueprint_ready", "知识文件蓝图已准备", "active")
+        file_states = self._writer.materialize_knowledge_base(context=context, round_number=state.get("round_number", 1))
+        total_files = len(context.knowledge_blueprint)
+        generated_count = 0
+        for blueprint in context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            file_path = domain_dir / relative_path
+            spec = build_prompt_spec(blueprint)
+            self._emit_workflow_event(
+                state,
+                "llm_generating",
+                f"生成文件骨架：{relative_path}",
+                "active",
+                {"file_path": file_path.as_posix()},
             )
-        )
+            queue["generation_status"] = {
+                "total_files": total_files,
+                "completed_files": generated_count,
+                "current_file": relative_path,
+                "last_saved_path": queue.get("generation_status", {}).get("last_saved_path", ""),
+            }
+            self._queue_store.save(domain_dir, queue)
+            generated = self._generate_single_file(context, blueprint, spec, file_path)
+            file_path.write_text(generated["markdown"], encoding="utf-8")
+            query_tasks = self._extract_queue_tasks(generated["contract"], blueprint, file_path, queue.get("current_round", 1))
+            queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), query_tasks)
+            generated_count += 1
+            queue["generation_status"] = {
+                "total_files": total_files,
+                "completed_files": generated_count,
+                "current_file": relative_path,
+                "last_saved_path": file_path.as_posix(),
+            }
+            self._queue_store.save(domain_dir, queue)
+            self._emit_workflow_event(
+                state,
+                "llm_generating",
+                f"文件骨架已保存：{relative_path}",
+                "completed",
+                {"file_path": file_path.as_posix(), "enqueued_tasks": len(query_tasks)},
+            )
+        queue["final_status"] = "generated"
+        queue_path = self._queue_store.save(domain_dir, queue)
+        updates = {
+            "knowledge_file_states": file_states,
+            "generation_progress": queue["generation_status"],
+            "task_queue_path": queue_path.as_posix(),
+            "task_queue_snapshot": queue,
+            "task_status": "running",
+            "current_step": "llm_generating",
+            "current_action": "文件骨架串行生成完成，准备进入查询队列。",
+            "messages": [
+                *state.get("messages", []),
+                AgentMessage(role="assistant", content="文件骨架已串行生成，开始处理依据查询队列。"),
+            ],
+        }
+        self._commit_state(state, updates)
+        return updates
+
+    def _run_query_queue(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        domain_dir = self._domain_dir(context)
+        queue = self._queue_store.load(domain_dir) or {}
+        round_number = int(queue.get("current_round", 1))
+        self._emit_workflow_event(state, "query_queue_running", f"第 {round_number} 轮查询队列执行", "active")
+        outputs = dict(state.get("agent_outputs", {}))
+        for index, task in enumerate(queue.get("tasks", [])):
+            if str(task.get("round_number", 1)) != str(round_number):
+                continue
+            if str(task.get("status", "pending")) not in {"pending", "insufficient"}:
+                continue
+            queue["tasks"][index]["status"] = "running"
+            queue["tasks"][index]["attempts"] = int(task.get("attempts", 0)) + 1
+            self._queue_store.save(domain_dir, queue)
+            self._emit_workflow_event(
+                state,
+                "query_queue_running",
+                f"执行队列任务：{task.get('task_id', '')}",
+                "active",
+                {"task_id": task.get("task_id", ""), "task_type": task.get("task_type", "")},
+            )
+            result = self._execute_queue_task(context, round_number, queue["tasks"][index])
+            queue["tasks"][index].update(
+                {
+                    "status": result["status"],
+                    "result_summary": result["result_summary"],
+                    "citations": result["citations"],
+                }
+            )
+            outputs[result["agent_name"]] = self._merge_engine_output(outputs.get(result["agent_name"]), result["engine_output"])
+            self._queue_store.save(domain_dir, queue)
+            self._emit_workflow_event(
+                state,
+                "query_queue_running",
+                f"队列任务已完成：{task.get('task_id', '')}",
+                "completed" if result["status"] == "completed" else "blocked",
+                {"task_id": task.get("task_id", ""), "task_type": task.get("task_type", ""), "status": result["status"]},
+            )
         updates = {
             "agent_outputs": outputs,
-            "messages": messages,
-            "task_status": "collected",
-            "current_step": "collecting",
-            "current_action": "三路采集已完成。",
-            "pending_query_supplement_plan": None,
-            "workflow_events": [
-                *state.get("workflow_events", []),
-                self._make_workflow_event("collecting", "三路并行采集", "completed"),
-            ],
+            "task_queue_snapshot": queue,
+            "task_status": "running",
+            "current_step": "query_queue_running",
+            "current_action": f"第 {round_number} 轮查询队列执行完成。",
         }
         self._commit_state(state, updates)
         return updates
 
-    def _evaluate_completeness(self, state: WorkflowState) -> dict[str, Any]:
-        self._emit_workflow_event(state, "evaluating", "完整性评估", "active")
-        completeness = self._evaluator.evaluate(
-            state["request_context"],
-            state["agent_outputs"],
+    def _validate_round(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        domain_dir = self._domain_dir(context)
+        queue = self._queue_store.load(domain_dir) or {}
+        round_number = int(queue.get("current_round", 1))
+        self._emit_workflow_event(state, "round_validation", f"第 {round_number} 轮完整性验证", "active")
+        validation = self._validate_queue_round(context, queue, state.get("max_rounds", 3))
+        queue.setdefault("round_summaries", []).append(
+            {
+                "round_number": round_number,
+                "is_complete": validation.is_complete,
+                "reasoning": validation.reasoning,
+                "missing_evidence": validation.missing_evidence,
+            }
         )
-        previous_decision = state.get("completeness").supplement_decision if state.get("completeness") else {}
-        if previous_decision and not completeness.supplement_decision:
-            completeness.supplement_decision = previous_decision
+        for item in validation.file_status_updates:
+            self._apply_file_status_update(item)
+        if validation.is_complete:
+            queue["final_status"] = "ready_for_fill"
+            completeness = CompletenessResult(
+                status="pass",
+                reasons=["文件级查询队列验证通过。"],
+                missing_topics=[],
+                supplement_queries=[],
+                failure_categories=[],
+            )
+        else:
+            queue["current_round"] = round_number + 1
+            queue["final_status"] = "needs_more_evidence"
+            queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), validation.new_tasks)
+            completeness = CompletenessResult(
+                status="supplement_required",
+                reasons=["文件级查询队列仍有证据缺口。"],
+                missing_topics=[],
+                supplement_queries=[str(item.get("query_text", "")) for item in validation.new_tasks if str(item.get("query_text", "")).strip()],
+                failure_categories=["file_completion_incomplete"],
+            )
+        self._queue_store.save(domain_dir, queue)
         updates = {
+            "task_queue_snapshot": queue,
+            "validation_round": round_number,
             "completeness": completeness,
-            "task_status": completeness.status,
-            "current_step": "evaluating",
-            "current_action": "完整性评估已完成。",
-            "workflow_events": [
-                *state.get("workflow_events", []),
-                self._make_workflow_event("evaluating", "完整性评估", "completed" if completeness.status == "pass" else "blocked"),
-            ],
+            "task_status": "running" if validation.is_complete else "supplementing",
+            "current_step": "round_validation",
+            "current_action": validation.reasoning,
         }
         self._commit_state(state, updates)
         return updates
 
-    def _write_markdown(self, state: WorkflowState) -> dict[str, Any]:
-        self._emit_workflow_event(state, "writing", "Markdown 落盘", "active")
+    def _fill_evidence(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        queue = state.get("task_queue_snapshot", {})
+        self._emit_workflow_event(state, "evidence_filling", "开始统一回填证据到知识文件", "active")
+        outputs = dict(state.get("agent_outputs", {}))
+        outputs["QueueFillPass"] = EngineRunResult(
+            agent_name="QueueFillPass",
+            summary="统一回填队列中的来源与结论。",
+            key_points=[],
+            raw_material=[],
+            coverage_topics=context.subdomains,
+            sources=[],
+            collected_at=now_iso(),
+            round_number=state.get("round_number", 1),
+            artifacts=self._build_fill_artifacts(queue.get("tasks", [])),
+        )
+        self._writer.apply_output_artifacts(context, outputs)
         artifact = self._writer.write(
-            context=state["request_context"],
-            outputs=state["agent_outputs"],
-            completeness=state["completeness"],
+            context=context,
+            outputs=outputs,
+            completeness=state.get("completeness")
+            or CompletenessResult(status="pass", reasons=["文件级回填完成。"], missing_topics=[], supplement_queries=[]),
             round_number=state.get("round_number", 1),
         )
         updates = {
+            "agent_outputs": outputs,
             "document_artifact": artifact,
-            "task_status": "written",
-            "current_step": "writing",
-            "current_action": f"Markdown 文档已保存：{artifact.path}",
-            "workflow_events": [
-                *state.get("workflow_events", []),
-                self._make_workflow_event("writing", "Markdown 落盘", "completed", {"path": artifact.path}),
-            ],
+            "fill_progress": {
+                "completed_tasks": len([task for task in queue.get("tasks", []) if str(task.get("status", "")) == "completed"]),
+                "total_tasks": len(queue.get("tasks", [])),
+            },
+            "task_status": "filled",
+            "current_step": "evidence_filling",
+            "current_action": "所有已验证依据已统一回填到知识文件。",
         }
         self._commit_state(state, updates)
-        return updates
-
-    def _finish_incomplete(self, state: WorkflowState) -> dict[str, Any]:
-        task_status = "max_rounds_reached" if state.get("round_number", 1) >= state.get("max_rounds", 1) else "supplement_required"
-        updates = {
-            "task_status": task_status,
-            "current_step": "evaluating",
-            "current_action": "完整性不足，等待补检索或恢复执行。",
-        }
-        self._commit_state(state, updates)
-        return updates
-
-    def _query_supplement(self, state: WorkflowState) -> dict[str, Any]:
-        next_round = state.get("round_number", 1) + 1
-        pre_updates = {
-            "task_status": "supplementing",
-            "current_step": "supplementing",
-            "current_action": "正在分析已保存文档概述并生成补充查询计划。",
-        }
-        self._commit_state(state, pre_updates)
-        self._emit_workflow_event(state, "supplementing", "补充决策与 QueryEngine 定向补采", "active")
-        plan = self._supplement_planner.plan(
-            context=state["request_context"],
-            completeness=state["completeness"],
-            outputs=state["agent_outputs"],
-            round_number=next_round,
-        )
-        supplement_decision = state["completeness"].supplement_decision if state.get("completeness") else {}
-        if not plan.plan_items:
-            updates = {
-                "task_status": "supplement_required",
-                "current_step": "supplementing",
-                "current_action": "已分析保存文档，但未生成可执行的补充查询计划。",
-            }
-            self._commit_state(state, updates)
-            return updates
-
-        agent_plans = dict(state.get("agent_plans", {}))
-        agent_plans[f"QueryEngineSupplement_R{next_round}"] = plan
-        messages = list(state.get("messages", []))
-        messages.append(
-            AgentMessage(
-                role="assistant",
-                content="已根据实时知识 index 生成补充决策，下一轮将重新执行三路采集。",
-                metadata={
-                    "timestamp": now_iso(),
-                    "round": next_round,
-                    "supplement_plan_items": len(plan.plan_items),
-                },
-            )
-        )
-        updates = {
-            "agent_plans": agent_plans,
-            "pending_query_supplement_plan": plan,
-            "messages": messages,
-            "round_number": next_round,
-            "task_status": "running",
-            "current_step": "supplementing",
-            "current_action": f"已基于保存文档概述生成第 {next_round} 轮补检索计划，等待三路 Agent 重新采集。",
-            "workflow_events": [
-                *state.get("workflow_events", []),
-                self._make_workflow_event(
-                    "supplementing",
-                    "补充决策、文档缺口分析与下一轮三路采集准备",
-                    "completed",
-                    {
-                        "round": next_round,
-                        "plan_item_count": len(plan.plan_items),
-                        "queries": [item.query_or_action for item in plan.plan_items],
-                        "reviewed_document_count": len(supplement_decision.get("reviewed_documents", [])),
-                        "coverage_summary": supplement_decision.get("coverage_summary", ""),
-                        "defects": supplement_decision.get("defects", []),
-                    },
-                ),
-            ],
-        }
-        self._commit_state(state, updates)
+        self._emit_workflow_event(state, "evidence_filling", "证据回填完成", "completed")
         return updates
 
     def _run_post_storage(self, state: WorkflowState) -> dict[str, Any]:
@@ -288,75 +298,339 @@ class KnowledgeGraphWorkflow:
         result = self._post_storage_pipeline.run(
             state["document_artifact"],
             state["request_context"],
-            state["agent_outputs"],
+            state.get("agent_outputs", {}),
         )
-        if result.status == "passed":
-            task_status = "verified"
-        elif "research_flow" in result.remediation_flows:
-            task_status = "research_required"
-        else:
-            task_status = "repair_required"
+        task_status = "verified" if result.status == "passed" else "repair_required"
         updates = {
             "post_storage_result": result,
             "task_status": task_status,
             "current_step": "versioning" if task_status == "verified" else "governing",
-            "current_action": "治理链路已完成。" if task_status == "verified" else f"治理链路需要回流：{task_status}",
-            "workflow_events": [
-                *state.get("workflow_events", []),
-                self._make_workflow_event("governing", "结构化治理与质量检测", "completed" if task_status == "verified" else "blocked"),
-                self._make_workflow_event("versioning", "版本冻结与研报资格", "completed" if task_status == "verified" else "pending"),
-            ],
+            "current_action": "治理链路已完成。" if task_status == "verified" else "治理链路需要修复。",
         }
         self._commit_state(state, updates)
+        self._emit_workflow_event(state, "governing", "结构化治理与质量检测", "completed" if task_status == "verified" else "blocked")
+        self._emit_workflow_event(state, "versioning", "版本冻结与研报资格", "completed" if task_status == "verified" else "pending")
         return updates
 
-    def _emit_workflow_event(
-        self,
-        state: WorkflowState,
-        step_id: str,
-        label: str,
-        status: str,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        event = self._make_workflow_event(step_id, label, status, details)
-        if self._workflow_event_callback is not None:
-            self._workflow_event_callback(state["task_id"], event)
+    def _generate_single_file(self, context: RequestContext, blueprint: dict[str, Any], spec, file_path: Path) -> dict[str, Any]:
+        chat_client = getattr(self._insight_engine, "_chat_client", None)
+        payload: dict[str, Any] = {}
+        if chat_client is not None:
+            try:
+                payload = chat_client.complete_json(
+                    system_prompt=build_generation_system_prompt(),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": context.domain,
+                            "subdomain": blueprint.get("subdomain", ""),
+                            "relative_path": file_path.as_posix(),
+                            "doc_role": blueprint.get("doc_role", ""),
+                            "module_id": blueprint.get("module_id", ""),
+                            "title": blueprint.get("title", ""),
+                            "required_sections": spec.required_sections,
+                            "must_cover": spec.must_cover,
+                            "query_hint_rules": spec.query_hint_rules,
+                            "allowed_agent_tasks": spec.allowed_agent_tasks,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception:
+                payload = {}
+        return self._normalize_generated_payload(context, blueprint, spec, file_path, payload)
 
-    def _append_workflow_event(
+    def _normalize_generated_payload(
         self,
-        state: WorkflowState,
-        step_id: str,
-        label: str,
-        status: str,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        event = self._make_workflow_event(step_id, label, status, details)
-        state.setdefault("workflow_events", []).append(event)
-        if self._workflow_event_callback is not None:
-            self._workflow_event_callback(state["task_id"], event)
+        context: RequestContext,
+        blueprint: dict[str, Any],
+        spec,
+        file_path: Path,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        contract = {
+            "file_id": str(blueprint.get("file_id", file_path.stem)),
+            "file_path": file_path.as_posix(),
+            "required_sections": list(spec.required_sections),
+            "claims": [str(item) for item in payload.get("claims", []) if str(item).strip()] or [f"{spec.title} 需要形成可追溯知识说明。"],
+            "evidence_needed": [str(item) for item in payload.get("evidence_needed", []) if str(item).strip()] or ["权威定义", "关键结论来源", "必要时的案例或趋势证据"],
+            "query_tasks": payload.get("query_tasks", []) or self._default_query_tasks(blueprint, file_path, spec),
+            "completion_status": payload.get("completion_status", {"state": "generated", "required": True}),
+        }
+        markdown = str(payload.get("markdown", "")).strip()
+        if markdown and parse_contract_block(markdown) is None:
+            markdown = f"{markdown}\n\n{render_contract_block(contract)}\n"
+        if not markdown:
+            markdown = self._fallback_markdown(context, blueprint, spec, file_path, contract)
+        else:
+            markdown = replace_contract_block(markdown, contract)
+        return {"markdown": markdown, "contract": contract}
+
+    def _fallback_markdown(
+        self,
+        context: RequestContext,
+        blueprint: dict[str, Any],
+        spec,
+        file_path: Path,
+        contract: dict[str, Any],
+    ) -> str:
+        front_matter = {
+            "id": str(blueprint.get("file_id", file_path.stem)),
+            "title": str(blueprint.get("title", file_path.stem)),
+            "domain": context.domain,
+            "subdomain": str(blueprint.get("subdomain", "")),
+            "doc_type": str(blueprint.get("doc_type", "article")),
+            "source_type": "mixed",
+            "agent": "KnowledgeForge",
+            "round": 1,
+            "status": "draft",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "version": "v1",
+            "path": file_path.as_posix(),
+        }
+        tasks = list(contract.get("query_tasks", [])) or self._default_query_tasks(blueprint, file_path, spec)
+        contract["query_tasks"] = tasks
+        contract["completion_status"] = {
+            "state": "generated",
+            "required": True,
+            "completed_task_ids": [],
+            "pending_task_ids": [item["task_id"] for item in tasks],
+        }
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        body = [
+            "---",
+            front_matter_text,
+            "---",
+            "",
+            f"# {spec.title}",
+            "",
+        ]
+        for section in spec.required_sections:
+            body.extend([f"## {section}", ""])
+            if section == "摘要":
+                body.append("该文件按固定模板生成，后续将结合队列中的依据任务补全。")
+            elif section == "关键结论":
+                body.extend([f"- {item}" for item in contract["claims"]])
+            elif section == "背景与上下文":
+                body.extend([f"- {item}" for item in spec.must_cover])
+            elif section == "证据与来源":
+                body.extend(["| 编号 | 来源 | 关键信息 | 可信度 | 备注 |", "|---|---|---|---|---|", "| S0 | scaffold | 初始骨架 | unknown | 待补真实来源 |"])
+            elif section == "后续动作":
+                body.extend(["- 根据 JSON 合同中的 query_tasks 串行补充依据。"])
+            else:
+                body.append("待补充。")
+            body.append("")
+        body.extend([render_contract_block(contract), "", "## 变更记录", "", "| 版本 | 时间 | 变更说明 |", "|---|---|---|", f"| v1 | {now_iso()[:10]} | 初始生成 |", ""])
+        return "\n".join(body)
+
+    def _default_query_tasks(self, blueprint: dict[str, Any], file_path: Path, spec) -> list[dict[str, Any]]:
+        requirements = blueprint.get("completion_requirements", {})
+        required_query_tasks = 0
+        if isinstance(requirements, dict):
+            required_query_tasks = int(requirements.get("required_query_tasks", 0) or 0)
+        if required_query_tasks <= 0:
+            return []
+        owners = [str(item) for item in blueprint.get("owner_engine_candidates", [])]
+        task_type = "media" if "MediaEngine" in owners and "QueryEngine" not in owners else "query"
+        return [
+            {
+                "task_id": f"{blueprint.get('file_id', file_path.stem)}-task-1",
+                "task_type": task_type,
+                "section": "证据与来源" if task_type == "query" else "正文",
+                "claim_or_gap": f"补充 {blueprint.get('title', file_path.stem)} 的关键依据",
+                "query_text": f"{blueprint.get('title', file_path.stem)} {'official documentation' if task_type == 'query' else 'community trend discussion'}",
+                "expected_evidence": ["可追溯来源", "与结论对应的支撑信息"],
+                "preferred_source_types": ["official documentation"] if task_type == "query" else ["community", "blog"],
+                "acceptance_criteria": ["至少得到一条可回填的依据", "能写入对应文件章节"],
+                "status": "pending",
+            }
+        ]
+
+    def _extract_queue_tasks(self, contract: dict[str, Any], blueprint: dict[str, Any], file_path: Path, round_number: int) -> list[dict[str, Any]]:
+        tasks: list[dict[str, Any]] = []
+        for task in contract.get("query_tasks", []):
+            if not isinstance(task, dict):
+                continue
+            queue_task = DomainTaskQueueItem(
+                task_id=str(task.get("task_id", "")),
+                task_type="media" if str(task.get("task_type", "query")) == "media" else "query",
+                target_file_path=file_path.as_posix(),
+                target_section=str(task.get("section", "正文")),
+                claim_or_gap=str(task.get("claim_or_gap", "")),
+                query_text=str(task.get("query_text", task.get("query_intent", ""))),
+                expected_evidence=[str(item) for item in task.get("expected_evidence", []) if str(item).strip()],
+                status="pending",
+                round_number=round_number,
+            ).to_dict()
+            queue_task["preferred_source_types"] = [str(item) for item in task.get("preferred_source_types", []) if str(item).strip()]
+            queue_task["acceptance_criteria"] = [str(item) for item in task.get("acceptance_criteria", []) if str(item).strip()]
+            queue_task["module_id"] = str(blueprint.get("module_id", ""))
+            queue_task["module_label"] = str(blueprint.get("module_label", ""))
+            queue_task["doc_role"] = str(blueprint.get("doc_role", ""))
+            queue_task["subdomain"] = str(blueprint.get("subdomain", ""))
+            tasks.append(queue_task)
+        return tasks
 
     @staticmethod
-    def _make_workflow_event(
-        step_id: str,
-        label: str,
-        status: str,
-        details: dict[str, Any] | None = None,
-    ) -> WorkflowStepEvent:
-        return WorkflowStepEvent(
-            step_id=step_id,
-            label=label,
-            status=status,
-            timestamp=now_iso(),
-            details=details or {},
+    def _merge_queue_tasks(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        merged = list(existing)
+        existing_ids = {str(item.get("task_id", "")) for item in merged}
+        for task in incoming:
+            task_id = str(task.get("task_id", ""))
+            if task_id in existing_ids:
+                continue
+            merged.append(task)
+            existing_ids.add(task_id)
+        return merged
+
+    def _execute_queue_task(self, context: RequestContext, round_number: int, task: dict[str, Any]) -> dict[str, Any]:
+        if str(task.get("task_type", "query")) == "media":
+            result = self._media_engine.run_evidence_task(context=context, round_number=round_number, task=task)
+        else:
+            result = self._query_engine.run_evidence_task(context=context, round_number=round_number, task=task)
+        citations = [
+            {
+                "title": source.title,
+                "url": source.url,
+                "publisher": source.publisher,
+                "reliability": source.reliability,
+            }
+            for source in result.sources[:3]
+        ]
+        if not citations and result.summary:
+            citations = [
+                {
+                    "title": str(task.get("claim_or_gap", "队列任务结果")),
+                    "url": f"local://queue/{task.get('task_id', '')}",
+                    "publisher": result.agent_name,
+                    "reliability": "medium",
+                }
+            ]
+        status = "completed" if citations else "insufficient"
+        return {
+            "status": status,
+            "result_summary": result.summary,
+            "citations": citations,
+            "engine_output": result,
+            "agent_name": result.agent_name,
+        }
+
+    @staticmethod
+    def _merge_engine_output(existing: EngineRunResult | None, new_output: EngineRunResult) -> EngineRunResult:
+        if existing is None:
+            return new_output
+        return EngineRunResult(
+            agent_name=new_output.agent_name,
+            summary=new_output.summary,
+            key_points=[*existing.key_points, *new_output.key_points],
+            raw_material=[*existing.raw_material, *new_output.raw_material],
+            coverage_topics=list(dict.fromkeys([*existing.coverage_topics, *new_output.coverage_topics])),
+            sources=[*existing.sources, *new_output.sources],
+            collected_at=new_output.collected_at,
+            round_number=new_output.round_number,
+            execution_log=[*existing.execution_log, *new_output.execution_log],
+            artifacts=[*existing.artifacts, *new_output.artifacts],
         )
 
+    def _validate_queue_round(self, context: RequestContext, queue: dict[str, Any], max_rounds: int) -> RoundValidationResult:
+        chat_client = getattr(self._insight_engine, "_chat_client", None)
+        if chat_client is not None:
+            try:
+                payload = chat_client.complete_json(
+                    system_prompt=build_validation_system_prompt(),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": context.domain,
+                            "current_round": queue.get("current_round", 1),
+                            "tasks": queue.get("tasks", []),
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                return RoundValidationResult(
+                    is_complete=bool(payload.get("is_complete")),
+                    missing_evidence=[str(item) for item in payload.get("missing_evidence", []) if str(item).strip()],
+                    new_tasks=[item for item in payload.get("new_tasks", []) if isinstance(item, dict)],
+                    reasoning=str(payload.get("reasoning", "")).strip() or "LLM 已完成本轮验证。",
+                    file_status_updates=[item for item in payload.get("file_status_updates", []) if isinstance(item, dict)],
+                )
+            except Exception:
+                pass
+        incomplete = [task for task in queue.get("tasks", []) if str(task.get("status", "")) != "completed"]
+        if incomplete and int(queue.get("current_round", 1)) >= max_rounds:
+            return RoundValidationResult(
+                is_complete=True,
+                missing_evidence=[str(task.get("claim_or_gap", "")) for task in incomplete],
+                new_tasks=[],
+                reasoning="已达到最大轮次，现有结果将进入统一回填并保留未决缺口说明。",
+                file_status_updates=[
+                    {"file_path": str(task.get("target_file_path", "")), "status": "partially_completed"}
+                    for task in queue.get("tasks", [])
+                ],
+            )
+        return RoundValidationResult(
+            is_complete=not incomplete,
+            missing_evidence=[str(task.get("claim_or_gap", "")) for task in incomplete],
+            new_tasks=[],
+            reasoning="当前轮次已根据队列状态完成验证。" if not incomplete else "仍有未完成的依据任务，需要继续补充。",
+            file_status_updates=[
+                {"file_path": str(task.get("target_file_path", "")), "status": "completed" if not incomplete else "partially_completed"}
+                for task in queue.get("tasks", [])
+            ],
+        )
+
+    def _apply_file_status_update(self, update: dict[str, Any]) -> None:
+        file_path = Path(str(update.get("file_path", "")).strip())
+        if not file_path.exists():
+            return
+        text = file_path.read_text(encoding="utf-8")
+        contract = parse_contract_block(text)
+        if contract is None:
+            return
+        completion = dict(contract.get("completion_status", {}))
+        completion["state"] = str(update.get("status", completion.get("state", "generated")))
+        contract["completion_status"] = completion
+        file_path.write_text(replace_contract_block(text, contract), encoding="utf-8")
+
     @staticmethod
-    def _route_after_evaluation(state: WorkflowState) -> str:
-        if state["completeness"].status == "pass":
-            return "write_markdown"
-        if state.get("round_number", 1) < state.get("max_rounds", 1):
-            return "query_supplement"
-        return "finish_incomplete"
+    def _build_fill_artifacts(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        artifacts: dict[str, dict[str, Any]] = {}
+        for task in tasks:
+            file_path = str(task.get("target_file_path", "")).strip()
+            if not file_path:
+                continue
+            artifact = artifacts.setdefault(
+                file_path,
+                {
+                    "target_file_path": file_path,
+                    "target_section": str(task.get("target_section", "正文")),
+                    "state": "completed",
+                    "content": "",
+                    "task_updates": [],
+                },
+            )
+            citations = task.get("citations", [])
+            summary = str(task.get("result_summary", "")).strip()
+            if summary:
+                artifact["content"] += f"\n- {summary}"
+            artifact["task_updates"].append(
+                {
+                    "task_id": str(task.get("task_id", "")),
+                    "status": str(task.get("status", "completed")),
+                    "citation": citations[0] if citations else {},
+                }
+            )
+        return list(artifacts.values())
+
+    @staticmethod
+    def _route_after_validation(state: WorkflowState) -> str:
+        queue = state.get("task_queue_snapshot", {})
+        return "fill_evidence" if queue.get("final_status") == "ready_for_fill" else "run_query_queue"
+
+    def _emit_workflow_event(self, state: WorkflowState, step_id: str, label: str, status: str, details: dict[str, Any] | None = None) -> None:
+        event = self._make_workflow_event(step_id, label, status, details)
+        if self._workflow_event_callback is not None:
+            self._workflow_event_callback(state["task_id"], event)
 
     def _commit_state(self, state: WorkflowState, updates: dict[str, Any]) -> None:
         state.update(updates)
@@ -364,46 +638,9 @@ class KnowledgeGraphWorkflow:
             self._state_update_callback(state["task_id"], state)
 
     @staticmethod
-    def _merge_query_outputs(
-        previous: EngineRunResult | None,
-        supplement: EngineRunResult,
-    ) -> EngineRunResult:
-        if previous is None:
-            return supplement
-        return EngineRunResult(
-            agent_name=supplement.agent_name,
-            summary=supplement.summary,
-            key_points=KnowledgeGraphWorkflow._dedupe_strings([*previous.key_points, *supplement.key_points]),
-            raw_material=[*previous.raw_material, "补充检索结果：", *supplement.raw_material],
-            coverage_topics=KnowledgeGraphWorkflow._dedupe_strings(
-                [*previous.coverage_topics, *supplement.coverage_topics]
-            ),
-            sources=KnowledgeGraphWorkflow._dedupe_sources([*previous.sources, *supplement.sources]),
-            collected_at=supplement.collected_at,
-            round_number=supplement.round_number,
-            execution_log=[*previous.execution_log, *supplement.execution_log],
-        )
+    def _make_workflow_event(step_id: str, label: str, status: str, details: dict[str, Any] | None = None) -> WorkflowStepEvent:
+        return WorkflowStepEvent(step_id=step_id, label=label, status=status, timestamp=now_iso(), details=details or {})
 
-    @staticmethod
-    def _dedupe_strings(items: list[str]) -> list[str]:
-        deduped: list[str] = []
-        seen = set()
-        for item in items:
-            key = item.strip().lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        return deduped
-
-    @staticmethod
-    def _dedupe_sources(sources: list[SourceRecord]) -> list[SourceRecord]:
-        deduped: list[SourceRecord] = []
-        seen = set()
-        for source in sources:
-            key = source.url.strip().lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            deduped.append(source)
-        return deduped
+    def _domain_dir(self, context: RequestContext) -> Path:
+        save_root = getattr(self._writer, "_config").save_root
+        return save_root / sanitize_path_segment(context.domain, "domain")

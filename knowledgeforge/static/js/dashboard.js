@@ -27,14 +27,13 @@ const workflowMap = document.querySelector("#workflow-map");
 const workflowX6Container = document.querySelector("#workflow-x6");
 
 const workflowSteps = [
-  { id: "planning", order: "01", title: "计划生成", description: "三路 Agent 基于输入上下文先生成执行计划。" },
-  { id: "awaiting_confirmation", order: "02", title: "用户确认", description: "展示 Insight、Query、Media 计划，确认后再执行。" },
-  { id: "collecting", order: "03", title: "并行采集", description: "三路能力并行补充内部线索、权威事实与媒体视角。" },
-  { id: "realtime_saving", order: "04", title: "实时沉淀", description: "Query / Media 每个合格计划项立即审查并保存 Markdown 草稿。" },
-  { id: "evaluating", order: "05", title: "完整性评估", description: "检查核心子主题、可信来源、信息空洞、冲突与时效性。" },
-  { id: "writing", order: "06", title: "Markdown 落盘", description: "生成最终综合文档并保留实时保存索引。" },
-  { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "versioning", order: "08", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+  { id: "blueprint_ready", order: "01", title: "蓝图准备", description: "根据固定模板准备目标文件清单与目录结构。" },
+  { id: "llm_generating", order: "02", title: "LLM 生成", description: "严格串行地生成单个知识文件骨架，并提取查询任务。" },
+  { id: "query_queue_running", order: "03", title: "查询队列", description: "按队列一次执行一个 Query / Media 任务。" },
+  { id: "round_validation", order: "04", title: "轮次验证", description: "每轮查询结束后评估是否完整或需要补充。" },
+  { id: "evidence_filling", order: "05", title: "统一回填", description: "全部任务完成后统一把依据回写到目标 Markdown。" },
+  { id: "governing", order: "06", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "versioning", order: "07", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
 ];
 
 async function requestJson(path, options = {}) {
@@ -471,242 +470,64 @@ function normalizeWorkflowEvents(payload) {
   const logEvents = logs
     .filter((entry) => entry.event === "workflow_step")
     .map((entry) => entry.details || {});
-  const syntheticEvents = [];
-  const realtimeLogs = logs.filter((entry) => isRealtimeFileEvent(entry.event));
-  if (realtimeLogs.length) {
-    syntheticEvents.push({
-      step_id: "realtime_saving",
-      label: "实时文件审查与 Markdown 草稿保存",
-      status: realtimeLogs.some((entry) => entry.event.endsWith("_failed")) ? "blocked" : "completed",
-      timestamp: realtimeLogs.at(-1)?.timestamp || realtimeLogs.at(-1)?.details?.event_timestamp || "",
-    });
-  }
-  return [...taskEvents, ...logEvents, ...syntheticEvents].filter((event) => event.step_id);
+  return [...taskEvents, ...logEvents].filter((event) => event.step_id);
 }
 
 function getCurrentWorkflowStep(payload, events) {
-  const current = payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "planning";
-  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const latestEvent = logs.at(-1)?.event || "";
-  if (current === "collecting" && isRealtimeFileEvent(latestEvent)) {
-    return "realtime_saving";
-  }
-  return current;
-}
-
-function isRealtimeFileEvent(event) {
-  return [
-    "query_realtime_file_reviewed",
-    "query_realtime_file_failed",
-    "media_realtime_file_reviewed",
-    "media_realtime_file_failed",
-    "realtime_file_reviewed",
-  ].includes(event);
+  return payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "blueprint_ready";
 }
 
 function renderAgentPlans(payload) {
   if (!agentPlanOutput) return;
-  const plans = payload.agent_plans || payload.task?.agent_plans || {};
-  const taskStatus = payload.task_status || payload.task?.task_status || "";
-  const planItems = buildAgentPlanItems(plans, payload);
-  const supplementDecision = payload.completeness?.supplement_decision || payload.task?.completeness?.supplement_decision || {};
-  const isEditable = taskStatus === "awaiting_plan_confirmation";
+  const generation = payload.generation_progress || payload.task?.generation_progress || {};
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
 
   if (planPanelHint) {
-    planPanelHint.textContent = isEditable
-      ? "等待确认 — 可修改或删除各项查询计划"
-      : planItems.length ? "" : "";
+    planPanelHint.textContent = queue.final_status ? `队列状态：${queue.final_status}` : "";
   }
 
-  if (!planItems.length) {
-    agentPlanOutput.innerHTML = '<div class="empty-state">暂无结构化执行计划。</div>';
+  if (!Object.keys(generation).length && !tasks.length) {
+    agentPlanOutput.innerHTML = '<div class="empty-state">暂无文件生成或查询队列状态。</div>';
     return;
   }
-
-  const supplementCard = renderSupplementDecisionCard(supplementDecision);
-  agentPlanOutput.innerHTML = `${supplementCard}${planItems
-    .map((item) => {
-      const done = item.status === "completed";
-      const active = item.status === "in_progress" || item.status === "approved";
-      const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补检索" : "待确认";
-      const targets = (item.targets || item.search_targets || []).map((target) => `<li>${escapeHtml(target)}</li>`).join("");
-      const criteria = (item.success_criteria || []).map((criterion) => `<li>${escapeHtml(criterion)}</li>`).join("");
-      const attempts = (item.attempts || []).map((attempt) => `<li>${escapeHtml(attempt.query)}：${escapeHtml(attempt.hits)} 条命中</li>`).join("");
-      const savedPaths = (item.saved_paths || []).map((path) => `<li>${escapeHtml(path)}</li>`).join("");
-      const skippedCount = (item.skipped_sources || []).length;
-      const realtimeStatus = item.realtime_status ? `<span class="realtime-status ${escapeHtml(item.realtime_status)}">${escapeHtml(formatRealtimeStatus(item.realtime_status, skippedCount))}</span>` : "";
-      const itemData = escapeHtml(JSON.stringify({
-        title: item.title || item.question || "",
-        query_or_action: item.query_or_action || item.google_query || "",
-      }));
-      const actionButtons = isEditable ? `
-        <div class="plan-card-actions">
-          <button class="plan-action-btn edit-btn" type="button" data-action="edit">编辑</button>
-          <button class="plan-action-btn delete-btn" type="button" data-action="delete">删除</button>
-        </div>` : "";
-      return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}"
-          data-agent-name="${escapeHtml(item.agent_name)}"
-          data-plan-item-id="${escapeHtml(item.plan_item_id || "")}"
-          data-plan-item="${itemData}">
-        <div class="plan-card-head">
-          <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
-          <div>
-            <strong>${escapeHtml(item.agent_name)} · ${escapeHtml(item.plan_item_id || "P")}. ${escapeHtml(item.title || item.question)}</strong>
-            <span>${escapeHtml(statusLabel)}${realtimeStatus}</span>
-          </div>
-        </div>
-        <div class="plan-query">${escapeHtml(item.query_or_action || item.google_query || "")}</div>
-        <div class="plan-lists">
-          <div><b>查询内容</b><ul>${targets || "<li>未提供</li>"}</ul></div>
-          <div><b>满足标准</b><ul>${criteria || "<li>未提供</li>"}</ul></div>
-        </div>
-        ${attempts ? `<div class="plan-attempts"><b>执行记录</b><ul>${attempts}</ul></div>` : ""}
-        ${savedPaths ? `<div class="plan-saves"><b>实时保存</b><ul>${savedPaths}</ul></div>` : ""}
-        ${actionButtons}
-      </article>`;
-    })
-    .join("")}`;
-
-  if (isEditable) {
-    attachPlanCardHandlers();
-  }
-}
-
-function renderSupplementDecisionCard(decision) {
-  if (!decision || !Array.isArray(decision.defects) || !decision.defects.length) return "";
-  const reviewedDocuments = Array.isArray(decision.reviewed_documents) ? decision.reviewed_documents : [];
-  const documentItems = reviewedDocuments.slice(0, 3).map((doc) => {
-    const title = doc.title || doc.path || "未命名文档";
-    const subdomain = doc.subdomain ? ` · ${doc.subdomain}` : "";
-    return `<li>${escapeHtml(title)}${escapeHtml(subdomain)}</li>`;
-  }).join("");
-  const defectItems = decision.defects.slice(0, 3).map((defect) => {
-    const topic = defect.topic || "未命名缺口";
-    const issue = defect.issue || "";
-    return `<li>${escapeHtml(topic)}：${escapeHtml(issue)}</li>`;
-  }).join("");
-  const summary = decision.coverage_summary || decision.reasoning || "已基于保存文档生成补充决策。";
-  return `<article class="plan-card active">
+  const summaryCard = `<article class="plan-card active">
     <div class="plan-card-head">
       <span class="checkmark" aria-hidden="true"></span>
       <div>
-        <strong>补检索分析 · 已审阅保存文档</strong>
-        <span>${escapeHtml(reviewedDocuments.length ? `已审阅 ${reviewedDocuments.length} 篇文档` : "已生成缺口判断")}</span>
+        <strong>LLM 生成进度</strong>
+        <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 文件`)}</span>
       </div>
     </div>
-    <div class="plan-query">${escapeHtml(summary)}</div>
+    <div class="plan-query">${escapeHtml(generation.current_file || "等待生成任务")}</div>
     <div class="plan-lists">
-      <div><b>审阅文档</b><ul>${documentItems || "<li>暂无记录</li>"}</ul></div>
-      <div><b>识别缺口</b><ul>${defectItems || "<li>暂无记录</li>"}</ul></div>
+      <div><b>最近保存</b><ul><li>${escapeHtml(generation.last_saved_path || "暂无")}</li></ul></div>
+      <div><b>当前轮次</b><ul><li>${escapeHtml(String(queue.current_round || 1))}</li></ul></div>
     </div>
   </article>`;
-}
-
-function attachPlanCardHandlers() {
-  agentPlanOutput.querySelectorAll("[data-action='edit']").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const card = btn.closest("[data-plan-item-id]");
-      if (!card || card.querySelector(".plan-edit-form")) return;
-      let item;
-      try { item = JSON.parse(card.dataset.planItem); } catch { item = {}; }
-      const form = document.createElement("div");
-      form.className = "plan-edit-form";
-      form.innerHTML = `
-        <label>标题</label>
-        <input type="text" name="title" value="${escapeHtml(item.title || "")}">
-        <label>查询语句</label>
-        <textarea name="query_or_action" rows="2">${escapeHtml(item.query_or_action || "")}</textarea>
-        <div class="plan-edit-actions">
-          <button type="button" data-edit-action="save">保存</button>
-          <button type="button" class="ghost-button" data-edit-action="cancel">取消</button>
-        </div>`;
-      card.appendChild(form);
-      btn.disabled = true;
-
-      form.querySelector("[data-edit-action='cancel']").addEventListener("click", () => {
-        form.remove();
-        btn.disabled = false;
-      });
-
-      form.querySelector("[data-edit-action='save']").addEventListener("click", async () => {
-        const taskId = taskIdInput.value.trim();
-        const agentName = card.dataset.agentName;
-        const planItemId = card.dataset.planItemId;
-        const title = form.querySelector("[name='title']").value.trim();
-        const queryOrAction = form.querySelector("[name='query_or_action']").value.trim();
-        form.querySelectorAll("button").forEach((b) => { b.disabled = true; });
-        try {
-          const result = await requestJson(
-            `/tasks/${encodeURIComponent(taskId)}/plan/items/${encodeURIComponent(agentName)}/${encodeURIComponent(planItemId)}`,
-            { method: "PATCH", body: JSON.stringify({ title, query_or_action: queryOrAction }) },
-          );
-          showPayload({ ...state.lastPayload, ...result });
-        } catch (error) {
-          showError(error);
-        }
-      });
-    });
-  });
-
-  agentPlanOutput.querySelectorAll("[data-action='delete']").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const card = btn.closest("[data-plan-item-id]");
-      if (!card) return;
-      const label = card.querySelector("strong")?.textContent || card.dataset.planItemId;
-      if (!window.confirm(`确认删除计划项「${label}」？`)) return;
-      const taskId = taskIdInput.value.trim();
-      const agentName = card.dataset.agentName;
-      const planItemId = card.dataset.planItemId;
-      btn.disabled = true;
-      try {
-        const result = await requestJson(
-          `/tasks/${encodeURIComponent(taskId)}/plan/items/${encodeURIComponent(agentName)}/${encodeURIComponent(planItemId)}`,
-          { method: "DELETE" },
-        );
-        showPayload({ ...state.lastPayload, ...result });
-      } catch (error) {
-        showError(error);
-        btn.disabled = false;
-      }
-    });
-  });
-}
-
-function buildAgentPlanItems(plans, payload) {
-  const items = [];
-  const successful = isSuccessfulTerminalStatus(payload.task_status || payload.task?.task_status);
-  Object.entries(plans || {}).forEach(([agentName, plan]) => {
-    (plan.plan_items || []).forEach((item) => {
-      items.push({
-        ...item,
-        status: successful ? "completed" : item.status,
-        agent_name: agentName,
-      });
-    });
-  });
-  if (successful) {
-    return dedupePlanItems(items);
-  }
-  const queryLogs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const queryItems = buildQueryPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "QueryEngine" }));
-  const mediaItems = buildMediaPlanItems(queryLogs).map((item) => ({ ...item, agent_name: "MediaEngine" }));
-  queryItems.forEach((queryItem) => {
-    const index = items.findIndex((item) => item.agent_name === "QueryEngine" && item.plan_item_id === queryItem.plan_item_id);
-    if (index >= 0) {
-      items[index] = { ...items[index], ...queryItem, title: items[index].title || queryItem.question };
-    } else {
-      items.push(queryItem);
-    }
-  });
-  mediaItems.forEach((mediaItem) => {
-    const index = items.findIndex((item) => item.agent_name === "MediaEngine" && item.plan_item_id === mediaItem.plan_item_id);
-    if (index >= 0) {
-      items[index] = { ...items[index], ...mediaItem, title: items[index].title || mediaItem.title };
-    } else {
-      items.push(mediaItem);
-    }
-  });
-  return dedupePlanItems(items);
+  const taskCards = tasks.slice(0, 16).map((item) => {
+    const done = item.status === "completed";
+    const active = item.status === "running";
+    const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补充" : "待执行";
+    const citations = (item.citations || []).map((citation) => `<li>${escapeHtml(citation.title || citation.url || "来源")}</li>`).join("");
+    const expected = (item.expected_evidence || []).map((value) => `<li>${escapeHtml(value)}</li>`).join("");
+    return `<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
+      <div class="plan-card-head">
+        <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
+        <div>
+          <strong>${escapeHtml(item.task_type || "task")} · ${escapeHtml(item.task_id || "")}</strong>
+          <span>${escapeHtml(statusLabel)}</span>
+        </div>
+      </div>
+      <div class="plan-query">${escapeHtml(item.query_text || item.claim_or_gap || "")}</div>
+      <div class="plan-lists">
+        <div><b>目标文件</b><ul><li>${escapeHtml(item.target_file_path || "")}</li></ul></div>
+        <div><b>预期补充</b><ul>${expected || "<li>未提供</li>"}</ul></div>
+      </div>
+      ${citations ? `<div class="plan-saves"><b>已收集来源</b><ul>${citations}</ul></div>` : ""}
+    </article>`;
+  }).join("");
+  agentPlanOutput.innerHTML = `${summaryCard}${taskCards}`;
 }
 
 function dedupePlanItems(items) {
@@ -898,20 +719,18 @@ function formatRealtimeStatus(status, skippedCount) {
 }
 
 function summarizePlanProgress(payload) {
-  const items = buildAgentPlanItems(payload.agent_plans || payload.task?.agent_plans || {}, payload);
-  if (!items.length) return "";
-  const completed = items.filter((item) => item.status === "completed").length;
-  const insufficient = items.filter((item) => item.status === "insufficient").length;
-  return `${completed}/${items.length} 完成${insufficient ? `，${insufficient} 个需补检索` : ""}`;
+  const generation = payload.generation_progress || payload.task?.generation_progress || {};
+  if (!Object.keys(generation).length) return "";
+  return `${generation.completed_files || 0}/${generation.total_files || 0} 文件已生成`;
 }
 
 function summarizeRealtimeSaves(payload) {
-  const logs = payload.logs || payload.execution_log || payload.task?.execution_log || [];
-  const reviewed = logs.filter((entry) => entry.event === "query_realtime_file_reviewed" || entry.event === "media_realtime_file_reviewed");
-  if (!reviewed.length) return "";
-  const savedCount = reviewed.reduce((count, entry) => count + ((entry.details?.saved_paths || []).length), 0);
-  const skippedCount = reviewed.reduce((count, entry) => count + ((entry.details?.skipped_sources || []).length), 0);
-  return `${savedCount} 个文件${skippedCount ? `，${skippedCount} 个来源跳过` : ""}`;
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  if (!tasks.length) return "";
+  const completed = tasks.filter((task) => task.status === "completed").length;
+  const pending = tasks.filter((task) => task.status === "pending" || task.status === "running").length;
+  return `${completed}/${tasks.length} 任务完成${pending ? `，${pending} 个处理中` : ""}`;
 }
 
 function summarizeTokenUsageLabel(payload) {
@@ -1185,8 +1004,6 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
     const route = {
       list: ["/tasks", "GET"],
       get: [`/tasks/${encodeURIComponent(taskId)}`, "GET"],
-      plan: [`/tasks/${encodeURIComponent(taskId)}/plan`, "GET"],
-      confirmPlan: [`/tasks/${encodeURIComponent(taskId)}/plan/confirm`, "POST"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
@@ -1198,7 +1015,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if ((action === "resume" || action === "confirmPlan") && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
+      if (action === "resume" && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
         startTaskPolling(activeTaskId);
       }
     } catch (error) {

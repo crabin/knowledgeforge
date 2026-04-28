@@ -28,10 +28,10 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "实时流程图" in body
     assert "workflow-x6" in body
     assert "https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" in body
-    assert "三路 Agent 执行计划" in body
+    assert "生成与查询队列状态" in body
     assert "plan-full-panel" in body
     assert "trace-grid" in body
-    assert "确认计划" in body
+    assert "LLM 生成" in body
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body

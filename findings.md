@@ -112,6 +112,12 @@
 - CompletenessEvaluator 和 QualityChecker 现在都要求至少存在 `high` 或 `medium` 可信来源；只有 unknown/low 来源会触发 `no_authoritative_source` / `source_quality_failed` 并进入 research flow。
 - Markdown Writer 的结论应反映当前门禁状态：`pass` 才能表达可进入治理流程，`supplement_required` 必须明确是草稿并提示补检索。
 
+## 串行文件生成与域级队列重构结论
+- 如果把 `EngineRunResult` 这类运行时对象直接写进领域级队列 JSON，会在保存队列时触发序列化失败；队列协议必须只保留纯 JSON 字段，运行结果对象应只存在于 `agent_outputs`。
+- 知识文件数量很多时，若每个文件都默认生成查询任务，会让串行流程退化成非常重的长任务；更稳的方案是以蓝图中的 `required_query_tasks` 作为显式开关，只给真正需要依据闭环的文件建队列任务。
+- 即便整体转为“文件级补全”流程，继续在 fill pass 后保留 mixed 汇总文档，能最大程度兼容现有 post-storage / quality / versioning 链路，避免为了流程重构同时打碎治理链。
+- 异步 UI 轮询并不需要继续理解旧的三路计划；只要稳定暴露 `generation_progress`、`task_queue_snapshot` 和新的 workflow step，就能完整呈现“生成了什么、还差哪些依据、当前在执行哪一个任务”。
+
 ## QueryEngine 查询计划优化结论
 - QueryEngine 原先已有 `SearchPlan` 和一次反思补检索，但计划更像内部 query 列表；现在显式建模为 `SearchQuestion`，让“要问什么、用什么 Google 风格查询、要拿哪些信息、什么算满足、失败怎么补查”都可审计。
 - 初始检索按 `SearchPlan.questions` 顺序逐项执行，`search_history` 记录 question、query、expected_info、hits、status 和 source_type，后续反思能绑定到具体不足问题。

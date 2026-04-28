@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Knowledge Engineering Console</p>
         <h1>KnowledgeForge 功能工作台</h1>
-        <p class="lead">从领域输入、交互澄清、并行采集到质量回流、版本冻结和研报生成的一站式演示面板。</p>
+        <p class="lead">从领域输入、串行文件骨架生成、域级查询队列到质量回流、版本冻结和研报生成的一站式演示面板。</p>
       </div>
       <div class="status-stack" aria-label="系统状态">
         <div class="status-pill">
@@ -41,43 +41,38 @@
           <div id="workflow-x6" class="workflow-x6" aria-label="实时流程图"></div>
         </div>
         <div class="flow-grid" id="workflow-map">
-          <article class="flow-step active" data-step-id="planning">
+          <article class="flow-step active" data-step-id="blueprint_ready">
             <span>01</span>
-            <h3>计划生成</h3>
-            <p>三路 Agent 基于输入上下文先生成执行计划。</p>
+            <h3>蓝图准备</h3>
+            <p>根据固定知识库模板准备目标文件清单和保存路径。</p>
           </article>
-          <article class="flow-step" data-step-id="awaiting_confirmation">
+          <article class="flow-step" data-step-id="llm_generating">
             <span>02</span>
-            <h3>用户确认</h3>
-            <p>前端展示 Insight、Query、Media 计划，确认后再执行。</p>
+            <h3>LLM 生成</h3>
+            <p>严格串行地一次生成一个知识文件骨架，并同步写入查询任务。</p>
           </article>
-          <article class="flow-step" data-step-id="collecting">
+          <article class="flow-step" data-step-id="query_queue_running">
             <span>03</span>
-            <h3>并行采集</h3>
-            <p>三路能力并行补充内部线索、权威事实与媒体视角。</p>
+            <h3>查询队列</h3>
+            <p>按队列一次执行一个 Query / Media 任务，结果先写入领域级 JSON。</p>
           </article>
-          <article class="flow-step" data-step-id="realtime_saving">
+          <article class="flow-step" data-step-id="round_validation">
             <span>04</span>
-            <h3>实时沉淀</h3>
-            <p>Query / Media 每个合格计划项立即审查并保存 Markdown 草稿。</p>
+            <h3>轮次验证</h3>
+            <p>每轮查询结束后评估完整性，必要时继续追加下一轮任务。</p>
           </article>
-          <article class="flow-step" data-step-id="evaluating">
+          <article class="flow-step" data-step-id="evidence_filling">
             <span>05</span>
-            <h3>完整性评估</h3>
-            <p>检查核心子主题、可信来源、信息空洞、冲突与时效性。</p>
-          </article>
-          <article class="flow-step" data-step-id="writing">
-            <span>06</span>
-            <h3>Markdown 落盘</h3>
-            <p>生成最终综合文档并保留实时保存索引。</p>
+            <h3>统一回填</h3>
+            <p>所有依据齐备后统一写回目标 Markdown 和文件合同状态。</p>
           </article>
           <article class="flow-step" data-step-id="governing">
-            <span>07</span>
+            <span>06</span>
             <h3>治理质检</h3>
             <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
           </article>
           <article class="flow-step" data-step-id="versioning">
-            <span>08</span>
+            <span>07</span>
             <h3>版本与研报</h3>
             <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
           </article>
@@ -140,8 +135,6 @@
             <div class="button-grid">
               <button type="button" data-task-action="list">查看任务列表</button>
               <button type="button" data-task-action="get">查询任务</button>
-              <button type="button" data-task-action="plan">查看计划</button>
-              <button type="button" data-task-action="confirmPlan">确认计划</button>
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
               <button type="button" data-task-action="report">生成研报</button>
@@ -176,11 +169,11 @@
         </div>
         <section class="plan-full-panel trace-panel" aria-labelledby="plan-panel-title">
           <div class="plan-panel-head">
-            <h3 id="plan-panel-title">三路 Agent 执行计划</h3>
+            <h3 id="plan-panel-title">生成与查询队列状态</h3>
             <span class="plan-panel-hint" id="plan-panel-hint"></span>
           </div>
           <div id="agent-plan-output" class="plan-full-list">
-            <div class="empty-state">任务启动后会显示三路计划，确认后实时更新执行状态。</div>
+            <div class="empty-state">任务启动后会显示文件生成进度和查询队列状态。</div>
           </div>
         </section>
         <div class="trace-grid" aria-label="执行日志与任务列表">

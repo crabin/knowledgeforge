@@ -68,6 +68,8 @@ class RequestContext:
     knowledge_blueprint: list[dict[str, Any]] = field(default_factory=list)
     required_files: list[str] = field(default_factory=list)
     completion_mode: str = "file_level"
+    generation_queue_path: str = ""
+    prompt_profile_version: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -249,6 +251,37 @@ class EvidenceResolution:
     citations: list[dict[str, str]]
     remaining_gaps: list[str]
     task_status: FileCompletionState | Literal["completed", "insufficient"] = "completed"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class DomainTaskQueueItem:
+    task_id: str
+    task_type: Literal["query", "media"]
+    target_file_path: str
+    target_section: str
+    claim_or_gap: str
+    query_text: str
+    expected_evidence: list[str]
+    status: str = "pending"
+    result_summary: str = ""
+    citations: list[dict[str, str]] = field(default_factory=list)
+    attempts: int = 0
+    round_number: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RoundValidationResult:
+    is_complete: bool
+    missing_evidence: list[str]
+    new_tasks: list[dict[str, Any]]
+    reasoning: str
+    file_status_updates: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

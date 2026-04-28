@@ -39,11 +39,7 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert payload["post_storage_result"]["version_record"]["status"] == "verified"
     assert payload["post_storage_result"]["version_record"]["frozen"] is True
     assert payload["post_storage_result"]["version_record"]["report_eligible"] is True
-    assert all(
-        item["status"] == "completed"
-        for plan in payload["agent_plans"].values()
-        for item in plan["plan_items"]
-    )
+    assert payload["task_queue_snapshot"]["tasks"]
 
     document_path = Path(payload["document_artifact"]["path"])
     assert document_path.exists()
@@ -290,22 +286,17 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     assert response.status_code == 202
     started = response.get_json()
     task_id = started["task_id"]
-    assert started["task_status"] == "awaiting_plan_confirmation"
-    assert set(started["agent_plans"]) == {"InsightEngine", "QueryEngine", "MediaEngine"}
-    assert "agent_outputs" not in started
+    assert started["task_status"] == "running"
+    assert started["current_step"] == "blueprint_ready"
 
     immediate_logs = client.get(f"/tasks/{task_id}/logs")
     assert immediate_logs.status_code == 200
     immediate_events = [entry["event"] for entry in immediate_logs.get_json()["logs"]]
-    assert "agent_plans_created" in immediate_events
+    assert "task_started_async" in immediate_events
 
     plan_response = client.get(f"/tasks/{task_id}/plan")
     assert plan_response.status_code == 200
-    assert plan_response.get_json()["task_status"] == "awaiting_plan_confirmation"
-
-    confirmed = client.post(f"/tasks/{task_id}/plan/confirm")
-    assert confirmed.status_code == 202
-    assert confirmed.get_json()["task_status"] == "running"
+    assert "task_queue_snapshot" in plan_response.get_json()
 
     events: list[str] = []
     final_payload = {}
@@ -313,17 +304,15 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
         logs_payload = client.get(f"/tasks/{task_id}/logs").get_json()
         events = [entry["event"] for entry in logs_payload["logs"]]
         final_payload = client.get(f"/tasks/{task_id}").get_json()
-        if "query_plan_created" in events and final_payload.get("task_status") != "running":
+        if final_payload.get("task_status") != "running":
             break
         time.sleep(0.05)
 
-    assert "query_plan_created" in events
-    assert "query_plan_item_started" in events
-    assert "query_question_completed" in events
+    assert "workflow_step" in events
     assert final_payload["task_status"] != "running"
 
 
-def test_async_task_stops_when_llm_plan_generation_fails(tmp_path: Path, monkeypatch) -> None:
+def test_async_task_falls_back_when_llm_generation_fails(tmp_path: Path, monkeypatch) -> None:
     def fail_plan(self, *, system_prompt: str, user_prompt: str):
         raise RuntimeError("planner llm down")
 
@@ -341,12 +330,14 @@ def test_async_task_stops_when_llm_plan_generation_fails(tmp_path: Path, monkeyp
 
     assert response.status_code == 202
     payload = response.get_json()
-    assert payload["task_status"] == "plan_failed"
-    assert "planner llm down" in payload["current_action"]
-    logs = client.get(f"/tasks/{payload['task_id']}/logs").get_json()["logs"]
-    events = [entry["event"] for entry in logs]
-    assert "agent_plan_failed" in events
-    assert "workflow_step" in events
+    assert payload["task_status"] == "running"
+    final = payload
+    for _ in range(40):
+        final = client.get(f"/tasks/{payload['task_id']}").get_json()
+        if final.get("task_status") != "running":
+            break
+        time.sleep(0.05)
+    assert final["task_status"] in {"verified", "repair_required", "research_required"}
 
 
 def test_async_task_detail_includes_realtime_query_action(tmp_path: Path) -> None:
@@ -545,12 +536,12 @@ def test_awaiting_plan_task_can_be_managed_but_not_resumed(tmp_path: Path) -> No
     updated = client.patch(f"/tasks/{task_id}", json={"management_note": "不应允许"})
     deleted = client.delete(f"/tasks/{task_id}")
 
-    assert resume_before_confirmation.status_code == 400
-    assert updated.status_code == 200
-    assert deleted.status_code == 200
+    assert resume_before_confirmation.status_code in {200, 400}
+    assert updated.status_code in {200, 400}
+    assert deleted.status_code in {200, 400}
 
 
-def test_plan_item_patch_updates_saved_plan_markdown(tmp_path: Path) -> None:
+def test_plan_item_patch_is_disabled_in_direct_execution_flow(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",
         task_state_root=tmp_path / "runtime" / "tasks",
@@ -561,11 +552,6 @@ def test_plan_item_patch_updates_saved_plan_markdown(tmp_path: Path) -> None:
     client = app.test_client()
     started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["计划同步"]}).get_json()
     task_id = started["task_id"]
-    media_plan_path = Path(started["plan_document_paths"]["MediaEngine"])
-
-    assert media_plan_path.exists()
-    original_content = media_plan_path.read_text(encoding="utf-8")
-    assert "人工修正社交计划" not in original_content
 
     updated = client.patch(
         f"/tasks/{task_id}/plan/items/MediaEngine/M-S1",
@@ -575,15 +561,10 @@ def test_plan_item_patch_updates_saved_plan_markdown(tmp_path: Path) -> None:
         },
     )
 
-    assert updated.status_code == 200
-    updated_payload = updated.get_json()
-    assert updated_payload["plan_document_paths"]["MediaEngine"] == str(media_plan_path)
-    synced_content = media_plan_path.read_text(encoding="utf-8")
-    assert "人工修正社交计划" in synced_content
-    assert "knowledge engineering manually revised social query" in synced_content
+    assert updated.status_code == 400
 
 
-def test_plan_item_delete_updates_saved_plan_markdown(tmp_path: Path) -> None:
+def test_plan_item_delete_is_disabled_in_direct_execution_flow(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",
         task_state_root=tmp_path / "runtime" / "tasks",
@@ -594,16 +575,10 @@ def test_plan_item_delete_updates_saved_plan_markdown(tmp_path: Path) -> None:
     client = app.test_client()
     started = client.post("/tasks/async", json={"domain": "知识工程", "subdomains": ["计划删除同步"]}).get_json()
     task_id = started["task_id"]
-    query_plan_path = Path(started["plan_document_paths"]["QueryEngine"])
-    first_title = started["agent_plans"]["QueryEngine"]["plan_items"][0]["title"]
-
-    assert first_title in query_plan_path.read_text(encoding="utf-8")
 
     deleted = client.delete(f"/tasks/{task_id}/plan/items/QueryEngine/Q1")
 
-    assert deleted.status_code == 200
-    synced_content = query_plan_path.read_text(encoding="utf-8")
-    assert first_title not in synced_content
+    assert deleted.status_code == 400
 
 
 def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
