@@ -41,6 +41,8 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert payload["post_storage_result"]["version_record"]["frozen"] is True
     assert payload["post_storage_result"]["version_record"]["report_eligible"] is True
     assert payload["task_queue_snapshot"]["tasks"]
+    assert payload["structure_graph"]["nodes"]
+    assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
 
     document_path = Path(payload["document_artifact"]["path"])
     assert document_path.exists()
@@ -288,7 +290,7 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     started = response.get_json()
     task_id = started["task_id"]
     assert started["task_status"] == "running"
-    assert started["current_step"] == "blueprint_ready"
+    assert started["current_step"] == "structure_graph_planning"
 
     immediate_logs = client.get(f"/tasks/{task_id}/logs")
     assert immediate_logs.status_code == 200

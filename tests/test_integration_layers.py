@@ -164,9 +164,28 @@ def test_neo4j_path_mapper_uses_client_when_available() -> None:
         entities=[{"name": "LangGraph", "type": "Tool"}],
         relations=[],
     )
+    context = RequestContext(
+        domain="知识工程",
+        subdomains=["工作流编排"],
+        time_window="近 12 个月",
+        focus_points=[],
+        constraints=[],
+        initial_strategy=[],
+        structure_graph={
+            "root_node_id": "root",
+            "nodes": [
+                {"node_id": "root", "title": "知识工程", "node_type": "domain", "relative_path": "README.md"},
+                {"node_id": "workflow", "title": "工作流编排", "node_type": "subtopic", "relative_path": "工作流编排/README.md"},
+            ],
+            "edges": [{"from_node_id": "root", "edge_type": "CONTAINS", "to_node_id": "workflow"}],
+        },
+    )
 
-    result = mapper.sync(artifact, extraction)
+    result = mapper.sync(artifact, extraction, context=context)
 
     assert result.status == "passed"
     assert client.calls
     assert client.calls[0]["article_id"] == "article-123"
+    assert client.calls[0]["structure_graph"]["nodes"]
+    assert any(node["id"] == "workflow" for node in result.nodes)
+    assert any(rel["type"] == "CONTAINS" and rel["to"] == "workflow" for rel in result.relationships)

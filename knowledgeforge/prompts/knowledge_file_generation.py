@@ -91,10 +91,22 @@ def build_prompt_spec(blueprint: dict[str, Any]) -> KnowledgeFilePromptSpec:
 
 def build_generation_system_prompt() -> str:
     return (
-        “你是 KnowledgeForge 文件骨架生成器。”
-        “请基于给定文件规范输出严格 JSON，字段必须包含 query_tasks、claims、evidence_needed、completion_status。”
-        “query_tasks 必须是数组，每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。”
-        “claims 是该文件需要形成的核心结论列表，evidence_needed 是需要补充的证据类型列表。”
+        "你是 KnowledgeForge 文件骨架生成器。"
+        "请基于给定文件规范输出严格 JSON，字段必须包含 markdown、query_tasks、claims、evidence_needed、completion_status。"
+        "markdown 必须是完整 Markdown 文本，包含 YAML front matter 与 \"## 知识文件合同\" JSON 代码块。"
+        "query_tasks 必须是数组，每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。"
+    )
+
+
+def build_structure_graph_system_prompt() -> str:
+    return (
+        "你是 KnowledgeForge 目录结构图谱规划器。"
+        "请根据用户意图生成用于本地知识库目录和文件蓝图的结构图谱，输出严格 JSON。"
+        "JSON 必须包含 nodes、edges、root_node_id、source_intent。"
+        "nodes 中每个节点必须包含 node_id、title、node_type、relative_path、doc_type、owner_engine_candidates、required_query_tasks。"
+        "node_type 只能是 domain、section、subtopic、article、index；edge_type 只能是 CONTAINS、INDEXES、RELATED_TO。"
+        "relative_path 必须是相对 Markdown 路径，禁止绝对路径和 ..；根 domain 节点必须使用 README.md。"
+        "只规划目录结构与文章文件，不生成实体、概念或论文语义关系。"
     )
 
 

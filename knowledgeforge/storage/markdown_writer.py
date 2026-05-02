@@ -16,7 +16,7 @@ from knowledgeforge.models import (
 )
 from knowledgeforge.storage.realtime_reviewer import RealtimeFileReviewer
 from knowledgeforge.utils.file_contract import parse_contract_block, render_contract_block, replace_contract_block
-from knowledgeforge.utils.knowledge_tree import module_directory, module_labels_by_id, plan_path_for_role
+from knowledgeforge.utils.knowledge_tree import module_directory
 from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment, slugify_filename
 from knowledgeforge.utils.time import now_iso, today_compact
 
@@ -167,7 +167,7 @@ class MarkdownKnowledgeWriter:
         generated_files = [item["file_path"] for item in self.materialize_knowledge_base(context=context, round_number=round_number)]
         self._apply_output_artifacts(context, outputs)
         subdomain = context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用")
-        subdomain_dir = domain_dir / "02_core_topics" / sanitize_path_segment(subdomain, "general")
+        subdomain_dir = self._default_article_directory(context, domain_dir, subdomain)
         ensure_directory(subdomain_dir)
 
         document_id = f"article-{uuid.uuid4().hex[:12]}"
@@ -234,6 +234,23 @@ class MarkdownKnowledgeWriter:
                 for item in context.knowledge_blueprint
             ],
         )
+
+    @staticmethod
+    def _default_article_directory(context: RequestContext, domain_dir: Path, subdomain: str) -> Path:
+        for blueprint in context.knowledge_blueprint:
+            if str(blueprint.get("subdomain", "")) != subdomain:
+                continue
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            candidate = domain_dir / relative_path
+            if candidate.name not in {"README.md", "index.md"}:
+                return candidate.parent
+        for blueprint in context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if relative_path and str(blueprint.get("doc_role", "")) not in {"domain_overview", "domain_index"}:
+                return (domain_dir / relative_path).parent
+        return domain_dir / sanitize_path_segment(subdomain, "general")
 
     def _render_blueprint_skeleton(
         self,
@@ -997,42 +1014,31 @@ class MarkdownKnowledgeWriter:
         if not readme_path.exists():
             readme_path.write_text(self._render_domain_readme(context, outputs, domain_dir), encoding="utf-8")
         paths.append(readme_path.as_posix())
-        domain_index_path = domain_dir / "index.md"
-        if not domain_index_path.exists():
-            domain_index_path.write_text(RealtimeFileReviewer.render_domain_navigation(context, domain_dir), encoding="utf-8")
-        paths.append(domain_index_path.as_posix())
-        for module in context.knowledge_modules:
-            module_dir = domain_dir / module["directory"]
-            ensure_directory(module_dir)
-            module_readme = module_dir / "README.md"
-            module_index = module_dir / "index.md"
-            if not module_readme.exists():
-                module_readme.write_text(
-                    RealtimeFileReviewer.render_module_overview(context, module["module_id"], module_dir),
+        seen = {readme_path.as_posix()}
+        for target in context.navigation_targets:
+            relative_path = str(target.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            target_path = domain_dir / relative_path
+            ensure_directory(target_path.parent)
+            if not target_path.exists() and target_path.name in {"README.md", "index.md"}:
+                title = str(target.get("title", target_path.stem))
+                target_path.write_text(
+                    "\n".join(
+                        [
+                            f"# {title}",
+                            "",
+                            "## 目录说明",
+                            "",
+                            f"该文件由目录结构图谱规划生成，用于导航 {context.domain} 的本地知识文档。",
+                            "",
+                        ]
+                    ),
                     encoding="utf-8",
                 )
-            if not module_index.exists():
-                module_index.write_text(
-                    RealtimeFileReviewer.render_module_index(context, module["module_id"], module_dir),
-                    encoding="utf-8",
-                )
-            paths.extend([module_readme.as_posix(), module_index.as_posix()])
-        for topic in (context.core_topics or context.subdomains):
-            topic_dir = domain_dir / "02_core_topics" / sanitize_path_segment(topic, "topic")
-            ensure_directory(topic_dir)
-            topic_readme = topic_dir / "README.md"
-            topic_index = topic_dir / "index.md"
-            if not topic_readme.exists():
-                topic_readme.write_text(
-                    RealtimeFileReviewer.render_subdomain_overview(context, topic_dir, topic),
-                    encoding="utf-8",
-                )
-            if not topic_index.exists():
-                topic_index.write_text(
-                    RealtimeFileReviewer.render_subdomain_index(context, topic_dir, topic),
-                    encoding="utf-8",
-                )
-            paths.extend([topic_readme.as_posix(), topic_index.as_posix()])
+            if target_path.exists() and target_path.as_posix() not in seen:
+                paths.append(target_path.as_posix())
+                seen.add(target_path.as_posix())
         return paths
 
     @staticmethod

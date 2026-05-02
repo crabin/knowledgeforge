@@ -29,6 +29,7 @@ class WorkflowState(TypedDict, total=False):
     validation_round: int
     fill_progress: dict
     workflow_events: list[WorkflowStepEvent]
+    structure_graph: dict
     current_step: str
     current_action: str
     plan_approved_at: str

@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-02
+
+- Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.
+- Added dynamic structure graph normalization, fallback graph generation, path validation, blueprint derivation, and Neo4j structure graph syncing.
+- Updated workflow/dashboard observability for `structure_graph_planning` and `structure_graph_ready`.
+- Verification: `PYTHONPATH=. pytest` passed with 146 tests.
+- Follow-up: none currently required.
+
 ## 2026-04-27
 
 - 完成“文件级知识库生成-查询-补全”第一版落地。

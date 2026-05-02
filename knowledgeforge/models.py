@@ -65,6 +65,7 @@ class RequestContext:
     core_topics: list[str] = field(default_factory=list)
     structure_mode: str = "layered_knowledge_tree"
     navigation_targets: list[dict[str, str]] = field(default_factory=list)
+    structure_graph: dict[str, Any] = field(default_factory=dict)
     knowledge_blueprint: list[dict[str, Any]] = field(default_factory=list)
     required_files: list[str] = field(default_factory=list)
     completion_mode: str = "file_level"
@@ -225,6 +226,56 @@ class KnowledgeFileBlueprint:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+StructureNodeType = Literal["domain", "section", "subtopic", "article", "index"]
+StructureEdgeType = Literal["CONTAINS", "INDEXES", "RELATED_TO"]
+
+
+@dataclass(slots=True)
+class KnowledgeStructureNode:
+    node_id: str
+    title: str
+    node_type: StructureNodeType
+    relative_path: str
+    description: str = ""
+    parent_node_id: str = ""
+    doc_type: str = "article"
+    owner_engine_candidates: list[str] = field(default_factory=list)
+    required_query_tasks: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class KnowledgeStructureEdge:
+    from_node_id: str
+    edge_type: StructureEdgeType
+    to_node_id: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class KnowledgeStructureGraph:
+    nodes: list[KnowledgeStructureNode]
+    edges: list[KnowledgeStructureEdge]
+    root_node_id: str
+    source_intent: str
+    generated_at: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "nodes": [node.to_dict() for node in self.nodes],
+            "edges": [edge.to_dict() for edge in self.edges],
+            "root_node_id": self.root_node_id,
+            "source_intent": self.source_intent,
+            "generated_at": self.generated_at,
+        }
 
 
 @dataclass(slots=True)

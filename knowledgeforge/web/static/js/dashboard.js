@@ -26,13 +26,15 @@ const workflowMap = document.querySelector("#workflow-map");
 const workflowX6Container = document.querySelector("#workflow-x6");
 
 const workflowSteps = [
-  { id: "blueprint_ready", order: "01", title: "蓝图准备", description: "根据固定模板准备目标文件清单与目录结构。" },
-  { id: "llm_generating", order: "02", title: "LLM 生成", description: "严格串行地生成单个知识文件骨架，并提取查询任务。" },
-  { id: "query_queue_running", order: "03", title: "查询队列", description: "按队列一次执行一个 Query / Media 任务。" },
-  { id: "round_validation", order: "04", title: "轮次验证", description: "每轮查询结束后评估是否完整或需要补充。" },
-  { id: "evidence_filling", order: "05", title: "统一回填", description: "全部任务完成后统一把依据回写到目标 Markdown。" },
-  { id: "governing", order: "06", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "versioning", order: "07", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+  { id: "structure_graph_planning", order: "01", title: "图谱规划", description: "根据用户意图生成目录结构图谱。" },
+  { id: "structure_graph_ready", order: "02", title: "图谱就绪", description: "从结构图谱派生目录、文件蓝图和导航关系。" },
+  { id: "blueprint_ready", order: "03", title: "蓝图准备", description: "准备目标文件清单与目录结构。" },
+  { id: "llm_generating", order: "04", title: "LLM 生成", description: "严格串行地生成单个知识文件骨架，并提取查询任务。" },
+  { id: "query_queue_running", order: "05", title: "查询队列", description: "按队列一次执行一个 Query / Media 任务。" },
+  { id: "round_validation", order: "06", title: "轮次验证", description: "每轮查询结束后评估是否完整或需要补充。" },
+  { id: "evidence_filling", order: "07", title: "统一回填", description: "全部任务完成后统一把依据回写到目标 Markdown。" },
+  { id: "governing", order: "08", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "versioning", order: "09", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
 ];
 
 async function requestJson(path, options = {}) {

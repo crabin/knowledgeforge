@@ -29,7 +29,7 @@ class PostStoragePipeline:
         outputs: dict[str, EngineRunResult],
     ) -> PostStorageResult:
         extraction = self._extractor.extract(artifact)
-        graph_sync = self._graph_mapper.sync(artifact, extraction)
+        graph_sync = self._graph_mapper.sync(artifact, extraction, context=context)
         if graph_sync.status == "failed" and self._strict_graph_sync:
             return PostStorageResult(
                 extraction=extraction,

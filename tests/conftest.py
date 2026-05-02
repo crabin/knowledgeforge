@@ -38,6 +38,60 @@ def fake_openai_compatible_chat(monkeypatch):
                 "search_terms": [normalized],
                 "reasoning": "测试 LLM 术语归一化。",
             }
+        if "目录结构图谱规划器" in system_prompt:
+            payload = json.loads(user_prompt)
+            domain = payload.get("domain", "知识工程")
+            subdomains = payload.get("subdomains", []) or ["基础概念", "核心方法"]
+            nodes = [
+                {
+                    "node_id": "domain-root",
+                    "title": f"{domain} Overview",
+                    "node_type": "domain",
+                    "relative_path": "README.md",
+                    "doc_type": "summary",
+                    "owner_engine_candidates": ["InsightEngine"],
+                    "required_query_tasks": 0,
+                }
+            ]
+            edges = []
+            for index, topic in enumerate(subdomains[:3], start=1):
+                topic_id = f"topic-{index}"
+                nodes.extend(
+                    [
+                        {
+                            "node_id": topic_id,
+                            "title": topic,
+                            "node_type": "subtopic",
+                            "parent_node_id": "domain-root",
+                            "relative_path": f"{topic}/README.md",
+                            "doc_type": "summary",
+                            "owner_engine_candidates": ["InsightEngine", "QueryEngine"],
+                            "required_query_tasks": 1,
+                        },
+                        {
+                            "node_id": f"{topic_id}-overview",
+                            "title": f"{topic} 概览",
+                            "node_type": "article",
+                            "parent_node_id": topic_id,
+                            "relative_path": f"{topic}/overview.md",
+                            "doc_type": "article",
+                            "owner_engine_candidates": ["QueryEngine", "InsightEngine"],
+                            "required_query_tasks": 1,
+                        },
+                    ]
+                )
+                edges.extend(
+                    [
+                        {"from_node_id": "domain-root", "edge_type": "CONTAINS", "to_node_id": topic_id},
+                        {"from_node_id": topic_id, "edge_type": "CONTAINS", "to_node_id": f"{topic_id}-overview"},
+                    ]
+                )
+            return {
+                "root_node_id": "domain-root",
+                "source_intent": payload.get("original_input", domain),
+                "nodes": nodes,
+                "edges": edges,
+            }
         if "InsightEngine" in system_prompt:
             payload = json.loads(user_prompt)
             domain = payload.get("domain", "知识工程")

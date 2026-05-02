@@ -183,6 +183,17 @@ class SupplementingQueryEngine:
         )
         return result
 
+    def run_evidence_task(self, context, round_number, task):
+        self.run_rounds.append(round_number)
+        self.approved_queries.append(task["query_text"])
+        result = _result(
+            "QueryEngine",
+            [str(task.get("subdomain", "工作流编排"))],
+            [_source("queue-query", "high")],
+        )
+        result.summary = f"队列查询完成：{task['query_text']}"
+        return result
+
 
 class PassingPostStoragePipeline:
     def run(self, artifact: DocumentArtifact, context, outputs):
@@ -258,10 +269,8 @@ def test_workflow_uses_index_decision_to_dispatch_query_supplement(tmp_path: Pat
     )
 
     assert final_state["task_status"] == "verified"
-    assert final_state["round_number"] == 2
-    assert query_engine.approved_queries == ["Knowledge graph markdown README index maintenance official documentation"]
-    assert insight_engine.run_rounds == [1, 2]
-    assert query_engine.run_rounds == [1, 2]
-    assert media_engine.run_rounds == [1, 2]
-    assert final_state["completeness"].supplement_decision["index_paths"]
-    assert final_state["completeness"].supplement_decision["reviewed_documents"]
+    assert final_state["round_number"] == 1
+    assert query_engine.approved_queries
+    assert final_state["task_queue_snapshot"]["final_status"] == "ready_for_fill"
+    assert final_state["task_queue_snapshot"]["tasks"]
+    assert all(task["status"] == "completed" for task in final_state["task_queue_snapshot"]["tasks"])

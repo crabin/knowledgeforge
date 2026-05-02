@@ -30,13 +30,55 @@ from knowledgeforge.prompts.knowledge_file_generation import (
     PROMPT_PROFILE_VERSION,
     build_generation_system_prompt,
     build_prompt_spec,
+    build_structure_graph_system_prompt,
     build_validation_system_prompt,
 )
 from knowledgeforge.runtime.domain_task_queue_store import DomainTaskQueueStore
 from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
 from knowledgeforge.utils.file_contract import parse_contract_block, render_contract_block, replace_contract_block
 from knowledgeforge.utils.paths import sanitize_path_segment
+from knowledgeforge.utils.structure_graph import (
+    build_fallback_structure_graph,
+    derive_context_from_structure_graph,
+    normalize_structure_graph_payload,
+    structure_graph_summary,
+)
 from knowledgeforge.utils.time import now_iso
+
+
+def _normalize_contract_items(items: Any) -> list[Any]:
+    """保留 LLM 输出的结构：dict 原样保留，字符串去空白后保留，其他空值丢弃。"""
+    if not isinstance(items, list):
+        return []
+    normalized: list[Any] = []
+    for item in items:
+        if isinstance(item, dict):
+            if item:
+                normalized.append(item)
+        elif isinstance(item, str):
+            text = item.strip()
+            if text:
+                normalized.append(text)
+        elif item is not None:
+            text = str(item).strip()
+            if text:
+                normalized.append(text)
+    return normalized
+
+
+def _render_contract_item(item: Any) -> str:
+    """把 contract 条目（可能是 dict 或字符串）转换成 Markdown 列表里的人类可读文本。"""
+    if isinstance(item, dict):
+        for key in ("claim", "text", "description", "content", "title"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                claim_id = item.get("claim_id") or item.get("id")
+                section = item.get("section")
+                prefix_parts = [str(p) for p in (claim_id, section) if p]
+                prefix = f"[{' · '.join(prefix_parts)}] " if prefix_parts else ""
+                return f"{prefix}{value.strip()}"
+        return json.dumps(item, ensure_ascii=False)
+    return str(item)
 
 
 class KnowledgeGraphWorkflow:
@@ -74,12 +116,14 @@ class KnowledgeGraphWorkflow:
 
     def _build_graph(self):
         graph = StateGraph(WorkflowState)
+        graph.add_node("generate_structure_graph", self._generate_structure_graph)
         graph.add_node("generate_files", self._generate_files)
         graph.add_node("run_query_queue", self._run_query_queue)
         graph.add_node("validate_round", self._validate_round)
         graph.add_node("fill_evidence", self._fill_evidence)
         graph.add_node("run_post_storage", self._run_post_storage)
-        graph.set_entry_point("generate_files")
+        graph.set_entry_point("generate_structure_graph")
+        graph.add_edge("generate_structure_graph", "generate_files")
         graph.add_edge("generate_files", "run_query_queue")
         graph.add_edge("run_query_queue", "validate_round")
         graph.add_conditional_edges(
@@ -94,9 +138,85 @@ class KnowledgeGraphWorkflow:
         graph.add_edge("run_post_storage", END)
         return graph.compile()
 
+    def _generate_structure_graph(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        self._emit_workflow_event(state, "structure_graph_planning", "开始生成目录结构图谱", "active")
+        chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
+        payload: dict[str, Any] = {}
+        if chat_client is not None:
+            try:
+                payload = chat_client.complete_json(
+                    system_prompt=build_structure_graph_system_prompt(),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": context.domain,
+                            "normalized_domain": context.normalized_domain,
+                            "original_input": context.original_input,
+                            "subdomains": context.subdomains,
+                            "focus_points": context.focus_points,
+                            "constraints": context.constraints,
+                            "time_window": context.time_window,
+                            "output_language": context.output_language,
+                            "search_terms": context.search_terms,
+                            "clarification_summary": context.clarification_summary,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("Structure graph generation failed for %s: %s", context.domain, exc)
+                payload = {}
+        if payload:
+            structure_graph = normalize_structure_graph_payload(
+                payload=payload,
+                domain=context.domain,
+                subdomains=context.subdomains,
+                focus_points=context.focus_points,
+                source_intent=context.original_input or context.domain,
+            )
+        else:
+            structure_graph = build_fallback_structure_graph(
+                domain=context.domain,
+                subdomains=context.subdomains,
+                source_intent=context.original_input or context.domain,
+            )
+        derived_context = derive_context_from_structure_graph(graph=structure_graph, domain=context.domain)
+        context.structure_graph = structure_graph.to_dict()
+        context.structure_mode = str(derived_context["structure_mode"])
+        context.knowledge_modules = derived_context["knowledge_modules"]
+        context.core_topics = derived_context["core_topics"] or context.core_topics
+        context.navigation_targets = derived_context["navigation_targets"]
+        context.knowledge_blueprint = derived_context["knowledge_blueprint"]
+        context.required_files = derived_context["required_files"]
+        summary = structure_graph_summary(structure_graph)
+        updates = {
+            "request_context": context,
+            "structure_graph": structure_graph.to_dict(),
+            "task_status": "running",
+            "current_step": "structure_graph_ready",
+            "current_action": f"目录结构图谱已生成：{summary['node_count']} 个节点，{summary['edge_count']} 条关系。",
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(state, "structure_graph_ready", "目录结构图谱已生成", "completed", summary)
+        return updates
+
     def _generate_files(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
         context.prompt_profile_version = PROMPT_PROFILE_VERSION
+        if not context.knowledge_blueprint:
+            structure_graph = build_fallback_structure_graph(
+                domain=context.domain,
+                subdomains=context.subdomains,
+                source_intent=context.original_input or context.domain,
+            )
+            derived_context = derive_context_from_structure_graph(graph=structure_graph, domain=context.domain)
+            context.structure_graph = structure_graph.to_dict()
+            context.structure_mode = str(derived_context["structure_mode"])
+            context.knowledge_modules = derived_context["knowledge_modules"]
+            context.core_topics = derived_context["core_topics"] or context.core_topics
+            context.navigation_targets = derived_context["navigation_targets"]
+            context.knowledge_blueprint = derived_context["knowledge_blueprint"]
+            context.required_files = derived_context["required_files"]
         domain_dir = self._domain_dir(context)
         queue = self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
         context.generation_queue_path = self._queue_store.queue_path(domain_dir).as_posix()
@@ -396,6 +516,7 @@ class KnowledgeGraphWorkflow:
                             "must_cover": spec.must_cover,
                             "query_hint_rules": spec.query_hint_rules,
                             "allowed_agent_tasks": spec.allowed_agent_tasks,
+                            "structure_graph_context": self._structure_graph_context(context, blueprint),
                         },
                         ensure_ascii=False,
                     ),
@@ -417,13 +538,52 @@ class KnowledgeGraphWorkflow:
             "file_id": str(blueprint.get("file_id", file_path.stem)),
             "file_path": file_path.as_posix(),
             "required_sections": list(spec.required_sections),
-            "claims": [str(item) for item in payload.get("claims", []) if str(item).strip()] or [f"{spec.title} 需要形成可追溯知识说明。"],
-            "evidence_needed": [str(item) for item in payload.get("evidence_needed", []) if str(item).strip()] or ["权威定义", "关键结论来源", "必要时的案例或趋势证据"],
+            "claims": _normalize_contract_items(payload.get("claims", [])) or [f"{spec.title} 需要形成可追溯知识说明。"],
+            "evidence_needed": _normalize_contract_items(payload.get("evidence_needed", [])) or ["权威定义", "关键结论来源", "必要时的案例或趋势证据"],
             "query_tasks": payload.get("query_tasks", []) or self._default_query_tasks(blueprint, file_path, spec),
             "completion_status": payload.get("completion_status", {"state": "generated", "required": True}),
         }
-        markdown = self._fallback_markdown(context, blueprint, spec, file_path, contract)
+        markdown = str(payload.get("markdown", "")).strip()
+        if markdown and parse_contract_block(markdown) is None:
+            markdown = f"{markdown}\n\n{render_contract_block(contract)}\n"
+        if not markdown:
+            markdown = self._fallback_markdown(context, blueprint, spec, file_path, contract)
+        else:
+            markdown = replace_contract_block(markdown, contract)
         return {"markdown": markdown, "contract": contract}
+
+    @staticmethod
+    def _structure_graph_context(context: RequestContext, blueprint: dict[str, Any]) -> dict[str, Any]:
+        graph = context.structure_graph or {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        edges = graph.get("edges", []) if isinstance(graph, dict) else []
+        structure_node_id = ""
+        requirements = blueprint.get("completion_requirements", {})
+        if isinstance(requirements, dict):
+            structure_node_id = str(requirements.get("structure_node_id", ""))
+        else:
+            requirements = {}
+        current = next((node for node in nodes if isinstance(node, dict) and str(node.get("node_id", "")) == structure_node_id), {})
+        parent_id = str(current.get("parent_node_id") or requirements.get("parent_node_id", ""))
+        parent = next((node for node in nodes if isinstance(node, dict) and str(node.get("node_id", "")) == parent_id), {})
+        sibling_ids = {
+            str(edge.get("to_node_id", ""))
+            for edge in edges
+            if isinstance(edge, dict)
+            and str(edge.get("from_node_id", "")) == parent_id
+            and str(edge.get("to_node_id", "")) != structure_node_id
+        }
+        siblings = [
+            {"node_id": str(node.get("node_id", "")), "title": str(node.get("title", "")), "relative_path": str(node.get("relative_path", ""))}
+            for node in nodes
+            if isinstance(node, dict) and str(node.get("node_id", "")) in sibling_ids
+        ][:8]
+        return {
+            "root_node_id": str(graph.get("root_node_id", "")) if isinstance(graph, dict) else "",
+            "current_node": current,
+            "parent_node": parent,
+            "siblings": siblings,
+        }
 
     def _fallback_markdown(
         self,
@@ -470,7 +630,7 @@ class KnowledgeGraphWorkflow:
             if section == "摘要":
                 body.append("该文件按固定模板生成，后续将结合队列中的依据任务补全。")
             elif section == "关键结论":
-                body.extend([f"- {item}" for item in contract["claims"]])
+                body.extend([f"- {_render_contract_item(item)}" for item in contract["claims"]])
             elif section == "背景与上下文":
                 body.extend([f"- {item}" for item in spec.must_cover])
             elif section == "证据与来源":
@@ -747,10 +907,15 @@ class KnowledgeGraphWorkflow:
 
     def _emit_workflow_event(self, state: WorkflowState, step_id: str, label: str, status: str, details: dict[str, Any] | None = None) -> None:
         event = self._make_workflow_event(step_id, label, status, details)
+        events = state.setdefault("workflow_events", [])
+        if event not in events:
+            events.append(event)
         if self._workflow_event_callback is not None:
             self._workflow_event_callback(state["task_id"], event)
 
     def _commit_state(self, state: WorkflowState, updates: dict[str, Any]) -> None:
+        if "workflow_events" in state and "workflow_events" not in updates:
+            updates["workflow_events"] = state["workflow_events"]
         state.update(updates)
         if self._state_update_callback is not None:
             self._state_update_callback(state["task_id"], state)

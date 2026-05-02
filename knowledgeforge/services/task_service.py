@@ -521,8 +521,8 @@ class TaskService:
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
             "task_status": "running" if audit_source == "api_async" else "created",
-            "current_step": "blueprint_ready",
-            "current_action": "知识文件蓝图已创建，等待进入串行生成。",
+            "current_step": "structure_graph_planning",
+            "current_action": "等待生成目录结构图谱。",
         }
         self._audit_logger.log(
             task_id,
@@ -604,6 +604,7 @@ class TaskService:
             "round_number": task.get("round_number"),
             "agent_plans": task.get("agent_plans", {}),
             "workflow_events": task.get("workflow_events", []),
+            "structure_graph": task.get("structure_graph", (task.get("request_context") or {}).get("structure_graph", {})),
             "generation_progress": task.get("generation_progress", {}),
             "task_queue_snapshot": queue_snapshot,
             "queue_summary": self._build_queue_summary(queue_snapshot),

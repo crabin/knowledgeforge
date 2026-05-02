@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import time
@@ -71,7 +70,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
                         "latest_llm_attempt": latest_llm.get("attempt", ""),
                     }
                 )
-        if request.method == "GET" and task_id:
+        if request.method == "GET" and task_id and not request.path.endswith("/logs"):
             app.logger.debug("request_trace %s", details)
         else:
             app.logger.info("request_trace %s", details)
@@ -275,8 +274,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
 def _configure_application_logger(app: Flask, config: AppConfig) -> None:
     log_root = config.app_log_root
     log_root.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = log_root / f"knowledgeforge-server-{timestamp}.log"
+    log_path = log_root / "knowledgeforge-server.log"
     handler_id = f"knowledgeforge-server::{log_path.as_posix()}"
     if any(getattr(handler, "name", "") == handler_id for handler in app.logger.handlers):
         return

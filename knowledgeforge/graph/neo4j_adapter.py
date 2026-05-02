@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from knowledgeforge.graph.client import Neo4jGraphClient
-from knowledgeforge.models import DocumentArtifact, GraphSyncResult, StructuredExtractionResult
+from knowledgeforge.models import DocumentArtifact, GraphSyncResult, RequestContext, StructuredExtractionResult
 
 
 class Neo4jPathMapper:
@@ -12,7 +12,9 @@ class Neo4jPathMapper:
         self,
         artifact: DocumentArtifact,
         extraction: StructuredExtractionResult,
+        context: RequestContext | None = None,
     ) -> GraphSyncResult:
+        structure_graph = context.structure_graph if context is not None else {}
         nodes = [
             {"label": "Domain", "id": artifact.domain},
             {"label": "KnowledgeModule", "id": artifact.module_id or "core_topics", "label_text": artifact.module_label or artifact.module_id},
@@ -25,6 +27,29 @@ class Neo4jPathMapper:
             {"from": artifact.module_id or "core_topics", "type": "HAS_ARTICLE", "to": artifact.document_id},
             {"from": artifact.subdomain, "type": "HAS_ARTICLE", "to": artifact.document_id},
         ]
+        if isinstance(structure_graph, dict):
+            for node in structure_graph.get("nodes", []):
+                if not isinstance(node, dict):
+                    continue
+                label = _graph_label_for_structure_type(str(node.get("node_type", "")))
+                nodes.append(
+                    {
+                        "label": label,
+                        "id": str(node.get("node_id", "")),
+                        "title": str(node.get("title", "")),
+                        "path": str(node.get("relative_path", "")),
+                    }
+                )
+            for edge in structure_graph.get("edges", []):
+                if not isinstance(edge, dict):
+                    continue
+                relationships.append(
+                    {
+                        "from": str(edge.get("from_node_id", "")),
+                        "type": str(edge.get("edge_type", "CONTAINS")),
+                        "to": str(edge.get("to_node_id", "")),
+                    }
+                )
         for entity in extraction.entities:
             nodes.append({"label": entity["type"], "id": entity["name"]})
         status = "passed"
@@ -37,6 +62,7 @@ class Neo4jPathMapper:
                     article_id=artifact.document_id,
                     article_path=artifact.path,
                     entities=extraction.entities,
+                    structure_graph=structure_graph if isinstance(structure_graph, dict) else {},
                 )
             except Exception as exc:
                 status = "failed"
@@ -49,3 +75,13 @@ class Neo4jPathMapper:
             status=status,
             error=error,
         )
+
+
+def _graph_label_for_structure_type(node_type: str) -> str:
+    return {
+        "domain": "Domain",
+        "section": "KnowledgeSection",
+        "subtopic": "SubTopic",
+        "article": "Article",
+        "index": "KnowledgeIndex",
+    }.get(node_type, "KnowledgeNode")
