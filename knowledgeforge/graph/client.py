@@ -68,6 +68,53 @@ class Neo4jGraphClient:
             with suppress(Exception):
                 driver.close()
 
+    def sync_structure_graph(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        structure_graph: dict[str, Any],
+    ) -> None:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                session.execute_write(self._write_structure_graph, domain, task_id, structure_graph)
+        finally:
+            with suppress(Exception):
+                driver.close()
+
+    def mark_structure_node_generated(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generated_path: str,
+    ) -> None:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                session.execute_write(
+                    self._write_structure_node_generated,
+                    domain,
+                    task_id,
+                    node_id,
+                    generated_path,
+                )
+        finally:
+            with suppress(Exception):
+                driver.close()
+
     @staticmethod
     def _write_graph(
         tx: Any,
@@ -138,6 +185,93 @@ class Neo4jGraphClient:
                 to_node_id=str(edge.get("to_node_id", "")),
                 edge_type=str(edge.get("edge_type", "CONTAINS")),
             )
+
+    @staticmethod
+    def _write_structure_graph(tx: Any, domain: str, task_id: str, structure_graph: dict[str, Any]) -> None:
+        tx.run(
+            """
+            MERGE (d:Domain {id: $domain})
+            SET d.task_id = $task_id
+            """,
+            domain=domain,
+            task_id=task_id,
+        )
+        for node in structure_graph.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("node_id", ""))
+            if not node_id:
+                continue
+            tx.run(
+                """
+                MATCH (d:Domain {id: $domain})
+                MERGE (n:KnowledgeStructureNode {id: $node_id})
+                SET n.title = $title,
+                    n.node_type = $node_type,
+                    n.path = $path,
+                    n.doc_type = $doc_type,
+                    n.parent_node_id = $parent_node_id,
+                    n.task_id = $task_id,
+                    n.domain = $domain,
+                    n.is_generated = coalesce(n.is_generated, false),
+                    n.generation_state = coalesce(n.generation_state, 'planned'),
+                    n.updated_at = $updated_at
+                MERGE (d)-[:HAS_STRUCTURE_NODE]->(n)
+                """,
+                domain=domain,
+                task_id=task_id,
+                node_id=node_id,
+                title=str(node.get("title", "")),
+                node_type=str(node.get("node_type", "")),
+                path=str(node.get("relative_path", "")),
+                doc_type=str(node.get("doc_type", "")),
+                parent_node_id=str(node.get("parent_node_id", "")),
+                updated_at=str(structure_graph.get("generated_at", "")),
+            )
+        for edge in structure_graph.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            from_node_id = str(edge.get("from_node_id", ""))
+            to_node_id = str(edge.get("to_node_id", ""))
+            if not from_node_id or not to_node_id:
+                continue
+            tx.run(
+                """
+                MERGE (from_node:KnowledgeStructureNode {id: $from_node_id})
+                MERGE (to_node:KnowledgeStructureNode {id: $to_node_id})
+                MERGE (from_node)-[r:STRUCTURE_EDGE {type: $edge_type}]->(to_node)
+                SET r.task_id = $task_id,
+                    r.domain = $domain
+                """,
+                domain=domain,
+                task_id=task_id,
+                from_node_id=from_node_id,
+                to_node_id=to_node_id,
+                edge_type=str(edge.get("edge_type", "CONTAINS")),
+            )
+
+    @staticmethod
+    def _write_structure_node_generated(
+        tx: Any,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generated_path: str,
+    ) -> None:
+        tx.run(
+            """
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(n:KnowledgeStructureNode {id: $node_id})
+            SET n.is_generated = true,
+                n.generation_state = 'generated',
+                n.generated_path = $generated_path,
+                n.task_id = $task_id,
+                n.generated_at = datetime()
+            """,
+            domain=domain,
+            task_id=task_id,
+            node_id=node_id,
+            generated_path=generated_path,
+        )
 
     @staticmethod
     def _read_domain_graph(
@@ -217,7 +351,7 @@ class Neo4jGraphClient:
 
 def _normalize_node_row(row: Any) -> dict[str, Any]:
     labels = list(row["labels"] or [])
-    properties = dict(row["properties"] or {})
+    properties = _json_safe_properties(dict(row["properties"] or {}))
     node_type = _node_type(labels, properties)
     title = str(
         properties.get("title")
@@ -237,7 +371,7 @@ def _normalize_node_row(row: Any) -> dict[str, Any]:
 
 
 def _normalize_relationship_row(row: Any) -> dict[str, Any]:
-    properties = dict(row["properties"] or {})
+    properties = _json_safe_properties(dict(row["properties"] or {}))
     edge_type = str(row["type"])
     return {
         "id": str(row["graph_id"]),
@@ -256,3 +390,17 @@ def _node_type(labels: list[str], properties: dict[str, Any]) -> str:
                 return str(properties["type"])
             return label
     return labels[0] if labels else "Node"
+
+
+def _json_safe_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    return {key: _json_safe_value(value) for key, value in properties.items()}
+
+
+def _json_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, dict):
+        return _json_safe_properties(value)
+    return str(value)

@@ -8,6 +8,80 @@ class Neo4jPathMapper:
     def __init__(self, client: Neo4jGraphClient | None = None) -> None:
         self._client = client
 
+    def sync_structure_graph(self, *, domain: str, task_id: str, structure_graph: dict) -> GraphSyncResult:
+        nodes = []
+        relationships = []
+        if isinstance(structure_graph, dict):
+            for node in structure_graph.get("nodes", []):
+                if not isinstance(node, dict):
+                    continue
+                nodes.append(
+                    {
+                        "label": _graph_label_for_structure_type(str(node.get("node_type", ""))),
+                        "id": str(node.get("node_id", "")),
+                        "title": str(node.get("title", "")),
+                        "path": str(node.get("relative_path", "")),
+                        "is_generated": False,
+                        "generation_state": "planned",
+                    }
+                )
+            for edge in structure_graph.get("edges", []):
+                if not isinstance(edge, dict):
+                    continue
+                relationships.append(
+                    {
+                        "from": str(edge.get("from_node_id", "")),
+                        "type": str(edge.get("edge_type", "CONTAINS")),
+                        "to": str(edge.get("to_node_id", "")),
+                    }
+                )
+        status = "passed"
+        error = None
+        if self._client is not None:
+            try:
+                self._client.sync_structure_graph(domain=domain, task_id=task_id, structure_graph=structure_graph)
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+        return GraphSyncResult(
+            document_id=f"{domain}-structure-graph",
+            article_path="",
+            nodes=nodes,
+            relationships=relationships,
+            status=status,
+            error=error,
+        )
+
+    def mark_structure_node_generated(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generated_path: str,
+    ) -> GraphSyncResult:
+        status = "passed"
+        error = None
+        if self._client is not None:
+            try:
+                self._client.mark_structure_node_generated(
+                    domain=domain,
+                    task_id=task_id,
+                    node_id=node_id,
+                    generated_path=generated_path,
+                )
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+        return GraphSyncResult(
+            document_id=node_id,
+            article_path=generated_path,
+            nodes=[{"label": "KnowledgeStructureNode", "id": node_id, "is_generated": status == "passed"}],
+            relationships=[],
+            status=status,
+            error=error,
+        )
+
     def sync(
         self,
         artifact: DocumentArtifact,

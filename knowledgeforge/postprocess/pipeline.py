@@ -74,3 +74,25 @@ class PostStoragePipeline:
             remediation_flows=[],
             next_round_queries=[],
         )
+
+    def sync_structure_graph(self, *, domain: str, task_id: str, structure_graph: dict):
+        if not hasattr(self._graph_mapper, "sync_structure_graph"):
+            return None
+        return self._graph_mapper.sync_structure_graph(domain=domain, task_id=task_id, structure_graph=structure_graph)
+
+    def mark_structure_node_generated(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generated_path: str,
+    ):
+        if not hasattr(self._graph_mapper, "mark_structure_node_generated"):
+            return None
+        return self._graph_mapper.mark_structure_node_generated(
+            domain=domain,
+            task_id=task_id,
+            node_id=node_id,
+            generated_path=generated_path,
+        )

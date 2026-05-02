@@ -192,6 +192,7 @@ class KnowledgeGraphWorkflow:
         updates = {
             "request_context": context,
             "structure_graph": structure_graph.to_dict(),
+            "structure_graph_sync": self._sync_structure_graph_for_generation(state["task_id"], context),
             "task_status": "running",
             "current_step": "structure_graph_ready",
             "current_action": f"目录结构图谱已生成：{summary['node_count']} 个节点，{summary['edge_count']} 条关系。",
@@ -267,6 +268,11 @@ class KnowledgeGraphWorkflow:
             )
             generated = self._generate_single_file(context, blueprint, spec, file_path)
             file_path.write_text(generated["markdown"], encoding="utf-8")
+            graph_generation_sync = (
+                self._mark_structure_node_generated(state["task_id"], context, blueprint, file_path)
+                if (state.get("structure_graph_sync") or {}).get("status") == "passed"
+                else {"status": "skipped", "reason": "structure_graph_sync_not_available", "path": file_path.as_posix()}
+            )
             query_tasks = self._extract_queue_tasks(generated["contract"], blueprint, file_path, queue.get("current_round", 1))
             queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), query_tasks)
             generated_count += 1
@@ -283,6 +289,7 @@ class KnowledgeGraphWorkflow:
                 queue,
                 current_step="llm_generating",
                 current_action=f"文件骨架已保存：{relative_path}",
+                extra_updates={"latest_structure_node_sync": graph_generation_sync} if graph_generation_sync else None,
             )
             self._emit_workflow_event(
                 state,
@@ -316,6 +323,54 @@ class KnowledgeGraphWorkflow:
         }
         self._commit_state(state, updates)
         return updates
+
+    def _sync_structure_graph_for_generation(self, task_id: str, context: RequestContext) -> dict[str, Any]:
+        structure_graph = context.structure_graph or {}
+        if not isinstance(structure_graph, dict) or not structure_graph.get("nodes"):
+            return {"status": "skipped", "reason": "empty_structure_graph"}
+        try:
+            result = self._post_storage_pipeline.sync_structure_graph(
+                domain=context.domain,
+                task_id=task_id,
+                structure_graph=structure_graph,
+            )
+        except Exception as exc:
+            logger.warning("Structure graph Neo4j sync failed for %s: %s", context.domain, exc)
+            return {"status": "failed", "error": str(exc)}
+        if result is None:
+            return {"status": "skipped", "reason": "graph_mapper_unavailable"}
+        return result.to_dict()
+
+    def _mark_structure_node_generated(
+        self,
+        task_id: str,
+        context: RequestContext,
+        blueprint: dict[str, Any],
+        file_path: Path,
+    ) -> dict[str, Any]:
+        node_id = self._structure_node_id_for_blueprint(blueprint)
+        if not node_id:
+            return {"status": "skipped", "reason": "missing_structure_node_id", "path": file_path.as_posix()}
+        try:
+            result = self._post_storage_pipeline.mark_structure_node_generated(
+                domain=context.domain,
+                task_id=task_id,
+                node_id=node_id,
+                generated_path=file_path.as_posix(),
+            )
+        except Exception as exc:
+            logger.warning("Structure node generation flag update failed for %s: %s", node_id, exc)
+            return {"status": "failed", "node_id": node_id, "path": file_path.as_posix(), "error": str(exc)}
+        if result is None:
+            return {"status": "skipped", "reason": "graph_mapper_unavailable", "node_id": node_id, "path": file_path.as_posix()}
+        return result.to_dict()
+
+    @staticmethod
+    def _structure_node_id_for_blueprint(blueprint: dict[str, Any]) -> str:
+        requirements = blueprint.get("completion_requirements", {})
+        if isinstance(requirements, dict):
+            return str(requirements.get("structure_node_id", "")).strip()
+        return ""
 
     def _run_query_queue(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]

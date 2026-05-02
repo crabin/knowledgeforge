@@ -224,3 +224,24 @@
 - 结果：`38 passed in 5.35s`
 - 使用当前 `.env` Neo4j 连接执行只读 snapshot smoke。
 - 结果：`neo4j_smoke=ok nodes=0 edges=0`；当前库无对应领域数据，Neo4j 对尚未出现的结构节点标签/关系给出 warning，但查询可正常解析并返回空图。
+
+## 2026-05-02 Neo4j 结构图谱前置同步
+
+- 按用户反馈调整图谱事实源：目录结构图谱生成后立即同步到 Neo4j，而不是等最终治理阶段才写入图谱。
+- `KnowledgeStructureNode` 现在带有生成进度属性：`is_generated`、`generation_state`、`generated_path`、`generated_at`、`task_id`、`domain`。
+- 文件骨架每成功落盘一个，就按蓝图里的 `completion_requirements.structure_node_id` 更新对应 Neo4j 结构节点的落实 flag；如果结构图谱初始同步失败，文件生成不会被打断，只会跳过节点 flag 更新。
+- 图谱 API 对 Neo4j temporal 等非 JSON 原生属性做序列化保护，避免 `datetime()` 属性导致 Flask `jsonify` 500。
+- 前端图谱指标新增“已落实”数量，节点标题区显示 `TODO/DONE` 状态。
+- 对修复前已经启动的 `deep learning` 任务做了一次 Neo4j 回填：同步 23 个结构节点，并根据当前生成进度标记 4 个已生成节点。
+
+## Verification
+
+- 运行 `python -m py_compile knowledgeforge/graph/client.py knowledgeforge/graph/neo4j_adapter.py knowledgeforge/postprocess/pipeline.py knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `python -m pytest tests/test_integration_layers.py tests/test_dashboard.py -q`
+- 结果：`8 passed in 0.59s`
+- 运行 `python -m pytest tests/test_workflow.py tests/test_dashboard.py tests/test_integration_layers.py -q`
+- 结果：`39 passed in 8.60s`
+- 当前任务 `2146b1ba719d4990a3567fff46794af0` 的 `/graph` 接口已返回 `deep learning` 图谱节点与结构关系。

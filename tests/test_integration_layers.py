@@ -120,6 +120,12 @@ class FakeNeo4jClient:
     def sync_document(self, **kwargs):
         self.calls.append(kwargs)
 
+    def sync_structure_graph(self, **kwargs):
+        self.calls.append({"method": "sync_structure_graph", **kwargs})
+
+    def mark_structure_node_generated(self, **kwargs):
+        self.calls.append({"method": "mark_structure_node_generated", **kwargs})
+
 
 def test_query_engine_uses_chat_and_embedding_clients() -> None:
     engine = QueryEngine(
@@ -189,3 +195,31 @@ def test_neo4j_path_mapper_uses_client_when_available() -> None:
     assert client.calls[0]["structure_graph"]["nodes"]
     assert any(node["id"] == "workflow" for node in result.nodes)
     assert any(rel["type"] == "CONTAINS" and rel["to"] == "workflow" for rel in result.relationships)
+
+
+def test_neo4j_path_mapper_syncs_structure_graph_before_file_generation() -> None:
+    client = FakeNeo4jClient()
+    mapper = Neo4jPathMapper(client=client)
+    structure_graph = {
+        "generated_at": "2026-05-02T19:50:00+09:00",
+        "nodes": [
+            {"node_id": "domain_deep_learning", "title": "Deep Learning", "node_type": "domain", "relative_path": "README.md"},
+            {"node_id": "article_attention", "title": "Attention", "node_type": "article", "relative_path": "attention.md"},
+        ],
+        "edges": [{"from_node_id": "domain_deep_learning", "edge_type": "CONTAINS", "to_node_id": "article_attention"}],
+    }
+
+    result = mapper.sync_structure_graph(domain="deep learning", task_id="task-1", structure_graph=structure_graph)
+    marked = mapper.mark_structure_node_generated(
+        domain="deep learning",
+        task_id="task-1",
+        node_id="article_attention",
+        generated_path="save/deep learning/attention.md",
+    )
+
+    assert result.status == "passed"
+    assert result.nodes[0]["is_generated"] is False
+    assert marked.status == "passed"
+    assert client.calls[0]["method"] == "sync_structure_graph"
+    assert client.calls[1]["method"] == "mark_structure_node_generated"
+    assert client.calls[1]["node_id"] == "article_attention"

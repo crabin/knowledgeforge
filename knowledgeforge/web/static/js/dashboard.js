@@ -604,6 +604,8 @@ function groupNeo4jNodes(nodes, groupOrder) {
 }
 
 function getNeo4jNodeAttrs(node, isNew) {
+  const generated = node.properties?.is_generated === true;
+  const stateLabel = generated ? "DONE" : "TODO";
   const palette = {
     Domain: { fill: "#edf6ee", stroke: "#1e7b64", kind: "#1e7b64" },
     SubTopic: { fill: "#f2f6fb", stroke: "#2f5f91", kind: "#2f5f91" },
@@ -621,7 +623,7 @@ function getNeo4jNodeAttrs(node, isNew) {
       filter: isNew ? "drop-shadow(0 10px 16px rgba(23, 33, 31, 0.18))" : "none",
     },
     kind: {
-      text: `${isNew ? "NEW · " : ""}${node.type || "Node"}`,
+      text: `${isNew ? "NEW · " : ""}${stateLabel} · ${node.type || "Node"}`,
       fill: palette.kind,
       fontSize: 11,
       fontWeight: 900,
@@ -642,7 +644,7 @@ function getNeo4jNodeAttrs(node, isNew) {
       textWrap: { width: -24, height: 28, ellipsis: true },
     },
     path: {
-      text: node.path || node.properties?.id || node.id,
+      text: node.properties?.generated_path || node.path || node.properties?.id || node.id,
       fill: "#5d6a66",
       fontSize: 11,
       fontWeight: 700,
@@ -680,11 +682,13 @@ function renderNeo4jGraphMetrics(payload) {
   const graph = payload.graph || { nodes: [], edges: [] };
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const generated = nodes.filter((node) => node.properties?.is_generated === true).length;
   const lastUpdated = payload.refreshed_at ? `刷新：${payload.refreshed_at}` : "刷新：暂无";
   neo4jGraphMetrics.innerHTML = `
     <span>领域：${escapeHtml(payload.domain || "暂无")}</span>
     <span>节点 ${escapeHtml(String(nodes.length))}</span>
     <span>关系 ${escapeHtml(String(edges.length))}</span>
+    <span>已落实 ${escapeHtml(String(generated))}</span>
     <span>${escapeHtml(lastUpdated)}</span>`;
 }
 
