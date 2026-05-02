@@ -193,3 +193,14 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest tests/test_token_usage.py tests/test_workflow.py -q`
 - 结果：`36 passed in 20.58s`
+
+## 2026-05-02 Neo4j 图谱清理
+
+- 按用户要求清理 Neo4j 知识图谱数据，目标连接为 `.env` 中的 `NEO4J_URI=bolt://lpbkuaile6:7687`，用户为 `neo4j`。
+- 清理前图谱包含 `60` 个节点、`55` 条关系；标签包括 `Article`、`Domain`、`Entity`、`KnowledgePoint`、`Source`、`SubTopic`；关系类型包括 `HAS_ARTICLE`、`HAS_SUBTOPIC`、`MENTIONS`。
+- 使用分批 `MATCH (n) WITH n LIMIT 1000 DETACH DELETE n RETURN count(n)` 删除所有节点及其关系；未修改本地 Markdown 知识库文件。
+
+## Verification
+
+- 运行 Neo4j 只读验证查询 `MATCH (n) RETURN count(n)` 与 `MATCH ()-[r]->() RETURN count(r)`。
+- 结果：清理后 `nodes=0`、`relationships=0`。
