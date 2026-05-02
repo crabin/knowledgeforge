@@ -135,7 +135,7 @@ class TaskService:
                 max_retries=config.intake_llm_max_retries,
             )
         )
-        graph_client = Neo4jGraphClient(config.neo4j)
+        self._graph_client = Neo4jGraphClient(config.neo4j)
         self._workflow = KnowledgeGraphWorkflow(
             insight_engine=InsightEngine(chat_client=planning_chat_client),
             query_engine=QueryEngine(
@@ -174,7 +174,7 @@ class TaskService:
             writer=self._writer,
             post_storage_pipeline=PostStoragePipeline(
                 extractor=StructuredExtractor(),
-                graph_mapper=Neo4jPathMapper(client=graph_client),
+                graph_mapper=Neo4jPathMapper(client=self._graph_client),
                 quality_checker=QualityChecker(),
                 version_recorder=VersionRecorder(),
                 strict_graph_sync=config.strict_graph_sync,
@@ -617,6 +617,48 @@ class TaskService:
             },
             "logs": refreshed_logs,
             "token_usage": summarize_token_usage(refreshed_logs),
+        }
+
+    def get_task_graph_snapshot(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        request_context = task.get("request_context") or {}
+        domain = str(request_context.get("domain") or request_context.get("normalized_domain") or "").strip()
+        limits = {"nodes": 300, "edges": 600}
+        if not domain:
+            return {
+                "task_id": task_id,
+                "domain": "",
+                "status": "unavailable",
+                "refreshed_at": now_iso(),
+                "graph": {"nodes": [], "edges": []},
+                "limits": limits,
+                "error": "Task domain is unavailable.",
+            }
+        try:
+            graph = self._graph_client.snapshot_domain_graph(
+                domain=domain,
+                node_limit=limits["nodes"],
+                relationship_limit=limits["edges"],
+            )
+        except Exception:
+            return {
+                "task_id": task_id,
+                "domain": domain,
+                "status": "unavailable",
+                "refreshed_at": now_iso(),
+                "graph": {"nodes": [], "edges": []},
+                "limits": limits,
+                "error": "Neo4j graph snapshot unavailable.",
+            }
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "status": "ok",
+            "refreshed_at": now_iso(),
+            "graph": graph,
+            "limits": limits,
         }
 
     def generate_report(self, task_id: str) -> dict[str, Any] | None:

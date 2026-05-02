@@ -79,6 +79,35 @@
         </div>
       </details>
 
+      <details class="panel graph-panel collapsible-panel" open>
+        <summary class="section-heading collapsible-summary">
+          <span>
+            <span class="eyebrow">Neo4j Graph</span>
+            <span class="summary-title" id="neo4j-graph-title">Neo4j 实时知识图谱</span>
+          </span>
+          <span class="summary-state">展开</span>
+        </summary>
+        <div class="neo4j-graph-shell">
+          <div class="neo4j-graph-toolbar" aria-label="Neo4j 图谱控制">
+            <div class="neo4j-graph-status">
+              <span class="status-dot" id="neo4j-graph-dot"></span>
+              <span id="neo4j-graph-status-label">等待任务</span>
+            </div>
+            <div class="neo4j-graph-metrics" id="neo4j-graph-metrics">
+              <span>领域：暂无</span>
+              <span>节点 0</span>
+              <span>关系 0</span>
+            </div>
+            <label class="toggle-control" for="neo4j-auto-follow">
+              <input id="neo4j-auto-follow" type="checkbox" checked>
+              <span>自动跟随任务</span>
+            </label>
+            <button class="secondary-button" type="button" id="refresh-neo4j-graph">刷新图谱</button>
+          </div>
+          <div id="neo4j-graph" class="neo4j-graph" aria-label="Neo4j 实时知识图谱"></div>
+        </div>
+      </details>
+
       <details class="panel config-panel collapsible-panel">
         <summary class="section-heading compact collapsible-summary">
           <span>

@@ -4,6 +4,10 @@ const state = {
   pollTaskId: null,
   workflowGraph: null,
   workflowGraphReady: false,
+  neo4jGraph: null,
+  neo4jGraphSnapshot: null,
+  neo4jGraphRefreshTimer: null,
+  neo4jAutoFollow: true,
 };
 
 const output = document.querySelector("#response-output");
@@ -24,6 +28,12 @@ const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
 const workflowX6Container = document.querySelector("#workflow-x6");
+const neo4jGraphContainer = document.querySelector("#neo4j-graph");
+const neo4jGraphDot = document.querySelector("#neo4j-graph-dot");
+const neo4jGraphStatusLabel = document.querySelector("#neo4j-graph-status-label");
+const neo4jGraphMetrics = document.querySelector("#neo4j-graph-metrics");
+const neo4jAutoFollowInput = document.querySelector("#neo4j-auto-follow");
+const refreshNeo4jGraphButton = document.querySelector("#refresh-neo4j-graph");
 
 const workflowSteps = [
   { id: "structure_graph_planning", order: "01", title: "图谱规划", description: "根据用户意图生成目录结构图谱。" },
@@ -431,6 +441,262 @@ function getWorkflowEdgeAttrs(status) {
   };
 }
 
+function getTaskIdFromPayload(payload = {}) {
+  return payload.task_id || payload.task?.task_id || payload.intake_session?.task_id || taskIdInput?.value?.trim() || "";
+}
+
+function scheduleNeo4jGraphRefresh(taskId, options = {}) {
+  if (!neo4jGraphContainer || !taskId) return;
+  if (!options.force && !state.neo4jAutoFollow) return;
+  if (state.neo4jGraphRefreshTimer) return;
+  const delay = options.force ? 0 : 900;
+  state.neo4jGraphRefreshTimer = window.setTimeout(() => {
+    state.neo4jGraphRefreshTimer = null;
+    refreshNeo4jGraph(taskId, { force: options.force });
+  }, delay);
+}
+
+async function refreshNeo4jGraph(taskId = getTaskIdFromPayload(state.lastPayload), options = {}) {
+  if (!neo4jGraphContainer) return;
+  if (!taskId) {
+    setNeo4jGraphStatus("idle", "等待任务");
+    renderNeo4jGraphMetrics({ domain: "暂无", graph: { nodes: [], edges: [] } });
+    return;
+  }
+  if (!options.silent) setNeo4jGraphStatus("loading", "读取 Neo4j");
+  try {
+    const payload = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph`);
+    renderNeo4jGraphSnapshot(payload, state.neo4jGraphSnapshot);
+    state.neo4jGraphSnapshot = payload;
+  } catch (error) {
+    setNeo4jGraphStatus("unavailable", "读取失败");
+    renderNeo4jGraphMetrics({ domain: "暂无", graph: { nodes: [], edges: [] } });
+    renderNeo4jGraphFallback(`Neo4j 图谱读取失败：${error.message}`);
+  }
+}
+
+function renderNeo4jGraphSnapshot(payload, previousPayload) {
+  const graph = payload.graph || { nodes: [], edges: [] };
+  renderNeo4jGraphMetrics(payload);
+  if (payload.status === "ok") {
+    setNeo4jGraphStatus("ok", graph.nodes.length ? "已连接" : "无图谱数据");
+  } else {
+    setNeo4jGraphStatus("unavailable", payload.error || "Neo4j 不可用");
+  }
+  const x6Graph = ensureNeo4jGraph();
+  if (!x6Graph) {
+    renderNeo4jGraphFallback(payload.error || "X6 图谱组件未加载。");
+    return;
+  }
+  const previousNodeIds = new Set((previousPayload?.graph?.nodes || []).map((node) => node.id));
+  const previousEdgeIds = new Set((previousPayload?.graph?.edges || []).map((edge) => edge.id));
+  const data = buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds);
+  const width = neo4jGraphContainer.clientWidth || 960;
+  neo4jGraphContainer.style.height = `${data.meta.height}px`;
+  x6Graph.resize(width, data.meta.height);
+  x6Graph.fromJSON(data);
+  if (data.nodes.length) x6Graph.centerContent({ padding: 18 });
+}
+
+function ensureNeo4jGraph() {
+  if (!neo4jGraphContainer || !window.X6?.Graph) return null;
+  if (state.neo4jGraph) return state.neo4jGraph;
+  const { Graph } = window.X6;
+  state.neo4jGraph = new Graph({
+    container: neo4jGraphContainer,
+    width: neo4jGraphContainer.clientWidth || 960,
+    height: neo4jGraphContainer.clientHeight || 420,
+    panning: true,
+    mousewheel: {
+      enabled: true,
+      modifiers: ["ctrl", "meta"],
+      minScale: 0.5,
+      maxScale: 1.6,
+    },
+    interacting: {
+      nodeMovable: false,
+      edgeMovable: false,
+      arrowheadMovable: false,
+      vertexMovable: false,
+      magnetConnectable: false,
+    },
+    background: { color: "#fffdf8" },
+    grid: {
+      size: 14,
+      visible: true,
+      type: "dot",
+      args: { color: "rgba(23, 33, 31, 0.1)" },
+    },
+  });
+  document.body.classList.add("neo4j-graph-ready");
+  return state.neo4jGraph;
+}
+
+function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const width = neo4jGraphContainer?.clientWidth || 960;
+  const compact = width < 760;
+  const nodeWidth = compact ? Math.max(220, width - 56) : 190;
+  const nodeHeight = 84;
+  const groupOrder = ["Domain", "SubTopic", "Article", "Entity", "KnowledgeStructureNode"];
+  const grouped = groupNeo4jNodes(nodes, groupOrder);
+  const columns = compact ? 1 : Math.min(grouped.length || 1, 5);
+  const gapX = compact ? 0 : 32;
+  const gapY = 18;
+  const startX = 24;
+  const startY = 24;
+  const positioned = [];
+  grouped.forEach((group, groupIndex) => {
+    group.nodes.forEach((node, nodeIndex) => {
+      positioned.push({
+        id: node.id,
+        shape: "rect",
+        x: compact ? startX : startX + (groupIndex % columns) * (nodeWidth + gapX),
+        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
+        width: nodeWidth,
+        height: nodeHeight,
+        markup: [
+          { tagName: "rect", selector: "body" },
+          { tagName: "text", selector: "kind" },
+          { tagName: "text", selector: "title" },
+          { tagName: "text", selector: "path" },
+        ],
+        attrs: getNeo4jNodeAttrs(node, !previousNodeIds.has(node.id)),
+      });
+    });
+  });
+  const visibleNodeIds = new Set(positioned.map((node) => node.id));
+  const x6Edges = edges
+    .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+    .map((edge) => ({
+      id: edge.id,
+      shape: "edge",
+      source: edge.source,
+      target: edge.target,
+      connector: { name: "rounded" },
+      router: { name: compact ? "manhattan" : "metro" },
+      labels: [{ attrs: { label: { text: edge.type, fontSize: 10, fill: "#5d6a66", fontWeight: 800 } } }],
+      attrs: getNeo4jEdgeAttrs(!previousEdgeIds.has(edge.id)),
+    }));
+  const maxRows = compact ? positioned.length : Math.max(1, ...grouped.map((group) => group.nodes.length));
+  const height = Math.max(420, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY);
+  return { nodes: positioned, edges: x6Edges, meta: { height } };
+}
+
+function groupNeo4jNodes(nodes, groupOrder) {
+  const byGroup = new Map();
+  nodes.forEach((node) => {
+    const group = groupOrder.includes(node.type) ? node.type : node.labels?.includes("Entity") ? "Entity" : node.type || "Node";
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group).push(node);
+  });
+  return [...byGroup.entries()]
+    .sort(([a], [b]) => {
+      const indexA = groupOrder.indexOf(a);
+      const indexB = groupOrder.indexOf(b);
+      return (indexA === -1 ? 99 : indexA) - (indexB === -1 ? 99 : indexB) || a.localeCompare(b);
+    })
+    .map(([type, groupNodes]) => ({
+      type,
+      nodes: groupNodes.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""))),
+    }));
+}
+
+function getNeo4jNodeAttrs(node, isNew) {
+  const palette = {
+    Domain: { fill: "#edf6ee", stroke: "#1e7b64", kind: "#1e7b64" },
+    SubTopic: { fill: "#f2f6fb", stroke: "#2f5f91", kind: "#2f5f91" },
+    Article: { fill: "#fff8e8", stroke: "#bb8b27", kind: "#8a6517" },
+    Entity: { fill: "#fff3ef", stroke: "#a9483f", kind: "#a9483f" },
+    KnowledgeStructureNode: { fill: "#fbf8ee", stroke: "#5d6a66", kind: "#5d6a66" },
+  }[node.type] || { fill: "#fffdf8", stroke: "#d8d1c2", kind: "#5d6a66" };
+  return {
+    body: {
+      rx: 8,
+      ry: 8,
+      fill: palette.fill,
+      stroke: isNew ? "#17211f" : palette.stroke,
+      strokeWidth: isNew ? 3 : 1.5,
+      filter: isNew ? "drop-shadow(0 10px 16px rgba(23, 33, 31, 0.18))" : "none",
+    },
+    kind: {
+      text: `${isNew ? "NEW · " : ""}${node.type || "Node"}`,
+      fill: palette.kind,
+      fontSize: 11,
+      fontWeight: 900,
+      refX: 12,
+      refY: 11,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+    },
+    title: {
+      text: node.title || node.id,
+      fill: "#17211f",
+      fontSize: 14,
+      fontWeight: 850,
+      refX: 12,
+      refY: 31,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+      textWrap: { width: -24, height: 28, ellipsis: true },
+    },
+    path: {
+      text: node.path || node.properties?.id || node.id,
+      fill: "#5d6a66",
+      fontSize: 11,
+      fontWeight: 700,
+      refX: 12,
+      refY: 60,
+      textAnchor: "start",
+      textVerticalAnchor: "top",
+      textWrap: { width: -24, height: 18, ellipsis: true },
+    },
+  };
+}
+
+function getNeo4jEdgeAttrs(isNew) {
+  return {
+    line: {
+      stroke: isNew ? "#17211f" : "#8f9a95",
+      strokeWidth: isNew ? 3 : 1.8,
+      targetMarker: { name: "classic", size: 8 },
+      strokeDasharray: isNew ? "" : "7 4",
+    },
+  };
+}
+
+function setNeo4jGraphStatus(status, label) {
+  if (neo4jGraphStatusLabel) neo4jGraphStatusLabel.textContent = label;
+  if (!neo4jGraphDot) return;
+  neo4jGraphDot.classList.remove("ok", "fail", "loading");
+  if (status === "ok") neo4jGraphDot.classList.add("ok");
+  else if (status === "unavailable") neo4jGraphDot.classList.add("fail");
+  else if (status === "loading") neo4jGraphDot.classList.add("loading");
+}
+
+function renderNeo4jGraphMetrics(payload) {
+  if (!neo4jGraphMetrics) return;
+  const graph = payload.graph || { nodes: [], edges: [] };
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const lastUpdated = payload.refreshed_at ? `刷新：${payload.refreshed_at}` : "刷新：暂无";
+  neo4jGraphMetrics.innerHTML = `
+    <span>领域：${escapeHtml(payload.domain || "暂无")}</span>
+    <span>节点 ${escapeHtml(String(nodes.length))}</span>
+    <span>关系 ${escapeHtml(String(edges.length))}</span>
+    <span>${escapeHtml(lastUpdated)}</span>`;
+}
+
+function renderNeo4jGraphFallback(message) {
+  if (!neo4jGraphContainer) return;
+  if (state.neo4jGraph) {
+    state.neo4jGraph.fromJSON({ nodes: [], edges: [] });
+    return;
+  }
+  neo4jGraphContainer.innerHTML = `<div class="neo4j-graph-empty">${escapeHtml(message)}</div>`;
+}
+
 function renderQueuePanel(payload) {
   if (!queueOutput) return;
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
@@ -736,14 +1002,19 @@ function startTaskStream(taskId) {
     try {
       const payload = JSON.parse(e.data);
       if (payload.error) { showError(new Error(payload.error)); stopTaskStream(); return; }
-      showPayload(mergeTaskPayload(payload));
+      const merged = mergeTaskPayload(payload);
+      showPayload(merged);
+      scheduleNeo4jGraphRefresh(getTaskIdFromPayload(merged));
     } catch (err) {
       showError(err);
       stopTaskStream();
     }
   };
 
-  es.addEventListener("done", () => stopTaskStream());
+  es.addEventListener("done", () => {
+    refreshNeo4jGraph(taskId, { force: true });
+    stopTaskStream();
+  });
 
   es.onerror = () => {
     showError(new Error("SSE 连接断开"));
@@ -795,6 +1066,18 @@ if (tokenFloatToggle && tokenFloat) {
     const collapsed = tokenFloat.classList.toggle("collapsed");
     tokenFloatToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
   });
+}
+
+if (neo4jAutoFollowInput) {
+  state.neo4jAutoFollow = neo4jAutoFollowInput.checked;
+  neo4jAutoFollowInput.addEventListener("change", () => {
+    state.neo4jAutoFollow = neo4jAutoFollowInput.checked;
+    if (state.neo4jAutoFollow) scheduleNeo4jGraphRefresh(getTaskIdFromPayload(state.lastPayload), { force: true });
+  });
+}
+
+if (refreshNeo4jGraphButton) {
+  refreshNeo4jGraphButton.addEventListener("click", () => refreshNeo4jGraph(getTaskIdFromPayload(state.lastPayload), { force: true }));
 }
 
 document.querySelector("#create-intake-form").addEventListener("submit", async (event) => {
@@ -886,6 +1169,9 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
+      if (activeTaskId && ["get", "queue", "logs", "resume"].includes(action)) {
+        scheduleNeo4jGraphRefresh(activeTaskId, { force: true });
+      }
       if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
         startTaskStream(activeTaskId);
       }
@@ -938,4 +1224,5 @@ initializeWorkflowMap();
 
 window.addEventListener("resize", () => {
   if (state.workflowGraphReady) renderWorkflowMap(state.lastPayload || {});
+  if (state.neo4jGraphSnapshot) renderNeo4jGraphSnapshot(state.neo4jGraphSnapshot, state.neo4jGraphSnapshot);
 });

@@ -230,6 +230,13 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "task not found"}), 404
         return jsonify(logs), 200
 
+    @app.get("/tasks/<task_id>/graph")
+    def get_task_graph(task_id: str):
+        graph = service.get_task_graph_snapshot(task_id)
+        if graph is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(graph), 200
+
     _TERMINAL_STATUSES = frozenset([
         "verified", "research_required", "repair_required",
         "supplement_required", "max_rounds_reached", "failed", "plan_failed",

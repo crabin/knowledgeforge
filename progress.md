@@ -204,3 +204,23 @@
 
 - 运行 Neo4j 只读验证查询 `MATCH (n) RETURN count(n)` 与 `MATCH ()-[r]->() RETURN count(r)`。
 - 结果：清理后 `nodes=0`、`relationships=0`。
+
+## 2026-05-02 Neo4j 实时知识图谱窗口
+
+- 新增 `/tasks/{task_id}/graph` 接口，按当前任务 `request_context.domain` 读取 Neo4j 中的真实领域图谱快照，并返回统一的 `nodes/edges` JSON、刷新时间与节点/关系限制。
+- 扩展 `Neo4jGraphClient`，支持读取 `Domain -> SubTopic -> Article -> Entity` 以及 `Domain -> KnowledgeStructureNode -> STRUCTURE_EDGE` 相关节点和关系；Neo4j 不可用时接口返回可渲染的 `status=unavailable`，不暴露连接凭据。
+- 前端工作台新增“Neo4j 实时知识图谱”可折叠面板，包含连接状态、领域、节点/关系数量、自动跟随任务开关和手动刷新按钮；复用现有 X6 渲染并在 SSE 任务更新时节流刷新。
+- 图谱渲染按节点类型分层布局，并对比上一帧快照高亮新增节点与关系。
+
+## Verification
+
+- 运行 `python -m py_compile knowledgeforge/graph/client.py knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `python -m pytest tests/test_dashboard.py tests/test_integration_layers.py -q`
+- 结果：`7 passed in 0.60s`
+- 运行 `python -m pytest tests/test_workflow.py tests/test_dashboard.py tests/test_integration_layers.py -q`
+- 结果：`38 passed in 5.35s`
+- 使用当前 `.env` Neo4j 连接执行只读 snapshot smoke。
+- 结果：`neo4j_smoke=ok nodes=0 edges=0`；当前库无对应领域数据，Neo4j 对尚未出现的结构节点标签/关系给出 warning，但查询可正常解析并返回空图。

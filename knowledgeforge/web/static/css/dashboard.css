@@ -290,6 +290,85 @@ h3 {
   display: none;
 }
 
+.collapsible-panel[open] .neo4j-graph-shell {
+  padding: 0 22px 22px;
+}
+
+.neo4j-graph-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.neo4j-graph-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.neo4j-graph-status,
+.neo4j-graph-metrics,
+.toggle-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(23, 33, 31, 0.14);
+  border-radius: 6px;
+  background: #fffdf8;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.neo4j-graph-metrics {
+  flex-wrap: wrap;
+  color: var(--muted);
+}
+
+.neo4j-graph-metrics span {
+  overflow-wrap: anywhere;
+}
+
+.toggle-control {
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.toggle-control input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--green);
+}
+
+.status-dot.loading {
+  background: var(--blue);
+  box-shadow: 0 0 0 4px rgba(47, 95, 145, 0.14);
+}
+
+.neo4j-graph {
+  width: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid rgba(23, 33, 31, 0.14);
+  border-radius: 8px;
+  background: #fffdf8;
+  touch-action: none;
+  user-select: none;
+}
+
+.neo4j-graph:empty::before,
+.neo4j-graph-empty {
+  content: "选择或启动任务后显示当前领域的 Neo4j 图谱";
+  display: grid;
+  place-items: center;
+  min-height: 420px;
+  color: var(--muted);
+  font-weight: 800;
+  text-align: center;
+}
+
 .flow-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1045,6 +1124,10 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .neo4j-graph-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .plan-full-list {
     grid-template-columns: 1fr;
   }
@@ -1081,5 +1164,13 @@ button:disabled {
 
   .workflow-x6 {
     min-height: 320px;
+  }
+
+  .neo4j-graph-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .neo4j-graph {
+    min-height: 360px;
   }
 }
