@@ -537,37 +537,30 @@ function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
   const edges = Array.isArray(graph.edges) ? graph.edges : [];
   const width = neo4jGraphContainer?.clientWidth || 960;
   const compact = width < 760;
-  const nodeWidth = compact ? Math.max(220, width - 56) : 190;
-  const nodeHeight = 84;
-  const groupOrder = ["Domain", "SubTopic", "Article", "Entity", "KnowledgeStructureNode"];
-  const grouped = groupNeo4jNodes(nodes, groupOrder);
-  const columns = compact ? 1 : Math.min(grouped.length || 1, 5);
-  const gapX = compact ? 0 : 32;
-  const gapY = 18;
-  const startX = 24;
-  const startY = 24;
-  const positioned = [];
-  grouped.forEach((group, groupIndex) => {
-    group.nodes.forEach((node, nodeIndex) => {
-      positioned.push({
-        id: node.id,
-        shape: "rect",
-        x: compact ? startX : startX + (groupIndex % columns) * (nodeWidth + gapX),
-        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
-        width: nodeWidth,
-        height: nodeHeight,
-        markup: [
-          { tagName: "rect", selector: "body" },
-          { tagName: "text", selector: "kind" },
-          { tagName: "text", selector: "title" },
-          { tagName: "text", selector: "path" },
-        ],
-        attrs: getNeo4jNodeAttrs(node, !previousNodeIds.has(node.id)),
-      });
-    });
-  });
+  const nodeWidth = compact ? Math.max(220, width - 56) : 196;
+  const nodeHeight = 78;
+  const useStructureLayout = nodes.some((node) => isNeo4jStructureNode(node));
+  const layout = useStructureLayout
+    ? layoutNeo4jStructureNodes(nodes, compact, width, nodeWidth, nodeHeight)
+    : layoutNeo4jNodesByType(nodes, compact, width, nodeWidth, nodeHeight);
+  const positioned = layout.nodes.map((item) => ({
+    id: item.node.id,
+    shape: "rect",
+    x: item.x,
+    y: item.y,
+    width: nodeWidth,
+    height: nodeHeight,
+    markup: [
+      { tagName: "rect", selector: "body" },
+      { tagName: "text", selector: "kind" },
+      { tagName: "text", selector: "title" },
+      { tagName: "text", selector: "path" },
+    ],
+    attrs: getNeo4jNodeAttrs(item.node, !previousNodeIds.has(item.node.id)),
+  }));
   const visibleNodeIds = new Set(positioned.map((node) => node.id));
-  const x6Edges = edges
+  const displayEdges = filterNeo4jDisplayEdges(edges, nodes);
+  const x6Edges = displayEdges
     .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
     .map((edge) => ({
       id: edge.id,
@@ -575,13 +568,75 @@ function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
       source: edge.source,
       target: edge.target,
       connector: { name: "rounded" },
-      router: { name: compact ? "manhattan" : "metro" },
-      labels: [{ attrs: { label: { text: edge.type, fontSize: 10, fill: "#5d6a66", fontWeight: 800 } } }],
-      attrs: getNeo4jEdgeAttrs(!previousEdgeIds.has(edge.id)),
+      router: { name: compact ? "manhattan" : "orth" },
+      attrs: getNeo4jEdgeAttrs(!previousEdgeIds.has(edge.id), edge.type),
     }));
+  return { nodes: positioned, edges: x6Edges, meta: { height: layout.height } };
+}
+
+function layoutNeo4jStructureNodes(nodes, compact, width, nodeWidth, nodeHeight) {
+  const startX = 24;
+  const startY = 24;
+  const gapY = 18;
+  const domainNodes = nodes.filter((node) => node.type === "Domain");
+  const structureNodes = nodes.filter((node) => isNeo4jStructureNode(node));
+  const otherNodes = nodes.filter((node) => node.type !== "Domain" && !isNeo4jStructureNode(node));
+  const depthByLogicalId = buildStructureDepthMap(structureNodes);
+  const rowsByDepth = new Map();
+  structureNodes.forEach((node) => {
+    const depth = depthByLogicalId.get(getNeo4jLogicalId(node)) ?? 1;
+    if (!rowsByDepth.has(depth)) rowsByDepth.set(depth, []);
+    rowsByDepth.get(depth).push(node);
+  });
+  const positioned = [];
+  const allGroups = [];
+  if (domainNodes.length) allGroups.push({ depth: 0, nodes: domainNodes });
+  [...rowsByDepth.entries()]
+    .sort(([a], [b]) => a - b)
+    .forEach(([depth, groupNodes]) => allGroups.push({ depth: domainNodes.length ? depth + 1 : depth, nodes: groupNodes }));
+  if (otherNodes.length) allGroups.push({ depth: allGroups.length, nodes: otherNodes });
+  const groupCount = Math.max(1, allGroups.length);
+  const gapX = compact ? 0 : Math.max(28, Math.floor((width - startX * 2 - nodeWidth * groupCount) / Math.max(1, groupCount - 1)));
+  allGroups.forEach((group, groupIndex) => {
+    const sorted = group.nodes.sort(compareNeo4jNodesForLayout);
+    sorted.forEach((node, nodeIndex) => {
+      positioned.push({
+        node,
+        x: compact ? startX : startX + groupIndex * (nodeWidth + gapX),
+        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
+      });
+    });
+  });
+  const maxRows = compact ? positioned.length : Math.max(1, ...allGroups.map((group) => group.nodes.length));
+  return {
+    nodes: positioned,
+    height: Math.max(460, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY),
+  };
+}
+
+function layoutNeo4jNodesByType(nodes, compact, width, nodeWidth, nodeHeight) {
+  const groupOrder = ["Domain", "SubTopic", "Article", "Entity", "KnowledgeStructureNode"];
+  const grouped = groupNeo4jNodes(nodes, groupOrder);
+  const gapX = compact ? 0 : 32;
+  const gapY = 18;
+  const startX = 24;
+  const startY = 24;
+  const columns = compact ? 1 : Math.min(grouped.length || 1, 5);
+  const positioned = [];
+  grouped.forEach((group, groupIndex) => {
+    group.nodes.forEach((node, nodeIndex) => {
+      positioned.push({
+        node,
+        x: compact ? startX : startX + (groupIndex % columns) * (nodeWidth + gapX),
+        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
+      });
+    });
+  });
   const maxRows = compact ? positioned.length : Math.max(1, ...grouped.map((group) => group.nodes.length));
-  const height = Math.max(420, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY);
-  return { nodes: positioned, edges: x6Edges, meta: { height } };
+  return {
+    nodes: positioned,
+    height: Math.max(460, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY),
+  };
 }
 
 function groupNeo4jNodes(nodes, groupOrder) {
@@ -603,6 +658,51 @@ function groupNeo4jNodes(nodes, groupOrder) {
     }));
 }
 
+function isNeo4jStructureNode(node) {
+  return node.type === "KnowledgeStructureNode" || node.labels?.includes("KnowledgeStructureNode");
+}
+
+function getNeo4jLogicalId(node) {
+  return String(node.properties?.id || node.id || "");
+}
+
+function buildStructureDepthMap(structureNodes) {
+  const byLogicalId = new Map(structureNodes.map((node) => [getNeo4jLogicalId(node), node]));
+  const memo = new Map();
+  const visit = (node) => {
+    const logicalId = getNeo4jLogicalId(node);
+    if (memo.has(logicalId)) return memo.get(logicalId);
+    const parentId = String(node.properties?.parent_node_id || "");
+    const parent = byLogicalId.get(parentId);
+    const depth = parent ? visit(parent) + 1 : 0;
+    memo.set(logicalId, depth);
+    return depth;
+  };
+  structureNodes.forEach((node) => visit(node));
+  return memo;
+}
+
+function compareNeo4jNodesForLayout(a, b) {
+  const kindOrder = { domain: 0, index: 1, section: 2, subtopic: 3, article: 4 };
+  const kindA = String(a.properties?.node_type || "").toLowerCase();
+  const kindB = String(b.properties?.node_type || "").toLowerCase();
+  const orderA = kindOrder[kindA] ?? 20;
+  const orderB = kindOrder[kindB] ?? 20;
+  return orderA - orderB || String(a.title || "").localeCompare(String(b.title || ""));
+}
+
+function filterNeo4jDisplayEdges(edges, nodes) {
+  const hasStructureEdges = edges.some((edge) => edge.type === "STRUCTURE_EDGE");
+  if (!hasStructureEdges) return edges;
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  return edges.filter((edge) => {
+    if (edge.type === "STRUCTURE_EDGE") return true;
+    if (edge.type !== "HAS_STRUCTURE_NODE") return true;
+    const target = byId.get(edge.target);
+    return target && isNeo4jStructureNode(target) && !String(target.properties?.parent_node_id || "").trim();
+  });
+}
+
 function getNeo4jNodeAttrs(node, isNew) {
   const generated = node.properties?.is_generated === true;
   const stateLabel = generated ? "DONE" : "TODO";
@@ -611,7 +711,7 @@ function getNeo4jNodeAttrs(node, isNew) {
     SubTopic: { fill: "#f2f6fb", stroke: "#2f5f91", kind: "#2f5f91" },
     Article: { fill: "#fff8e8", stroke: "#bb8b27", kind: "#8a6517" },
     Entity: { fill: "#fff3ef", stroke: "#a9483f", kind: "#a9483f" },
-    KnowledgeStructureNode: { fill: "#fbf8ee", stroke: "#5d6a66", kind: "#5d6a66" },
+    KnowledgeStructureNode: { fill: generated ? "#f1f8f2" : "#fbf8ee", stroke: generated ? "#1e7b64" : "#5d6a66", kind: generated ? "#1e7b64" : "#5d6a66" },
   }[node.type] || { fill: "#fffdf8", stroke: "#d8d1c2", kind: "#5d6a66" };
   return {
     body: {
@@ -623,7 +723,7 @@ function getNeo4jNodeAttrs(node, isNew) {
       filter: isNew ? "drop-shadow(0 10px 16px rgba(23, 33, 31, 0.18))" : "none",
     },
     kind: {
-      text: `${isNew ? "NEW · " : ""}${stateLabel} · ${node.type || "Node"}`,
+      text: `${stateLabel} · ${formatNeo4jNodeKind(node)}`,
       fill: palette.kind,
       fontSize: 11,
       fontWeight: 900,
@@ -657,13 +757,17 @@ function getNeo4jNodeAttrs(node, isNew) {
   };
 }
 
-function getNeo4jEdgeAttrs(isNew) {
+function formatNeo4jNodeKind(node) {
+  return node.properties?.node_type || node.type || "Node";
+}
+
+function getNeo4jEdgeAttrs(isNew, edgeType = "") {
   return {
     line: {
-      stroke: isNew ? "#17211f" : "#8f9a95",
-      strokeWidth: isNew ? 3 : 1.8,
+      stroke: edgeType === "STRUCTURE_EDGE" ? "#7f8c86" : isNew ? "#17211f" : "#b4beb8",
+      strokeWidth: edgeType === "STRUCTURE_EDGE" ? 1.6 : isNew ? 2.4 : 1.4,
       targetMarker: { name: "classic", size: 8 },
-      strokeDasharray: isNew ? "" : "7 4",
+      strokeDasharray: edgeType === "STRUCTURE_EDGE" ? "" : "7 5",
     },
   };
 }

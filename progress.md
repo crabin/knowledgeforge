@@ -245,3 +245,16 @@
 - 运行 `python -m pytest tests/test_workflow.py tests/test_dashboard.py tests/test_integration_layers.py -q`
 - 结果：`39 passed in 8.60s`
 - 当前任务 `2146b1ba719d4990a3567fff46794af0` 的 `/graph` 接口已返回 `deep learning` 图谱节点与结构关系。
+
+## 2026-05-02 Neo4j 图谱排版优化
+
+- 将 Neo4j 图谱前端布局从“按类型堆叠”调整为优先按知识结构层级排布：Domain、根结构节点、section/index、article/subtopic 等按列展开。
+- 图谱存在 `STRUCTURE_EDGE` 时，隐藏大部分 `HAS_STRUCTURE_NODE` 管理边，只保留结构树连线，避免边和标签遮挡节点。
+- 去掉边标签文本，节点状态文案从 `NEW · KnowledgeStructureNode` 收敛为 `TODO/DONE · node_type`，并用生成状态调整节点配色。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `python -m pytest tests/test_dashboard.py tests/test_integration_layers.py -q`
+- 结果：`8 passed in 0.61s`
