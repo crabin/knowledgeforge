@@ -16,6 +16,23 @@
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`152 passed in 30.05s`
 
+## 2026-05-03 前端空图谱快照修复
+
+- 修复 SSE 任务流里 `graph_snapshot={}` 时前端误进入图谱渲染分支的问题。
+- 新增图谱 payload 归一化逻辑，所有图谱输入都会先转成 `{nodes: [], edges: []}`，避免读取 `graph.nodes.length` 时触发 `Cannot read properties of undefined`。
+- 空图谱快照不再触发本地图谱渲染；手动 `/graph` fallback 仍可显示无图谱数据状态。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py tests/test_workflow.py`
+- 结果：`38 passed in 7.88s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`152 passed in 27.67s`
+- 使用 in-app browser 刷新 `http://localhost:5001/`
+- 结果：页面不再显示 `client_error`，浏览器 error logs 为空。
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.

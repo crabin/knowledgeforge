@@ -460,6 +460,20 @@ function scheduleNeo4jGraphRefresh(taskId, options = {}) {
   }, delay);
 }
 
+function normalizeGraphPayload(graph) {
+  const source = graph && typeof graph === "object" && !Array.isArray(graph) ? graph : {};
+  const nested = source.graph && typeof source.graph === "object" && !Array.isArray(source.graph) ? source.graph : source;
+  return {
+    nodes: Array.isArray(nested.nodes) ? nested.nodes : [],
+    edges: Array.isArray(nested.edges) ? nested.edges : [],
+  };
+}
+
+function hasGraphPayload(graph) {
+  const normalized = normalizeGraphPayload(graph);
+  return Boolean(normalized.nodes.length || normalized.edges.length);
+}
+
 async function refreshNeo4jGraph(taskId = getTaskIdFromPayload(state.lastPayload), options = {}) {
   if (!neo4jGraphContainer) return;
   if (!taskId) {
@@ -480,7 +494,7 @@ async function refreshNeo4jGraph(taskId = getTaskIdFromPayload(state.lastPayload
 }
 
 function renderNeo4jGraphSnapshot(payload, previousPayload) {
-  const graph = payload.graph || { nodes: [], edges: [] };
+  const graph = normalizeGraphPayload(payload.graph || payload.graph_snapshot);
   renderNeo4jGraphMetrics(payload);
   if (payload.status === "ok" || payload.status === "local" || payload.graph_snapshot) {
     setNeo4jGraphStatus("ok", graph.nodes.length ? "已连接" : "无图谱数据");
@@ -492,8 +506,9 @@ function renderNeo4jGraphSnapshot(payload, previousPayload) {
     renderNeo4jGraphFallback(payload.error || "X6 图谱组件未加载。");
     return;
   }
-  const previousNodeIds = new Set((previousPayload?.graph?.nodes || []).map((node) => node.id));
-  const previousEdgeIds = new Set((previousPayload?.graph?.edges || []).map((edge) => edge.id));
+  const previousGraph = normalizeGraphPayload(previousPayload?.graph || previousPayload?.graph_snapshot);
+  const previousNodeIds = new Set(previousGraph.nodes.map((node) => node.id));
+  const previousEdgeIds = new Set(previousGraph.edges.map((edge) => edge.id));
   const data = buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds);
   const width = neo4jGraphContainer.clientWidth || 960;
   neo4jGraphContainer.style.height = `${data.meta.height}px`;
@@ -787,9 +802,9 @@ function setNeo4jGraphStatus(status, label) {
 
 function renderNeo4jGraphMetrics(payload) {
   if (!neo4jGraphMetrics) return;
-  const graph = payload.graph || { nodes: [], edges: [] };
-  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
-  const edges = Array.isArray(graph.edges) ? graph.edges : [];
+  const graph = normalizeGraphPayload(payload.graph || payload.graph_snapshot);
+  const nodes = graph.nodes;
+  const edges = graph.edges;
   const generated = nodes.filter((node) => node.properties?.is_generated === true).length;
   const lastUpdated = payload.refreshed_at ? `刷新：${payload.refreshed_at}` : "刷新：暂无";
   neo4jGraphMetrics.innerHTML = `
@@ -1145,7 +1160,7 @@ function startTaskStream(taskId) {
       if (payload.error) { showError(new Error(payload.error)); stopTaskStream(); return; }
       const merged = mergeTaskPayload(payload);
       showPayload(merged);
-      if (merged.graph_snapshot) {
+      if (hasGraphPayload(merged.graph_snapshot)) {
         renderNeo4jGraphSnapshot(
           {
             task_id: getTaskIdFromPayload(merged),
