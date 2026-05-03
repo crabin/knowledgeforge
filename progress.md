@@ -548,3 +548,19 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
 - 结果：`7 passed in 0.68s`
+
+## 2026-05-03 repair_required 恢复继续执行
+
+- 修复第二轮知识架构修补后任务只能停在 `repair_required`、点击“恢复任务”也不能沿当前图谱继续的问题。
+- 新增 `KnowledgeGraphWorkflow.continue_after_structure_repair(...)`，用于复用已修补的 `structure_graph` / `knowledge_blueprint`，直接接续架构文档生成、证据链接查询、轮次验证、证据收尾与治理质检。
+- 调整 `TaskService.resume_task(...)`：当任务是 `repair_required` 且停在 `structure_review`，并且已有图谱与蓝图时，走 repair flow 接续；其他终态仍保留原有轮次恢复 / 最大轮次保护逻辑。
+- 增加回归测试 `test_resume_repair_required_continues_from_repaired_structure`，确认恢复后会生成文件与领域级 `knowledge_task_queue.json`，并记录 `resume_mode=continue_after_structure_repair` 事件。
+
+## Verification
+
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py::test_structure_review_failure_stops_before_documents tests/test_workflow.py::test_resume_repair_required_continues_from_repaired_structure tests/test_workflow.py::test_complete_documents_requires_finished_framework_then_expands_files`
+- 结果：`3 passed in 1.93s`
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`48 passed in 17.92s`

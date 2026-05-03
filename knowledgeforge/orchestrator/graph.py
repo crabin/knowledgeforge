@@ -143,6 +143,33 @@ class KnowledgeGraphWorkflow:
     def run(self, initial_state: WorkflowState) -> WorkflowState:
         return self._graph.invoke(initial_state)
 
+    def continue_after_structure_repair(self, initial_state: WorkflowState) -> WorkflowState:
+        state: WorkflowState = dict(initial_state)
+        self._emit_workflow_event(
+            state,
+            "structure_repair",
+            "从已修补知识架构继续执行",
+            "completed",
+            {"resume_mode": "continue_after_structure_repair"},
+        )
+        self._commit_state(
+            state,
+            {
+                "task_status": "running",
+                "current_step": "architecture_documents",
+                "current_action": "已接续 repair flow，将基于当前修补后的知识架构继续生成文档与证据链接。",
+            },
+        )
+        self._generate_files(state)
+        while True:
+            self._run_query_queue(state)
+            self._validate_round(state)
+            if self._route_after_validation(state) == "fill_evidence":
+                break
+        self._fill_evidence(state)
+        self._run_post_storage(state)
+        return state
+
     def generate_plans(self, state: WorkflowState) -> WorkflowState:
         return state
 

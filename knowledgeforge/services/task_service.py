@@ -909,6 +909,9 @@ class TaskService:
         if stored is None:
             return None
 
+        if self._can_continue_after_structure_repair(stored):
+            return self._continue_after_structure_repair(task_id, stored)
+
         round_number = int(stored.get("round_number", 1))
         if round_number >= self._config.max_rounds:
             stored["task_status"] = "max_rounds_reached"
@@ -952,6 +955,60 @@ class TaskService:
         )
         with token_tracking_context(task_id):
             final_state = self._workflow.run(resumed_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    @staticmethod
+    def _can_continue_after_structure_repair(stored: dict[str, Any]) -> bool:
+        if stored.get("task_status") != "repair_required":
+            return False
+        if stored.get("current_step") != "structure_review":
+            return False
+        request_context = stored.get("request_context") or {}
+        if not request_context.get("knowledge_blueprint"):
+            return False
+        structure_graph = request_context.get("structure_graph") or stored.get("structure_graph") or {}
+        return isinstance(structure_graph, dict) and bool(structure_graph.get("nodes"))
+
+    def _continue_after_structure_repair(self, task_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        previous_status = str(stored.get("task_status", "unknown"))
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content="任务从 repair_required 的知识架构修复流继续执行，复用当前已修补图谱生成文档与证据链接。",
+                metadata={"resume_from_status": previous_status, "resume_mode": "continue_after_structure_repair"},
+            )
+        )
+        resumed_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": int(stored.get("round_number", 1)),
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "full_document_status": stored.get("full_document_status", "pending" if request_context.completion_mode == "full_document" else "skipped"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": "continued",
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "workflow_events": stored.get("workflow_events", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_status": "resumed",
+            "current_step": "structure_repair",
+            "current_action": "从 repair_required 接续执行。",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_resumed",
+            {"from_status": previous_status, "round": resumed_state["round_number"], "resume_mode": "continue_after_structure_repair"},
+        )
+        with token_tracking_context(task_id):
+            final_state = self._workflow.continue_after_structure_repair(resumed_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:

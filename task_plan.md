@@ -10,6 +10,7 @@
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
 - 结构先行：工作流先生成知识架构型 `structure_graph`，立即同步 Neo4j 首屏呈现，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
 - 架构 review：本地 Markdown 落盘前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时进入 `repair_required`，不生成本地架构文档。
+- repair flow 接续：`repair_required` 的架构审查终态保留为可恢复状态；当任务已有修补后的 `structure_graph` 和 `knowledge_blueprint` 时，`/tasks/{task_id}/resume` 会复用当前图谱继续架构文档、证据链接与治理链路，不再从头生成图谱。
 - 架构文档串行生成：按 review 通过后的结构图谱推导 `knowledge_blueprint`，默认一次生成一个架构 Markdown 文件；文件开始生成时图谱节点进入 `documenting`，写入成功后进入 `documented`。
 - 证据链接记录：`query_evidence_links` 每完成一条链接任务，只更新 `knowledge_task_queue.json` 的 `selected_link/source_kind/reachable/relevance_reason/checked_at`、Neo4j 目标节点和任务 SSE payload；不再把网页内容或摘要即时写回 Markdown。
 - 父级不再自动聚合：架构阶段完整性只看两轮 review 结果，文档补全阶段如需进度聚合另行实现。
@@ -17,6 +18,11 @@
 - 后置治理分支：`completion_mode=framework` 时治理框架图谱与证据文件并跳过完整文档；`completion_mode=full_document` 时在证据完成后补全最终 mixed 完整文档；旧值 `file_level` 兼容为 `full_document`。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
+- repair_required 恢复执行优化（2026-05-03）
+  - [complete] 定位第二轮结构修补后仍被无条件终止为 `repair_required` 的路由与恢复入口。
+  - [complete] 新增 workflow 接续入口，复用已修补图谱继续生成架构文档、查询证据链接、验证、收尾与治理。
+  - [complete] 调整 `/tasks/{task_id}/resume`，对结构 review 的 `repair_required` 任务走 repair flow 接续，不再重跑图谱生成或直接触发最大轮次拦截。
+  - [complete] 增加回归测试覆盖 `repair_required -> resume -> 文档/队列继续生成`。
 - 架构 review 去人工化与 Neo4j 上下文增强（2026-05-03）
   - [complete] 定位现有 review / repair / Neo4j 同步实现与测试覆盖。
   - [complete] 新增按当前知识 ID 读取 Neo4j 相关图谱上下文，并拼接进 LLM review 输入。

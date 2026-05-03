@@ -278,6 +278,51 @@ def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeyp
     assert not domain_dir.exists()
 
 
+def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "知识架构审查器" in system_prompt:
+            return {
+                "is_complete": False,
+                "status": "needs_repair",
+                "missing_topics": ["恢复执行入口"],
+                "suggested_repairs": [{"type": "add_nodes", "title": "恢复执行入口"}],
+                "reasoning": "第二轮后仍需系统修补。",
+            }
+        if "知识架构修补器" in system_prompt:
+            return {}
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
+
+    assert created["task_status"] == "repair_required"
+
+    resumed = client.post(f"/tasks/{created['task_id']}/resume")
+
+    assert resumed.status_code == 200
+    payload = resumed.get_json()
+    assert payload["task_status"] in {"verified", "research_required", "repair_required"}
+    assert payload["current_step"] != "structure_review"
+    assert payload["generation_progress"]["completed_files"] == payload["generation_progress"]["total_files"]
+    assert payload["task_queue_path"].endswith("knowledge_task_queue.json")
+    assert any(
+        event["step_id"] == "structure_repair" and event["details"].get("resume_mode") == "continue_after_structure_repair"
+        for event in payload["workflow_events"]
+    )
+    assert (tmp_path / "save" / "知识工程").exists()
+
+
 def test_complete_documents_requires_finished_framework_then_expands_files(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(
