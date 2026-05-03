@@ -469,3 +469,16 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`161 passed in 30.25s`
+
+## 2026-05-03 按当前代码流程同步文档与 Excalidraw
+
+- 同步 `docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md` 到当前代码真实流程，明确：
+  - 主链路是 `generate_structure_graph -> sync_structure_graph_to_neo4j -> 两轮架构 review / 自动修补 -> generate_architecture_documents -> query_evidence_links -> validate_round -> fill_evidence -> run_post_storage`。
+  - `completion_mode=full_document` 仍会在主链路 `fill_evidence` 阶段直接生成 mixed 完整文档。
+  - `/tasks/{task_id}/documents/complete` 是 framework 任务完成后的后置逐文件补全文档动作。
+- 重写 `docs/流程图.excalidraw` 为当前主链路的精简流程图，突出 Neo4j 前置呈现、两轮 review、link-only evidence queue、`full_document` mixed 文档分支和 framework 后置补全文档分支。
+
+## Verification
+
+- 运行 `node -e "JSON.parse(require('fs').readFileSync('docs/流程图.excalidraw','utf8')); console.log('ok')"`
+- 结果：`ok`
