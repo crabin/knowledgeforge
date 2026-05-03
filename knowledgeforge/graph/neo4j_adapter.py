@@ -82,6 +82,50 @@ class Neo4jPathMapper:
             error=error,
         )
 
+    def update_structure_node_status(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generation_state: str,
+        generated_path: str = "",
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ) -> GraphSyncResult:
+        status = "passed"
+        error = None
+        if self._client is not None:
+            try:
+                self._client.update_structure_node_status(
+                    domain=domain,
+                    task_id=task_id,
+                    node_id=node_id,
+                    generation_state=generation_state,
+                    generated_path=generated_path,
+                    pending_task_count=pending_task_count,
+                    completed_task_count=completed_task_count,
+                )
+            except Exception as exc:
+                status = "failed"
+                error = str(exc)
+        return GraphSyncResult(
+            document_id=node_id,
+            article_path=generated_path,
+            nodes=[
+                {
+                    "label": "KnowledgeStructureNode",
+                    "id": node_id,
+                    "generation_state": generation_state,
+                    "is_generated": generation_state in {"generated", "evidence_pending", "evidence_running", "completed"},
+                    "is_completed": generation_state == "completed",
+                }
+            ],
+            relationships=[],
+            status=status,
+            error=error,
+        )
+
     def sync(
         self,
         artifact: DocumentArtifact,

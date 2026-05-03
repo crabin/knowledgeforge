@@ -452,10 +452,10 @@ class MarkdownKnowledgeWriter:
     @staticmethod
     def _append_agent_contribution(text: str, agent_name: str, contribution: str) -> str:
         marker = f"### {agent_name} 贡献"
-        if marker in text:
+        if contribution in text:
             return text
         insert_at = "## 证据与来源"
-        block = "\n".join([marker, "", contribution, ""])
+        block = "\n".join(([marker, "", contribution, ""] if marker not in text else [contribution, ""]))
         if insert_at in text:
             return text.replace(insert_at, f"{block}\n{insert_at}", 1)
         return f"{text}\n{block}\n"

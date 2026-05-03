@@ -42,7 +42,15 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert payload["post_storage_result"]["version_record"]["report_eligible"] is True
     assert payload["task_queue_snapshot"]["tasks"]
     assert payload["structure_graph"]["nodes"]
+    assert payload["graph_snapshot"]["nodes"]
+    assert any(
+        node["properties"].get("generation_state") == "completed"
+        for node in payload["graph_snapshot"]["nodes"]
+    )
+    assert payload["graph_event"]["event_type"] == "structure_node_status_changed"
+    assert payload["file_update"]["status"] == "completed"
     assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
+    assert any(event["step_id"] == "evidence_realtime_write" for event in payload["workflow_events"])
 
     document_path = Path(payload["document_artifact"]["path"])
     assert document_path.exists()
@@ -50,6 +58,12 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     content = document_path.read_text(encoding="utf-8")
     assert "## 证据与来源" in content
     assert "source_type: mixed" in content
+
+    graph_response = client.get(f"/tasks/{payload['task_id']}/graph")
+    assert graph_response.status_code == 200
+    graph_payload = graph_response.get_json()
+    assert graph_payload["status"] in {"ok", "local"}
+    assert graph_payload["graph"]["nodes"]
 
 
 def test_intake_session_clarifies_ml_without_starting_task(tmp_path: Path) -> None:
@@ -111,6 +125,46 @@ def test_intake_confirm_starts_task_with_normalized_domain(tmp_path: Path, monke
     assert context["original_input"] == "ML"
     assert context["output_language"] == "zh-CN"
     assert context["confirmed"] is True
+
+
+def test_direct_async_task_normalizes_domain_before_starting(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "DL"})
+
+    assert response.status_code == 202
+    context = response.get_json()["request_context"]
+    assert context["domain"] == "Deep Learning"
+    assert context["normalized_domain"] == "Deep Learning"
+    assert context["original_input"] == "DL"
+    assert context["confirmed"] is True
+
+
+def test_direct_task_rejects_unconfirmed_concept_explanation(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "解释一下 ML 是什么"})
+
+    assert response.status_code == 400
+    assert "not confirmed for knowledge collection" in response.get_json()["error"]
 
 
 def test_intake_detects_english_language_preference(tmp_path: Path) -> None:
@@ -290,7 +344,7 @@ def test_async_task_streams_query_progress_before_completion(tmp_path: Path) -> 
     started = response.get_json()
     task_id = started["task_id"]
     assert started["task_status"] == "running"
-    assert started["current_step"] == "structure_graph_planning"
+    assert started["current_step"] == "intent_recognition"
 
     immediate_logs = client.get(f"/tasks/{task_id}/logs")
     assert immediate_logs.status_code == 200
@@ -873,7 +927,7 @@ def test_domain_is_required(tmp_path: Path) -> None:
     response = client.post("/tasks", json={})
 
     assert response.status_code == 400
-    assert response.get_json()["error"] == "`domain` is required."
+    assert response.get_json()["error"] == "`domain` or `message` is required."
 
 
 def test_app_config_loads_from_env_file(tmp_path: Path) -> None:

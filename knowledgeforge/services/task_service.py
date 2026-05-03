@@ -190,15 +190,39 @@ class TaskService:
         return self._config.show_config_status()
 
     def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
-        request_context = self._context_builder.build(payload)
+        request_context = self._build_confirmed_context_from_payload(payload)
         initial_state = self._create_initial_state(request_context, audit_source="api")
         with token_tracking_context(initial_state["task_id"]):
             final_state = self._workflow.run(initial_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
-        request_context = self._context_builder.build(payload)
+        request_context = self._build_confirmed_context_from_payload(payload)
         return self._start_task_from_context(request_context)
+
+    def _build_confirmed_context_from_payload(self, payload: dict[str, Any]) -> RequestContext:
+        message = str(payload.get("message") or payload.get("original_input") or payload.get("domain") or "").strip()
+        if not message:
+            raise ValueError("`domain` or `message` is required.")
+        with token_tracking_context("direct-intake"):
+            clarification = self._intake_clarifier.clarify([message])
+        if clarification.intent != "knowledge_collection":
+            raise ValueError("direct task input is not confirmed for knowledge collection; please clarify the intent first.")
+        normalized_payload = dict(payload)
+        normalized_payload["domain"] = clarification.normalized_domain
+        normalized_payload["normalized_domain"] = clarification.normalized_domain
+        normalized_payload["original_input"] = clarification.original_input
+        normalized_payload["intent"] = clarification.intent
+        normalized_payload["output_language"] = clarification.output_language
+        normalized_payload["search_language"] = clarification.search_language
+        normalized_payload["search_terms"] = clarification.search_terms
+        normalized_payload["clarification_summary"] = clarification.clarification_summary
+        normalized_payload["confirmed"] = True
+        if not normalized_payload.get("subdomains"):
+            normalized_payload["subdomains"] = clarification.subdomains
+        if not normalized_payload.get("focus_points"):
+            normalized_payload["focus_points"] = clarification.focus_points
+        return self._context_builder.build(normalized_payload)
 
     def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
@@ -521,8 +545,9 @@ class TaskService:
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
             "task_status": "running" if audit_source == "api_async" else "created",
-            "current_step": "structure_graph_planning",
-            "current_action": "等待生成目录结构图谱。",
+            "current_step": "intent_recognition",
+            "current_action": "真实意图与领域名称已确认，等待生成目录结构图谱。",
+            "updated_at": now_iso(),
         }
         self._audit_logger.log(
             task_id,
@@ -605,6 +630,9 @@ class TaskService:
             "agent_plans": task.get("agent_plans", {}),
             "workflow_events": task.get("workflow_events", []),
             "structure_graph": task.get("structure_graph", (task.get("request_context") or {}).get("structure_graph", {})),
+            "graph_snapshot": task.get("graph_snapshot", {}),
+            "graph_event": task.get("graph_event", {}),
+            "file_update": task.get("file_update", {}),
             "generation_progress": task.get("generation_progress", {}),
             "task_queue_snapshot": queue_snapshot,
             "queue_summary": self._build_queue_summary(queue_snapshot),
@@ -643,6 +671,17 @@ class TaskService:
                 relationship_limit=limits["edges"],
             )
         except Exception:
+            local_graph = task.get("graph_snapshot") or {}
+            if local_graph.get("nodes") or local_graph.get("edges"):
+                return {
+                    "task_id": task_id,
+                    "domain": domain,
+                    "status": "local",
+                    "refreshed_at": now_iso(),
+                    "graph": local_graph,
+                    "limits": limits,
+                    "error": "Neo4j graph snapshot unavailable; using task-local graph snapshot.",
+                }
             return {
                 "task_id": task_id,
                 "domain": domain,
@@ -1076,6 +1115,7 @@ class TaskService:
 
     def _persist_running_state_update(self, task_id: str, state: WorkflowState) -> None:
         with self._task_lock:
+            state["updated_at"] = now_iso()
             self._tasks[task_id] = state
             self._state_store.save(task_id, self._serialize_state(state))
 

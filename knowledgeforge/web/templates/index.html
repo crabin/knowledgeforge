@@ -41,39 +41,44 @@
           <div id="workflow-x6" class="workflow-x6" aria-label="实时流程图"></div>
         </div>
         <div class="flow-grid" id="workflow-map">
-          <article class="flow-step active" data-step-id="blueprint_ready">
+          <article class="flow-step active" data-step-id="intent_recognition">
             <span>01</span>
-            <h3>蓝图准备</h3>
-            <p>根据固定知识库模板准备目标文件清单和保存路径。</p>
+            <h3>意图识别</h3>
+            <p>识别真实领域意图并归一化缩写。</p>
+          </article>
+          <article class="flow-step" data-step-id="structure_graph_planning">
+            <span>02</span>
+            <h3>图谱规划</h3>
+            <p>生成目录结构图谱和知识点文件蓝图。</p>
           </article>
           <article class="flow-step" data-step-id="llm_generating">
-            <span>02</span>
-            <h3>LLM 生成</h3>
-            <p>严格串行地一次生成一个知识文件骨架，并同步写入查询任务。</p>
+            <span>03</span>
+            <h3>文件生成</h3>
+            <p>串行生成知识点 Markdown，并同步图谱节点状态。</p>
           </article>
           <article class="flow-step" data-step-id="query_queue_running">
-            <span>03</span>
-            <h3>查询队列</h3>
-            <p>按队列一次执行一个 Query / Media 任务，结果先写入领域级 JSON。</p>
+            <span>04</span>
+            <h3>证据查询</h3>
+            <p>按队列一次执行一个 Query / Media 证据任务。</p>
+          </article>
+          <article class="flow-step" data-step-id="evidence_realtime_write">
+            <span>05</span>
+            <h3>即时回写</h3>
+            <p>每条证据完成后立即更新目标 Markdown 和图谱。</p>
           </article>
           <article class="flow-step" data-step-id="round_validation">
-            <span>04</span>
-            <h3>轮次验证</h3>
-            <p>每轮查询结束后评估完整性，必要时继续追加下一轮任务。</p>
-          </article>
-          <article class="flow-step" data-step-id="evidence_filling">
-            <span>05</span>
-            <h3>统一回填</h3>
-            <p>所有依据齐备后统一写回目标 Markdown 和文件合同状态。</p>
+            <span>06</span>
+            <h3>父级聚合</h3>
+            <p>验证轮次并聚合子领域与领域完成状态。</p>
           </article>
           <article class="flow-step" data-step-id="governing">
-            <span>06</span>
+            <span>07</span>
             <h3>治理质检</h3>
             <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
           </article>
           <article class="flow-step" data-step-id="versioning">
-            <span>07</span>
-            <h3>版本与研报</h3>
+            <span>08</span>
+            <h3>版本研报</h3>
             <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
           </article>
         </div>

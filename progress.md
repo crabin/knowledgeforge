@@ -258,3 +258,22 @@
 - 结果：通过。
 - 运行 `python -m pytest tests/test_dashboard.py tests/test_integration_layers.py -q`
 - 结果：`8 passed in 0.61s`
+
+## 2026-05-03 真实流程对齐：意图识别、即时回写与 SSE 图谱
+
+- 将 `/tasks` 与 `/tasks/async` 统一接入 intake 归一化链路，直接任务也会先识别真实意图与领域缩写；`DL` 现在会规范为 `Deep Learning`，概念解释类输入会被拒绝直接启动采集任务。
+- 扩展结构图谱状态模型，结构节点支持 `planned/generating/generated/evidence_pending/evidence_running/completed/failed`，并在本地任务状态和 Neo4j 中同步 `pending_task_count`、`completed_task_count`、`is_completed`、`generated_path` 等属性。
+- 文件生成阶段会在开始/完成时更新图谱节点状态；证据队列每个任务完成后立即回写目标 Markdown contract、更新 `knowledge_task_queue.json`、同步图谱节点，并根据子节点状态聚合父级 SubTopic / Domain 完成度。
+- SSE 任务流 payload 现在携带 `graph_snapshot`、`graph_event`、`file_update`，前端优先用 SSE 图谱快照渲染，不再在每次任务消息后自动请求 `/graph`；`/graph` 保留为手动刷新和 Neo4j 不可用时的本地快照 fallback。
+- 前端流程图调整为“意图识别 → 图谱规划 → 文件生成 → 证据查询 → 即时回写 → 父级聚合 → 治理质检 → 版本研报”，摘要区新增当前文件、证据任务、图谱完成度、父级状态和最近回写路径。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/graph/client.py knowledgeforge/graph/neo4j_adapter.py knowledgeforge/postprocess/pipeline.py knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py knowledgeforge/intake/clarifier.py knowledgeforge/intake/context_builder.py knowledgeforge/utils/query_normalization.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_knowledge_blueprint.py tests/test_dashboard.py tests/test_writer_dynamic_status.py`
+- 结果：`49 passed in 9.80s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`152 passed in 27.98s`

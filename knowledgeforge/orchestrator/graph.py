@@ -182,6 +182,7 @@ class KnowledgeGraphWorkflow:
             )
         derived_context = derive_context_from_structure_graph(graph=structure_graph, domain=context.domain)
         context.structure_graph = structure_graph.to_dict()
+        self._initialize_structure_graph_status(context)
         context.structure_mode = str(derived_context["structure_mode"])
         context.knowledge_modules = derived_context["knowledge_modules"]
         context.core_topics = derived_context["core_topics"] or context.core_topics
@@ -191,8 +192,16 @@ class KnowledgeGraphWorkflow:
         summary = structure_graph_summary(structure_graph)
         updates = {
             "request_context": context,
-            "structure_graph": structure_graph.to_dict(),
+            "structure_graph": context.structure_graph,
             "structure_graph_sync": self._sync_structure_graph_for_generation(state["task_id"], context),
+            "graph_snapshot": self._local_graph_snapshot(context),
+            "graph_event": {
+                "event_type": "structure_graph_initialized",
+                "node_id": structure_graph.root_node_id,
+                "status": "planned",
+                "path": "",
+                "timestamp": now_iso(),
+            },
             "task_status": "running",
             "current_step": "structure_graph_ready",
             "current_action": f"目录结构图谱已生成：{summary['node_count']} 个节点，{summary['edge_count']} 条关系。",
@@ -245,6 +254,13 @@ class KnowledgeGraphWorkflow:
                     "current_file": relative_path,
                 },
             )
+            self._update_structure_node_status(
+                state,
+                context,
+                blueprint,
+                generation_state="generating",
+                generated_path=file_path.as_posix(),
+            )
             self._emit_workflow_event(
                 state,
                 "llm_generating",
@@ -268,12 +284,16 @@ class KnowledgeGraphWorkflow:
             )
             generated = self._generate_single_file(context, blueprint, spec, file_path)
             file_path.write_text(generated["markdown"], encoding="utf-8")
-            graph_generation_sync = (
-                self._mark_structure_node_generated(state["task_id"], context, blueprint, file_path)
-                if (state.get("structure_graph_sync") or {}).get("status") == "passed"
-                else {"status": "skipped", "reason": "structure_graph_sync_not_available", "path": file_path.as_posix()}
-            )
             query_tasks = self._extract_queue_tasks(generated["contract"], blueprint, file_path, queue.get("current_round", 1))
+            graph_generation_sync = self._update_structure_node_status(
+                state,
+                context,
+                blueprint,
+                generation_state="evidence_pending" if query_tasks else "completed",
+                generated_path=file_path.as_posix(),
+                pending_task_count=len(query_tasks),
+                completed_task_count=0,
+            )
             queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), query_tasks)
             generated_count += 1
             queue["generation_status"] = {
@@ -365,11 +385,127 @@ class KnowledgeGraphWorkflow:
             return {"status": "skipped", "reason": "graph_mapper_unavailable", "node_id": node_id, "path": file_path.as_posix()}
         return result.to_dict()
 
+    def _update_structure_node_status(
+        self,
+        state: WorkflowState,
+        context: RequestContext,
+        blueprint: dict[str, Any],
+        *,
+        generation_state: str,
+        generated_path: str = "",
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ) -> dict[str, Any]:
+        node_id = self._structure_node_id_for_blueprint(blueprint)
+        if not node_id:
+            return {"status": "skipped", "reason": "missing_structure_node_id", "path": generated_path}
+        return self._update_structure_node_status_by_id(
+            state,
+            context,
+            node_id=node_id,
+            generation_state=generation_state,
+            generated_path=generated_path,
+            pending_task_count=pending_task_count,
+            completed_task_count=completed_task_count,
+        )
+
+    def _update_structure_node_status_for_task(
+        self,
+        state: WorkflowState,
+        context: RequestContext,
+        task: dict[str, Any],
+        *,
+        generation_state: str,
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ) -> dict[str, Any]:
+        target_path = str(task.get("target_file_path", "")).strip()
+        node_id = self._structure_node_id_for_file(context, target_path)
+        if not node_id:
+            return {"status": "skipped", "reason": "missing_structure_node_id", "path": target_path}
+        return self._update_structure_node_status_by_id(
+            state,
+            context,
+            node_id=node_id,
+            generation_state=generation_state,
+            generated_path=target_path,
+            pending_task_count=pending_task_count,
+            completed_task_count=completed_task_count,
+        )
+
+    def _update_structure_node_status_by_id(
+        self,
+        state: WorkflowState,
+        context: RequestContext,
+        *,
+        node_id: str,
+        generation_state: str,
+        generated_path: str = "",
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ) -> dict[str, Any]:
+        graph_sync = {"status": "skipped", "reason": "structure_graph_sync_not_available", "node_id": node_id, "path": generated_path}
+        if (state.get("structure_graph_sync") or {}).get("status") == "passed":
+            try:
+                result = self._post_storage_pipeline.update_structure_node_status(
+                    domain=context.domain,
+                    task_id=state["task_id"],
+                    node_id=node_id,
+                    generation_state=generation_state,
+                    generated_path=generated_path,
+                    pending_task_count=pending_task_count,
+                    completed_task_count=completed_task_count,
+                )
+                graph_sync = result.to_dict() if result is not None else graph_sync
+            except Exception as exc:
+                logger.warning("Structure node status update failed for %s: %s", node_id, exc)
+                graph_sync = {"status": "failed", "node_id": node_id, "path": generated_path, "error": str(exc)}
+        self._set_local_structure_node_status(
+            context,
+            node_id=node_id,
+            generation_state=generation_state,
+            generated_path=generated_path,
+            pending_task_count=pending_task_count,
+            completed_task_count=completed_task_count,
+        )
+        state["request_context"] = context
+        state["structure_graph"] = context.structure_graph
+        state["graph_snapshot"] = self._local_graph_snapshot(context)
+        state["graph_event"] = {
+            "event_type": "structure_node_status_changed",
+            "node_id": node_id,
+            "status": generation_state,
+            "path": generated_path,
+            "timestamp": now_iso(),
+        }
+        return graph_sync
+
     @staticmethod
     def _structure_node_id_for_blueprint(blueprint: dict[str, Any]) -> str:
         requirements = blueprint.get("completion_requirements", {})
         if isinstance(requirements, dict):
             return str(requirements.get("structure_node_id", "")).strip()
+        return ""
+
+    def _structure_node_id_for_file(self, context: RequestContext, file_path: str) -> str:
+        if not file_path:
+            return ""
+        target = Path(file_path)
+        domain_dir = self._domain_dir(context)
+        try:
+            relative = target.relative_to(domain_dir).as_posix()
+        except ValueError:
+            relative = target.as_posix()
+            marker = f"{domain_dir.as_posix().rstrip('/')}/"
+            if relative.startswith(marker):
+                relative = relative[len(marker):]
+        for blueprint in context.knowledge_blueprint:
+            if str(blueprint.get("relative_path", "")).strip() == relative:
+                return self._structure_node_id_for_blueprint(blueprint)
+        graph = context.structure_graph or {}
+        for node in graph.get("nodes", []) if isinstance(graph, dict) else []:
+            if isinstance(node, dict) and str(node.get("relative_path", "")).strip() == relative:
+                return str(node.get("node_id", "")).strip()
         return ""
 
     def _run_query_queue(self, state: WorkflowState) -> dict[str, Any]:
@@ -386,6 +522,12 @@ class KnowledgeGraphWorkflow:
                 continue
             queue["tasks"][index]["status"] = "running"
             queue["tasks"][index]["attempts"] = int(task.get("attempts", 0)) + 1
+            running_node_sync = self._update_structure_node_status_for_task(
+                state,
+                context,
+                queue["tasks"][index],
+                generation_state="evidence_running",
+            )
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(
                 state,
@@ -393,6 +535,7 @@ class KnowledgeGraphWorkflow:
                 queue,
                 current_step="query_queue_running",
                 current_action=f"正在执行队列任务：{task.get('task_id', '')}",
+                extra_updates={"latest_structure_node_sync": running_node_sync} if running_node_sync else None,
             )
             self._emit_workflow_event(
                 state,
@@ -410,6 +553,25 @@ class KnowledgeGraphWorkflow:
                 }
             )
             outputs[result["agent_name"]] = self._merge_engine_output(outputs.get(result["agent_name"]), result["engine_output"])
+            self._writer.apply_output_artifacts(context, {result["agent_name"]: result["engine_output"]})
+            file_update = self._build_file_update_from_task(queue["tasks"][index])
+            self._emit_workflow_event(
+                state,
+                "evidence_realtime_write",
+                f"证据已即时回写：{file_update.get('path', '')}",
+                "completed" if result["status"] == "completed" else "blocked",
+                file_update,
+            )
+            completed_count, pending_count = self._file_completion_counts(queue["tasks"][index])
+            completed = result["status"] == "completed" and pending_count == 0
+            completed_node_sync = self._update_structure_node_status_for_task(
+                state,
+                context,
+                queue["tasks"][index],
+                generation_state="completed" if completed else ("evidence_pending" if result["status"] == "completed" else "failed"),
+                pending_task_count=pending_count,
+                completed_task_count=completed_count,
+            )
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(
                 state,
@@ -417,7 +579,11 @@ class KnowledgeGraphWorkflow:
                 queue,
                 current_step="query_queue_running",
                 current_action=f"队列任务已完成：{task.get('task_id', '')}",
-                extra_updates={"agent_outputs": outputs},
+                extra_updates={
+                    "agent_outputs": outputs,
+                    "file_update": file_update,
+                    **({"latest_structure_node_sync": completed_node_sync} if completed_node_sync else {}),
+                },
             )
             self._emit_workflow_event(
                 state,
@@ -956,6 +1122,33 @@ class KnowledgeGraphWorkflow:
         return list(artifacts.values())
 
     @staticmethod
+    def _build_file_update_from_task(task: dict[str, Any]) -> dict[str, Any]:
+        citations = task.get("citations", [])
+        return {
+            "path": str(task.get("target_file_path", "")),
+            "task_id": str(task.get("task_id", "")),
+            "status": str(task.get("status", "")),
+            "citations_count": len(citations) if isinstance(citations, list) else 0,
+            "timestamp": now_iso(),
+        }
+
+    @staticmethod
+    def _file_completion_counts(task: dict[str, Any]) -> tuple[int, int]:
+        file_path = Path(str(task.get("target_file_path", "")).strip())
+        if not file_path.exists():
+            return (1 if str(task.get("status", "")) == "completed" else 0, 0 if str(task.get("status", "")) == "completed" else 1)
+        try:
+            contract = parse_contract_block(file_path.read_text(encoding="utf-8"))
+        except OSError:
+            contract = None
+        if not contract:
+            return (1 if str(task.get("status", "")) == "completed" else 0, 0 if str(task.get("status", "")) == "completed" else 1)
+        tasks = contract.get("query_tasks", [])
+        completed = len([item for item in tasks if str(item.get("status", "")) == "completed"])
+        pending = len([item for item in tasks if str(item.get("status", "")) != "completed"])
+        return completed, pending
+
+    @staticmethod
     def _route_after_validation(state: WorkflowState) -> str:
         queue = state.get("task_queue_snapshot", {})
         return "fill_evidence" if queue.get("final_status") == "ready_for_fill" else "run_query_queue"
@@ -971,6 +1164,9 @@ class KnowledgeGraphWorkflow:
     def _commit_state(self, state: WorkflowState, updates: dict[str, Any]) -> None:
         if "workflow_events" in state and "workflow_events" not in updates:
             updates["workflow_events"] = state["workflow_events"]
+        for key in ("graph_snapshot", "graph_event", "file_update", "structure_graph"):
+            if key in state and key not in updates:
+                updates[key] = state[key]
         state.update(updates)
         if self._state_update_callback is not None:
             self._state_update_callback(state["task_id"], state)
@@ -1004,3 +1200,154 @@ class KnowledgeGraphWorkflow:
     def _domain_dir(self, context: RequestContext) -> Path:
         save_root = getattr(self._writer, "_config").save_root
         return save_root / sanitize_path_segment(context.domain, "domain")
+
+    @staticmethod
+    def _initialize_structure_graph_status(context: RequestContext) -> None:
+        graph = context.structure_graph or {}
+        if not isinstance(graph, dict):
+            return
+        for node in graph.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node.setdefault("generation_state", "planned")
+            node.setdefault("self_generation_state", "planned")
+            node.setdefault("is_generated", False)
+            node.setdefault("is_completed", False)
+            node.setdefault("pending_task_count", 0)
+            node.setdefault("completed_task_count", 0)
+
+    def _set_local_structure_node_status(
+        self,
+        context: RequestContext,
+        *,
+        node_id: str,
+        generation_state: str,
+        generated_path: str = "",
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ) -> None:
+        graph = context.structure_graph or {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        target = next((node for node in nodes if isinstance(node, dict) and str(node.get("node_id", "")) == node_id), None)
+        if target is None:
+            return
+        target["self_generation_state"] = generation_state
+        target["generation_state"] = generation_state
+        target["is_generated"] = generation_state in {"generated", "evidence_pending", "evidence_running", "completed"}
+        target["is_completed"] = generation_state == "completed"
+        if generated_path:
+            target["generated_path"] = generated_path
+        if pending_task_count is not None:
+            target["self_pending_task_count"] = max(0, int(pending_task_count))
+            target["pending_task_count"] = max(0, int(pending_task_count))
+        if completed_task_count is not None:
+            target["self_completed_task_count"] = max(0, int(completed_task_count))
+            target["completed_task_count"] = max(0, int(completed_task_count))
+        target["updated_at"] = now_iso()
+        if generation_state == "completed":
+            target["completed_at"] = now_iso()
+        self._aggregate_local_structure_graph(context)
+
+    @staticmethod
+    def _aggregate_local_structure_graph(context: RequestContext) -> None:
+        graph = context.structure_graph or {}
+        if not isinstance(graph, dict):
+            return
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        nodes_by_id = {str(node.get("node_id", "")): node for node in nodes}
+        children_by_parent: dict[str, list[dict[str, Any]]] = {}
+        for edge in graph.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            parent_id = str(edge.get("from_node_id", ""))
+            child = nodes_by_id.get(str(edge.get("to_node_id", "")))
+            if parent_id and child is not None:
+                children_by_parent.setdefault(parent_id, []).append(child)
+
+        def aggregate(node: dict[str, Any]) -> tuple[bool, str]:
+            node_id = str(node.get("node_id", ""))
+            children = children_by_parent.get(node_id, [])
+            child_results = [aggregate(child) for child in children]
+            own_state = str(node.get("self_generation_state") or node.get("generation_state") or "planned")
+            own_required = str(node.get("node_type", "")) != "domain" or not children
+            own_completed = own_state == "completed" or (own_state == "generated" and int(node.get("self_pending_task_count", node.get("pending_task_count", 0)) or 0) == 0)
+            total = len(child_results) + (1 if own_required else 0)
+            completed = len([item for item in child_results if item[0]]) + (1 if own_required and own_completed else 0)
+            states = [own_state, *[item[1] for item in child_results]]
+            if total and completed == total:
+                aggregate_state = "completed"
+            elif "evidence_running" in states:
+                aggregate_state = "evidence_running"
+            elif "evidence_pending" in states or "failed" in states:
+                aggregate_state = "evidence_pending"
+            elif "generating" in states:
+                aggregate_state = "generating"
+            elif "generated" in states:
+                aggregate_state = "generated"
+            else:
+                aggregate_state = own_state
+            if children:
+                node["generation_state"] = aggregate_state
+                node["is_generated"] = aggregate_state in {"generated", "evidence_pending", "evidence_running", "completed"}
+                node["is_completed"] = bool(total and completed == total)
+                node["completed_task_count"] = completed
+                node["pending_task_count"] = max(0, total - completed)
+                if node["is_completed"]:
+                    node.setdefault("completed_at", now_iso())
+            return bool(node.get("is_completed")), str(node.get("generation_state", "planned"))
+
+        root_id = str(graph.get("root_node_id", ""))
+        root = nodes_by_id.get(root_id)
+        if root is not None:
+            aggregate(root)
+        else:
+            for node in nodes:
+                aggregate(node)
+
+    @staticmethod
+    def _local_graph_snapshot(context: RequestContext) -> dict[str, Any]:
+        graph = context.structure_graph or {}
+        if not isinstance(graph, dict):
+            return {"nodes": [], "edges": []}
+        nodes = []
+        for node in graph.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("node_id", ""))
+            label = {
+                "domain": "Domain",
+                "section": "KnowledgeSection",
+                "subtopic": "SubTopic",
+                "article": "Article",
+                "index": "KnowledgeIndex",
+            }.get(str(node.get("node_type", "")), "KnowledgeStructureNode")
+            properties = dict(node)
+            properties["id"] = node_id
+            nodes.append(
+                {
+                    "id": node_id,
+                    "title": str(node.get("title", node_id)),
+                    "type": "KnowledgeStructureNode" if label != "Domain" else "Domain",
+                    "labels": ["KnowledgeStructureNode", label] if label != "Domain" else ["Domain", "KnowledgeStructureNode"],
+                    "path": str(node.get("generated_path") or node.get("relative_path", "")),
+                    "properties": properties,
+                }
+            )
+        edges = []
+        for edge in graph.get("edges", []):
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("from_node_id", ""))
+            target = str(edge.get("to_node_id", ""))
+            if not source or not target:
+                continue
+            edges.append(
+                {
+                    "id": f"{source}->{target}:{edge.get('edge_type', 'CONTAINS')}",
+                    "source": source,
+                    "target": target,
+                    "type": "STRUCTURE_EDGE",
+                    "properties": {"type": str(edge.get("edge_type", "CONTAINS"))},
+                }
+            )
+        return {"nodes": nodes, "edges": edges}

@@ -30,6 +30,9 @@ class WorkflowState(TypedDict, total=False):
     fill_progress: dict
     workflow_events: list[WorkflowStepEvent]
     structure_graph: dict
+    graph_snapshot: dict
+    graph_event: dict
+    file_update: dict
     current_step: str
     current_action: str
     plan_approved_at: str

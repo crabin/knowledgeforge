@@ -6,7 +6,7 @@ from typing import Any
 
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
 from knowledgeforge.models import ClarificationResult, TaskIntent
-from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS
+from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS, FALLBACK_DISPLAY_NAMES
 
 
 CLARIFICATION_SCHEMA = {
@@ -142,12 +142,12 @@ def _extract_domain(text: str) -> str:
 
 def _normalize_known_abbreviation(domain: str) -> str:
     fallback = FALLBACK_ABBREVIATIONS.get(domain.strip().lower())
-    if fallback == "machine learning":
-        return "Machine Learning"
     if fallback:
-        return fallback
+        return FALLBACK_DISPLAY_NAMES.get(fallback, fallback)
     if domain.strip().lower() == "machine learning":
         return "Machine Learning"
+    if domain.strip().lower() in FALLBACK_DISPLAY_NAMES:
+        return FALLBACK_DISPLAY_NAMES[domain.strip().lower()]
     return domain.strip()
 
 

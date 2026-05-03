@@ -96,3 +96,26 @@ class PostStoragePipeline:
             node_id=node_id,
             generated_path=generated_path,
         )
+
+    def update_structure_node_status(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        node_id: str,
+        generation_state: str,
+        generated_path: str = "",
+        pending_task_count: int | None = None,
+        completed_task_count: int | None = None,
+    ):
+        if not hasattr(self._graph_mapper, "update_structure_node_status"):
+            return None
+        return self._graph_mapper.update_structure_node_status(
+            domain=domain,
+            task_id=task_id,
+            node_id=node_id,
+            generation_state=generation_state,
+            generated_path=generated_path,
+            pending_task_count=pending_task_count,
+            completed_task_count=completed_task_count,
+        )

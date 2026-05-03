@@ -36,15 +36,14 @@ const neo4jAutoFollowInput = document.querySelector("#neo4j-auto-follow");
 const refreshNeo4jGraphButton = document.querySelector("#refresh-neo4j-graph");
 
 const workflowSteps = [
-  { id: "structure_graph_planning", order: "01", title: "图谱规划", description: "根据用户意图生成目录结构图谱。" },
-  { id: "structure_graph_ready", order: "02", title: "图谱就绪", description: "从结构图谱派生目录、文件蓝图和导航关系。" },
-  { id: "blueprint_ready", order: "03", title: "蓝图准备", description: "准备目标文件清单与目录结构。" },
-  { id: "llm_generating", order: "04", title: "LLM 生成", description: "严格串行地生成单个知识文件骨架，并提取查询任务。" },
-  { id: "query_queue_running", order: "05", title: "查询队列", description: "按队列一次执行一个 Query / Media 任务。" },
-  { id: "round_validation", order: "06", title: "轮次验证", description: "每轮查询结束后评估是否完整或需要补充。" },
-  { id: "evidence_filling", order: "07", title: "统一回填", description: "全部任务完成后统一把依据回写到目标 Markdown。" },
-  { id: "governing", order: "08", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "versioning", order: "09", title: "版本与研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+  { id: "intent_recognition", order: "01", title: "意图识别", description: "识别真实领域意图并归一化缩写。" },
+  { id: "structure_graph_planning", order: "02", title: "图谱规划", description: "根据用户意图生成目录结构图谱。" },
+  { id: "llm_generating", order: "03", title: "文件生成", description: "串行生成知识点 Markdown 并同步图谱状态。" },
+  { id: "query_queue_running", order: "04", title: "证据查询", description: "按队列执行 Query / Media 证据任务。" },
+  { id: "evidence_realtime_write", order: "05", title: "即时回写", description: "每条证据完成后立即更新文件和图谱。" },
+  { id: "round_validation", order: "06", title: "父级聚合", description: "验证轮次并聚合子领域与领域完成状态。" },
+  { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "versioning", order: "08", title: "版本研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
 ];
 
 async function requestJson(path, options = {}) {
@@ -144,6 +143,11 @@ function renderSummary(payload) {
     ["当前动作", payload.current_action || payload.task?.current_action],
     ["生成进度", summarizeGenerationProgress(payload)],
     ["队列进度", summarizeQueueProgress(payload)],
+    ["当前文件", summarizeCurrentFile(payload)],
+    ["当前证据任务", summarizeCurrentEvidenceTask(payload)],
+    ["图谱完成", summarizeGraphCompletion(payload)],
+    ["父级状态", summarizeParentGraphStatus(payload)],
+    ["最近回写", payload.file_update?.path],
     ["轮次验证", summarizeValidationRounds(payload)],
     ["队列状态", queueSummary.final_status],
     ["队列统计", summarizeQueueCountSummary(queueSummary.counts)],
@@ -478,7 +482,7 @@ async function refreshNeo4jGraph(taskId = getTaskIdFromPayload(state.lastPayload
 function renderNeo4jGraphSnapshot(payload, previousPayload) {
   const graph = payload.graph || { nodes: [], edges: [] };
   renderNeo4jGraphMetrics(payload);
-  if (payload.status === "ok") {
+  if (payload.status === "ok" || payload.status === "local" || payload.graph_snapshot) {
     setNeo4jGraphStatus("ok", graph.nodes.length ? "已连接" : "无图谱数据");
   } else {
     setNeo4jGraphStatus("unavailable", payload.error || "Neo4j 不可用");
@@ -905,6 +909,35 @@ function summarizeGenerationProgress(payload) {
   return `${generation.completed_files || 0}/${generation.total_files || 0} 文件已生成`;
 }
 
+function summarizeCurrentFile(payload) {
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
+  return generation.current_file || generation.last_saved_path || "";
+}
+
+function summarizeCurrentEvidenceTask(payload) {
+  const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  const running = tasks.find((task) => task.status === "running");
+  return running ? `${running.task_id || ""} ${running.query_text || ""}`.trim() : "";
+}
+
+function summarizeGraphCompletion(payload) {
+  const graph = payload.graph_snapshot || state.neo4jGraphSnapshot?.graph || {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  if (!nodes.length) return "";
+  const completed = nodes.filter((node) => node.properties?.is_completed === true || node.properties?.generation_state === "completed").length;
+  return `${completed}/${nodes.length} 节点完成`;
+}
+
+function summarizeParentGraphStatus(payload) {
+  const graph = payload.graph_snapshot || state.neo4jGraphSnapshot?.graph || {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const parent = nodes.find((node) => node.properties?.node_type === "domain") || nodes.find((node) => node.type === "Domain");
+  if (!parent) return "";
+  return `${parent.title || "Domain"} · ${parent.properties?.generation_state || ""}`;
+}
+
 function summarizeQueueProgress(payload) {
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
@@ -1112,7 +1145,22 @@ function startTaskStream(taskId) {
       if (payload.error) { showError(new Error(payload.error)); stopTaskStream(); return; }
       const merged = mergeTaskPayload(payload);
       showPayload(merged);
-      scheduleNeo4jGraphRefresh(getTaskIdFromPayload(merged));
+      if (merged.graph_snapshot) {
+        renderNeo4jGraphSnapshot(
+          {
+            task_id: getTaskIdFromPayload(merged),
+            domain: merged.request_context?.domain || merged.domain || "本地任务图",
+            status: "local",
+            refreshed_at: merged.graph_event?.timestamp || merged.updated_at,
+            graph: merged.graph_snapshot,
+          },
+          state.neo4jGraphSnapshot,
+        );
+        state.neo4jGraphSnapshot = {
+          status: "local",
+          graph: merged.graph_snapshot,
+        };
+      }
     } catch (err) {
       showError(err);
       stopTaskStream();
@@ -1120,7 +1168,6 @@ function startTaskStream(taskId) {
   };
 
   es.addEventListener("done", () => {
-    refreshNeo4jGraph(taskId, { force: true });
     stopTaskStream();
   });
 

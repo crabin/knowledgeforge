@@ -14,7 +14,7 @@ def fake_openai_compatible_chat(monkeypatch):
     def complete_json(self, *, system_prompt: str, user_prompt: str):
         if "任务意图确认助手" in system_prompt:
             messages = " ".join(json.loads(user_prompt).get("messages", []))
-            domain = "Machine Learning" if "ML" in messages else _extract_domain(messages)
+            domain = "Machine Learning" if "ML" in messages else ("Deep Learning" if "DL" in messages else _extract_domain(messages))
             return {
                 "normalized_domain": domain,
                 "intent": "concept_explanation" if "解释" in messages and "知识库" not in messages else "knowledge_collection",
@@ -188,8 +188,10 @@ def fake_openai_compatible_chat(monkeypatch):
 def _extract_domain(message: str) -> str:
     if "知识工程" in message:
         return "知识工程"
+    if message.strip().upper() == "DL":
+        return "Deep Learning"
     if "deep learning" in message.lower():
-        return "deep learning"
+        return "Deep Learning"
     return "知识工程"
 
 

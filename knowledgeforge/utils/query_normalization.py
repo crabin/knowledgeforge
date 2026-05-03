@@ -16,6 +16,16 @@ FALLBACK_ABBREVIATIONS = {
 }
 
 
+FALLBACK_DISPLAY_NAMES = {
+    "machine learning": "Machine Learning",
+    "artificial intelligence": "Artificial Intelligence",
+    "deep learning": "Deep Learning",
+    "large language models": "Large Language Models",
+    "natural language processing": "Natural Language Processing",
+    "retrieval augmented generation": "Retrieval Augmented Generation",
+}
+
+
 NORMALIZATION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -79,7 +89,7 @@ def normalize_query_term(
         except Exception:
             pass
 
-    fallback = FALLBACK_ABBREVIATIONS.get(normalized.lower(), normalized)
+    fallback = _display_name(FALLBACK_ABBREVIATIONS.get(normalized.lower(), normalized))
     aliases = _dedupe([domain, fallback] if fallback != domain else [domain])
     search_terms = _dedupe([fallback, domain] if fallback != domain else [domain])
     return NormalizedQueryTerm(
@@ -100,3 +110,7 @@ def _dedupe(items: list[str]) -> list[str]:
         seen.add(cleaned)
         ordered.append(cleaned)
     return ordered
+
+
+def _display_name(value: str) -> str:
+    return FALLBACK_DISPLAY_NAMES.get(value.strip().lower(), value.strip())

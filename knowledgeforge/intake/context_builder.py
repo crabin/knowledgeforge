@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from knowledgeforge.models import RequestContext
-from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS
+from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS, FALLBACK_DISPLAY_NAMES
 from knowledgeforge.utils.knowledge_tree import normalize_core_topics
 
 
@@ -84,8 +84,8 @@ class ContextBuilder:
 
 def _fallback_normalized_domain(domain: str) -> str:
     fallback = FALLBACK_ABBREVIATIONS.get(domain.strip().lower())
-    if fallback == "machine learning":
-        return "Machine Learning"
     if fallback:
-        return fallback
+        return FALLBACK_DISPLAY_NAMES.get(fallback, fallback)
+    if domain.strip().lower() in FALLBACK_DISPLAY_NAMES:
+        return FALLBACK_DISPLAY_NAMES[domain.strip().lower()]
     return domain
