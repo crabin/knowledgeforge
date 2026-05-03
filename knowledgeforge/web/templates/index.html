@@ -71,10 +71,21 @@
             <h3>证据链接</h3>
             <p>只记录官方或高公信力链接。</p>
           </article>
-          <article class="flow-step" data-step-id="governing">
+          <article class="flow-step" data-step-id="governing" tabindex="0" aria-describedby="governing-flow-detail">
             <span>07</span>
             <h3>治理质检</h3>
             <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
+            <div class="flow-step-detail" id="governing-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>证据链接队列完成或达到治理资格，且图谱补全文档上下文已写入任务状态。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>抽取结构化实体、关系和证据状态。</li>
+                <li>同步 Neo4j 路径关联与图谱治理摘要。</li>
+                <li>执行质量检测，区分 repair_flow 与 research_flow。</li>
+                <li>通过后记录版本资格，未通过则进入系统修复或补检索。</li>
+              </ol>
+            </div>
           </article>
           <article class="flow-step" data-step-id="evidence_link_recorded">
             <span>08</span>

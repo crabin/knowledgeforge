@@ -860,6 +860,11 @@ h3 {
   transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
 }
 
+.flow-step:focus {
+  outline: 3px solid rgba(47, 95, 145, 0.26);
+  outline-offset: 3px;
+}
+
 .flow-step::before {
   content: attr(data-status-label);
   position: absolute;
@@ -987,6 +992,55 @@ h3 {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.45;
+}
+
+.flow-step-detail {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  left: 8px;
+  right: 8px;
+  padding: 12px;
+  border: 1px solid rgba(47, 95, 145, 0.24);
+  border-radius: 6px;
+  background: #fffdf8;
+  box-shadow: 0 16px 34px rgba(23, 33, 31, 0.18);
+  color: var(--ink);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.flow-step:hover .flow-step-detail,
+.flow-step:focus .flow-step-detail,
+.flow-step:focus-within .flow-step-detail {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.flow-step-detail strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--blue);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.flow-step-detail p,
+.flow-step-detail li {
+  color: var(--ink);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.flow-step-detail ol {
+  margin: 6px 0 0 16px;
+  padding: 0;
+}
+
+.flow-step-detail li + li {
+  margin-top: 4px;
 }
 
 .flow-step.active p {
