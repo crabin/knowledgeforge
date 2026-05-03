@@ -333,6 +333,7 @@ function renderWorkflowFallback(byStep, current, payload = {}) {
     step.classList.toggle("done", status === "completed");
     step.classList.toggle("pending", status === "pending");
     step.classList.toggle("blocked", status === "blocked");
+    step.classList.toggle("error", status === "error");
   });
 }
 
@@ -414,7 +415,7 @@ function buildWorkflowGraphData(byStep, current) {
     const next = workflowSteps[index + 1];
     const sourceStatus = getWorkflowStepStatus(step.id, byStep, current);
     const targetStatus = getWorkflowStepStatus(next.id, byStep, current);
-    const edgeStatus = targetStatus === "blocked" ? "blocked" : sourceStatus === "completed" ? "completed" : targetStatus === "active" ? "active" : "pending";
+    const edgeStatus = targetStatus === "error" ? "error" : targetStatus === "blocked" ? "blocked" : sourceStatus === "completed" ? "completed" : targetStatus === "active" ? "active" : "pending";
     return {
       id: `${step.id}-${next.id}`,
       shape: "edge",
@@ -476,6 +477,9 @@ function fitGraphToContainer(graph, container, padding = 24, maxScale = 1) {
 
 function getWorkflowStepStatus(stepId, byStep, current, payload = {}) {
   const event = byStep.get(stepId);
+  const taskStatus = payload.task_status || payload.task?.task_status || "";
+  if (isWorkflowErrorStatus(event?.status)) return "error";
+  if (stepId === current && isWorkflowErrorStatus(taskStatus)) return "error";
   if (event?.status === "blocked") return "blocked";
   if (event?.status === "completed") return "completed";
   if (stepId === current) return "active";
@@ -500,8 +504,13 @@ function getWorkflowStatusLabel(status, stepId = "") {
     completed: "已完成",
     active: "执行中",
     blocked: "需处理",
+    error: "错误",
     pending: "待处理",
   }[status] || "待处理";
+}
+
+function isWorkflowErrorStatus(status) {
+  return ["failed", "error", "errored", "plan_failed"].includes(String(status || "").toLowerCase());
 }
 
 function getWorkflowNodeAttrs(step, status) {
@@ -509,7 +518,8 @@ function getWorkflowNodeAttrs(step, status) {
     pending: { fill: "#fbf8ee", stroke: "#d8d1c2", title: "#17211f", meta: "#5d6a66" },
     active: { fill: "#edf6ee", stroke: "#1e7b64", title: "#17211f", meta: "#1e7b64" },
     completed: { fill: "#f1f8f2", stroke: "#1e7b64", title: "#17211f", meta: "#1e7b64" },
-    blocked: { fill: "#fff3ef", stroke: "#a9483f", title: "#17211f", meta: "#a9483f" },
+    blocked: { fill: "#fff7e8", stroke: "#bb8b27", title: "#17211f", meta: "#9b6f12" },
+    error: { fill: "#fff0ee", stroke: "#a9483f", title: "#17211f", meta: "#a9483f" },
   }[status] || {};
   return {
     body: {
@@ -560,7 +570,7 @@ function getWorkflowNodeAttrs(step, status) {
 }
 
 function getWorkflowEdgeAttrs(status) {
-  const color = { pending: "#d8d1c2", active: "#2f5f91", completed: "#1e7b64", blocked: "#a9483f" }[status] || "#d8d1c2";
+  const color = { pending: "#d8d1c2", active: "#2f5f91", completed: "#1e7b64", blocked: "#bb8b27", error: "#a9483f" }[status] || "#d8d1c2";
   return {
     line: {
       stroke: color,

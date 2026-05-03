@@ -268,6 +268,10 @@ h3 {
 }
 
 .flow-legend.blocked::before {
+  background: var(--gold);
+}
+
+.flow-legend.error::before {
   background: var(--red);
 }
 
@@ -622,15 +626,35 @@ h3 {
 }
 
 .flow-step.blocked {
-  border-color: rgba(169, 72, 63, 0.38);
-  background: #fff3ef;
+  border-color: rgba(187, 139, 39, 0.46);
+  background: #fff7e8;
 }
 
 .flow-step.blocked::before,
 .flow-step.blocked::after {
+  color: #8a630f;
+  border-color: rgba(187, 139, 39, 0.34);
+  background: #fff7e8;
+}
+
+.flow-step.blocked::after {
+  background: var(--gold);
+}
+
+.flow-step.error {
+  border-color: rgba(169, 72, 63, 0.46);
+  background: #fff0ee;
+}
+
+.flow-step.error::before,
+.flow-step.error::after {
   color: var(--red);
-  border-color: rgba(169, 72, 63, 0.28);
-  background: #fff3ef;
+  border-color: rgba(169, 72, 63, 0.32);
+  background: #fff0ee;
+}
+
+.flow-step.error::after {
+  background: var(--red);
 }
 
 .flow-step span {

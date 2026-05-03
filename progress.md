@@ -511,3 +511,13 @@
 - 结果：`2 passed in 2.92s`
 - 运行 `PYTHONPATH=. pytest -q`
 - 最终结果：`162 passed in 30.12s`
+
+## 2026-05-03 前端流程状态颜色优化
+
+- 将 Flow Map 的 `blocked/需处理` 状态从红色调整为橙色，表达可恢复的自动修补、补检索或待处理状态。
+- 新增 `error/错误` 流程状态，只有 workflow event 或当前任务状态为 failed/error/plan_failed 时才使用红色。
+- 同步更新 HTML 图例、fallback 卡片样式和 X6 流程图节点/边颜色。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.71s`
