@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "dependencies": {
+    "neovis.js": "^2.1.0"
+  }
+}

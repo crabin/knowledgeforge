@@ -5,6 +5,7 @@ const state = {
   workflowGraph: null,
   workflowGraphReady: false,
   neo4jGraph: null,
+  neo4jViz: null,
   neo4jGraphSnapshot: null,
   neo4jGraphRefreshTimer: null,
   neo4jAutoFollow: true,
@@ -668,6 +669,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const nodes = graph.nodes;
   const edges = filterNeo4jDisplayEdges(graph.edges, nodes);
   neo4jGraphContainer.style.height = "";
+  state.neo4jViz = null;
   if (!nodes.length) {
     renderNeo4jGraphFallback(payload.error || "选择或启动任务后显示当前领域的 Neo4j 图谱");
     return;
@@ -686,9 +688,8 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const connectedNodeIds = selectedNode ? getNeo4jConnectedNodeIds(selectedNode.id, visibleEdges) : new Set();
   const hiddenNodeCount = Math.max(0, nodes.length - visibleNodes.length);
   const hiddenEdgeCount = Math.max(0, edges.length - visibleEdges.length);
-  const map = buildNeo4jReadableMap(visibleNodes, visibleEdges);
   neo4jGraphContainer.innerHTML = `
-    <div class="neo4j-html-graph" data-node-count="${escapeHtml(String(nodes.length))}">
+    <div class="neo4j-html-graph neo4j-neovis-graph" data-node-count="${escapeHtml(String(nodes.length))}">
       <div class="neo4j-state-strip" aria-label="图谱状态统计">
         ${renderNeo4jStateBadge("规划", counts.planned)}
         ${renderNeo4jStateBadge("生成中", generatingCount)}
@@ -696,33 +697,29 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
         ${renderNeo4jStateBadge("完成", completedCount)}
         ${renderNeo4jStateBadge("失败", counts.failed)}
       </div>
-      <div class="neo4j-map-layout">
-        <section class="neo4j-map-frame" aria-label="Neo4j 知识结构图谱">
-          <div class="neo4j-map-viewport" style="min-width:${escapeHtml(String(map.width))}px; height:${escapeHtml(String(map.height))}px;">
-            <svg class="neo4j-map-edges" width="${escapeHtml(String(map.width))}" height="${escapeHtml(String(map.height))}" viewBox="0 0 ${escapeHtml(String(map.width))} ${escapeHtml(String(map.height))}" aria-hidden="true">
-              <defs>
-                <marker id="neo4j-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-                  <path d="M 0 0 L 8 4 L 0 8 z"></path>
-                </marker>
-              </defs>
-              ${map.edges.map((edge) => renderNeo4jMapEdge(edge, !previousEdgeIds.has(edge.id), selectedNode && isNeo4jEdgeConnectedToNode(edge, selectedNode.id))).join("")}
-            </svg>
-            ${map.nodes.map((item) => renderNeo4jMapNode(item, !previousNodeIds.has(item.node.id), item.node.id === selectedNode?.id, connectedNodeIds.has(item.node.id))).join("")}
-          </div>
-          <div class="neo4j-map-foot">
+      <div class="neo4j-neovis-layout">
+        <section class="neo4j-neovis-frame" aria-label="Neovis.js Neo4j 知识图谱">
+          <div class="neo4j-neovis-head">
+            <span>Neovis.js force graph</span>
             <span>显示 ${escapeHtml(String(visibleNodes.length))}/${escapeHtml(String(nodes.length))} 个节点</span>
             ${hiddenNodeCount ? `<span>隐藏 ${escapeHtml(String(hiddenNodeCount))} 个低优先级节点</span>` : ""}
-            ${hiddenEdgeCount ? `<span>已收起 ${escapeHtml(String(hiddenEdgeCount))} 条重复或跨层关系，点选节点看直接相邻关系</span>` : ""}
+            ${hiddenEdgeCount ? `<span>收起 ${escapeHtml(String(hiddenEdgeCount))} 条重复或跨层关系</span>` : ""}
           </div>
+          <div id="neo4j-neovis-viz" class="neo4j-neovis-viz"></div>
         </section>
         ${renderNeo4jNodeInspector(selectedNode, nodes, edges)}
       </div>
     </div>`;
-  neo4jGraphContainer.querySelectorAll("[data-neo4j-node-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.neo4jSelectedNodeId = button.dataset.neo4jNodeId || "";
-      renderNeo4jGraphHtml(graph, payload, previousPayload);
-    });
+  renderNeo4jNeovisNetwork({
+    nodes: visibleNodes,
+    edges: visibleEdges,
+    selectedNodeId: selectedNode?.id || "",
+    connectedNodeIds,
+    previousNodeIds,
+    previousEdgeIds,
+    graph,
+    payload,
+    previousPayload,
   });
 }
 
@@ -877,6 +874,213 @@ function buildNeo4jReadableEdges(nodes, edges) {
     });
   });
   return readableEdges;
+}
+
+function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeIds, previousNodeIds, previousEdgeIds, graph, payload, previousPayload }) {
+  const vizContainer = document.querySelector("#neo4j-neovis-viz");
+  const NeoVisConstructor = window.NeoVis?.default || window.NeoVis?.NeoVis || window.NeoVis;
+  if (!vizContainer || !NeoVisConstructor) {
+    if (vizContainer) {
+      vizContainer.innerHTML = '<div class="neo4j-graph-empty">Neovis.js 加载失败，请检查网络或 CDN。</div>';
+    }
+    return;
+  }
+
+  const neoViz = new NeoVisConstructor({
+    containerId: "neo4j-neovis-viz",
+    dataFunction: async function* emptyNeovisData() {},
+    labels: {},
+    relationships: {},
+    visConfig: buildNeo4jNeovisConfig(),
+  });
+  state.neo4jViz = neoViz;
+  neoViz.render();
+  window.setTimeout(() => {
+    if (state.neo4jViz !== neoViz || !neoViz.network) return;
+    const visNodes = nodes.map((node) => toNeo4jVisNode(node, {
+      isNew: !previousNodeIds.has(node.id),
+      isSelected: node.id === selectedNodeId,
+      isConnected: connectedNodeIds.has(node.id),
+    }));
+    const visEdges = edges.map((edge) => toNeo4jVisEdge(edge, {
+      isNew: !previousEdgeIds.has(edge.id),
+      isConnected: isNeo4jEdgeConnectedToNode(edge, selectedNodeId),
+    }));
+    neoViz.nodes.clear();
+    neoViz.edges.clear();
+    neoViz.nodes.update(visNodes);
+    neoViz.edges.update(visEdges);
+    neoViz.network.setData({ nodes: neoViz.nodes, edges: neoViz.edges });
+    neoViz.network.setOptions(buildNeo4jNeovisConfig());
+    neoViz.network.fit({ animation: false });
+    neoViz.network.on("click", (params) => {
+      if (!params.nodes?.length) return;
+      state.neo4jSelectedNodeId = String(params.nodes[0]);
+      renderNeo4jGraphHtml(graph, payload, previousPayload);
+    });
+  }, 0);
+}
+
+function buildNeo4jNeovisConfig() {
+  return {
+    autoResize: true,
+    interaction: {
+      hover: true,
+      navigationButtons: true,
+      keyboard: false,
+      multiselect: false,
+      tooltipDelay: 120,
+    },
+    layout: {
+      improvedLayout: true,
+      hierarchical: { enabled: false },
+    },
+    physics: {
+      enabled: true,
+      solver: "forceAtlas2Based",
+      forceAtlas2Based: {
+        gravitationalConstant: -86,
+        centralGravity: 0.012,
+        springLength: 132,
+        springConstant: 0.08,
+        damping: 0.58,
+        avoidOverlap: 0.7,
+      },
+      stabilization: {
+        enabled: true,
+        iterations: 320,
+        updateInterval: 20,
+        fit: true,
+      },
+      adaptiveTimestep: true,
+    },
+    nodes: {
+      shape: "dot",
+      borderWidth: 2,
+      size: 24,
+      chosen: true,
+      font: {
+        color: "#17302b",
+        size: 13,
+        face: "Avenir Next, PingFang SC, Microsoft YaHei, sans-serif",
+        strokeWidth: 4,
+        strokeColor: "#fffdf8",
+        vadjust: -2,
+      },
+      scaling: {
+        min: 18,
+        max: 34,
+        label: { enabled: true, min: 12, max: 18 },
+      },
+      shadow: {
+        enabled: true,
+        color: "rgba(23, 33, 31, 0.16)",
+        size: 10,
+        x: 0,
+        y: 4,
+      },
+    },
+    edges: {
+      width: 1.3,
+      color: {
+        color: "rgba(93, 106, 102, 0.42)",
+        highlight: "#2f5f91",
+        hover: "#2f5f91",
+        inherit: false,
+      },
+      smooth: {
+        enabled: true,
+        type: "dynamic",
+        roundness: 0.38,
+      },
+      arrows: {
+        to: { enabled: true, scaleFactor: 0.48 },
+      },
+      font: {
+        color: "#66736e",
+        size: 9,
+        face: "Avenir Next, PingFang SC, Microsoft YaHei, sans-serif",
+        strokeWidth: 4,
+        strokeColor: "#fffdf8",
+        align: "middle",
+      },
+      selectionWidth: 2.4,
+    },
+  };
+}
+
+function toNeo4jVisNode(node, { isNew, isSelected, isConnected }) {
+  const stateName = getNeo4jGenerationState(node);
+  const palette = getNeo4jVisNodePalette(node, stateName);
+  const label = shortenNeo4jVisLabel(node.title || node.id, isSelected ? 18 : 12);
+  const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  return {
+    id: node.id,
+    label,
+    title: `${node.title || node.id}\n${formatNeo4jGenerationState(stateName)} · ${formatNeo4jNodeKind(node)}\n${path}`,
+    group: formatNeo4jNodeKind(node),
+    value: getNeo4jVisNodeValue(node),
+    color: {
+      background: isSelected ? "#2f5f91" : palette.background,
+      border: isSelected ? "#17211f" : isConnected ? "#2f5f91" : palette.border,
+      highlight: { background: "#2f5f91", border: "#17211f" },
+      hover: { background: palette.hover, border: "#17211f" },
+    },
+    font: {
+      color: isSelected ? "#ffffff" : "#17302b",
+      size: isSelected ? 15 : 13,
+      strokeWidth: isSelected ? 2 : 4,
+      strokeColor: isSelected ? "#2f5f91" : "#fffdf8",
+    },
+    borderWidth: isNew || isConnected || isSelected ? 3 : 2,
+    opacity: isConnected || isSelected ? 1 : 0.84,
+  };
+}
+
+function getNeo4jVisNodePalette(node, stateName) {
+  if (stateName === "failed" || stateName === "link_failed") {
+    return { background: "#f6aaa1", border: "#a9483f", hover: "#ffd6d1" };
+  }
+  if (stateName === "reviewing" || stateName === "repairing" || stateName === "documenting" || stateName === "link_querying") {
+    return { background: "#91bdf4", border: "#2f5f91", hover: "#cfe2fb" };
+  }
+  if (stateName === "approved" || stateName === "documented" || stateName === "link_verified" || stateName === "completed" || stateName === "generated") {
+    return { background: "#8fd6b2", border: "#1e7b64", hover: "#c9efda" };
+  }
+  if (node.type === "Domain") return { background: "#7fb4ff", border: "#2f5f91", hover: "#cfe2fb" };
+  return { background: "#86b7ff", border: "#5e88bd", hover: "#d8e8ff" };
+}
+
+function getNeo4jVisNodeValue(node) {
+  const kind = String(formatNeo4jNodeKind(node)).toLowerCase();
+  if (node.type === "Domain" || kind === "domain") return 34;
+  if (kind === "index" || kind === "section") return 27;
+  if (kind === "subtopic") return 23;
+  return 19;
+}
+
+function shortenNeo4jVisLabel(value, maxLength) {
+  const text = String(value || "");
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(1, maxLength - 1))}…`;
+}
+
+function toNeo4jVisEdge(edge, { isNew, isConnected }) {
+  return {
+    id: edge.id,
+    from: edge.source,
+    to: edge.target,
+    label: isConnected ? formatNeo4jEdgeType(edge.type) : "",
+    title: formatNeo4jEdgeType(edge.type),
+    width: isConnected || isNew ? 2.2 : 1.2,
+    color: {
+      color: isConnected ? "#2f5f91" : "rgba(93, 106, 102, 0.42)",
+      highlight: "#2f5f91",
+      hover: "#2f5f91",
+      inherit: false,
+    },
+    arrows: { to: { enabled: true, scaleFactor: isConnected ? 0.62 : 0.45 } },
+  };
 }
 
 function getNeo4jConnectedNodeIds(nodeId, edges) {

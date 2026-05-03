@@ -34,6 +34,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "neo4j-auto-follow" in body
     assert "refresh-neo4j-graph" in body
     assert "https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" in body
+    assert "https://unpkg.com/neovis.js@2.1.0/dist/neovis.js" in body
     assert "生成与查询队列状态" in body
     assert "plan-full-panel" in body
     assert "trace-grid" in body

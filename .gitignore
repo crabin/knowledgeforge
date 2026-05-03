@@ -8,6 +8,7 @@
 __pycache__/
 *.pyc
 logs/
+node_modules/
 
 save/
 

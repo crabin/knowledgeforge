@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-05-03 Neovis.js 图谱展示接入
+
+- 按官方 Neovis.js 安装文档为项目安装 `neovis.js`，新增 `package.json` 与 `package-lock.json`，并将 `node_modules/` 加入 `.gitignore`。
+- 前端模板加载 `https://unpkg.com/neovis.js@2.1.0/dist/neovis.js`，与项目内安装版本保持一致；官方文档示例的 `2.0.2` 在当前用法下会尝试默认直连 Neo4j，因此未继续使用。
+- 将 Neo4j 图谱主画布切换为 Neovis.js / vis-network 力导向图展示，节点呈圆点网络形态，保留顶部统计和右侧选中节点详情。
+- 为了避免在浏览器暴露 Neo4j 密码，前端不直连 Neo4j；仍使用后端 `/tasks/{task_id}/graph` 的安全快照数据，并转换为 Neovis.js 数据集渲染。
+- 图谱面板排版调整为左侧 Neovis.js 画布、右侧详情栏，画布高度使用 `min(58vh, 620px)` 并保留响应式单列布局。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.69s`
+- 使用 in-app browser 刷新当前 Machine Learning 任务图谱，确认 Neovis.js canvas 已渲染，节点与关系可见。
+- 运行 `npm audit --audit-level=moderate`
+- 结果：失败，`neovis.js -> vis-network -> vis-data -> uuid` 链路存在 4 个 moderate 漏洞；`npm audit fix --force` 会把 `neovis.js` 降到 `1.6.0`，属于破坏性变更，本轮未执行。
+
 ## 2026-05-03 Neo4j 图谱可读性优化
 
 - 根据浏览器 diff comment 继续修复关系可读性：主图不再直接绘制所有 Neo4j `STRUCTURE_EDGE` / 管理边，而是根据结构节点 `parent_node_id` 生成唯一父子边，避免跨层线和重复标签堆成蓝线团。

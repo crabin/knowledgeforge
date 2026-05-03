@@ -362,6 +362,10 @@ h3 {
   background-size: 18px 18px;
 }
 
+.neo4j-neovis-graph {
+  min-height: 560px;
+}
+
 .neo4j-state-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
@@ -386,6 +390,60 @@ h3 {
 .neo4j-state-badge strong {
   color: var(--ink);
   font-size: 0.95rem;
+}
+
+.neo4j-neovis-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.neo4j-neovis-frame {
+  display: grid;
+  grid-template-rows: auto minmax(480px, 1fr);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(47, 95, 145, 0.03) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(47, 95, 145, 0.03) 1px, transparent 1px),
+    #fffdf8;
+  background-size: 20px 20px;
+}
+
+.neo4j-neovis-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(23, 33, 31, 0.1);
+  background: rgba(255, 253, 248, 0.9);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.neo4j-neovis-head span:first-child {
+  color: var(--blue);
+}
+
+.neo4j-neovis-viz {
+  width: 100%;
+  min-height: 480px;
+  height: min(58vh, 620px);
+}
+
+.neo4j-neovis-viz canvas {
+  outline: none;
+}
+
+.neo4j-neovis-viz .vis-navigation {
+  right: 10px !important;
+  bottom: 10px !important;
 }
 
 .neo4j-map-layout {
@@ -1667,6 +1725,14 @@ button:disabled {
 
   .neo4j-html-layout {
     grid-template-columns: 1fr;
+  }
+
+  .neo4j-neovis-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .neo4j-neovis-viz {
+    height: 520px;
   }
 
   .neo4j-map-layout {
