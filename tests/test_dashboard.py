@@ -41,6 +41,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "图谱补全" in body
     assert "架构Review" in body
     assert "补全文档" in body
+    assert body.index('data-step-id="governing"') < body.index('data-step-id="evidence_link_recorded"')
+    assert body.index('data-step-id="evidence_link_recorded"') < body.index('data-step-id="document_completion"')
     assert "data-task-action=\"complete-documents\"" in body
     assert "产出模式" not in body
     dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")

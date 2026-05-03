@@ -5,8 +5,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 import yaml
 from langgraph.graph import END, StateGraph
 
@@ -46,6 +44,8 @@ from knowledgeforge.utils.structure_graph import (
     structure_graph_summary,
 )
 from knowledgeforge.utils.time import now_iso
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_contract_items(items: Any) -> list[Any]:
@@ -797,8 +797,8 @@ class KnowledgeGraphWorkflow:
             file_update = self._build_file_update_from_task(queue["tasks"][index])
             self._emit_workflow_event(
                 state,
-                "evidence_link_recorded",
-                f"可信证据链接已记录：{result['selected_link'] or file_update.get('path', '')}",
+                "evidence_link_query",
+                f"可信证据链接已选择：{result['selected_link'] or file_update.get('path', '')}",
                 "completed" if result["status"] == "completed" else "blocked",
                 file_update,
             )
@@ -810,17 +810,6 @@ class KnowledgeGraphWorkflow:
                 generation_state="link_verified" if result["status"] == "completed" else "link_failed",
                 pending_task_count=pending_count,
                 completed_task_count=completed_count,
-                extra_properties={
-                    "evidence_links": [result["selected_link"]] if result["selected_link"] else [],
-                    "selected_link": result["selected_link"],
-                    "source_kind": result["source_kind"],
-                    "reachable": result["reachable"],
-                    "relevance_reason": result["relevance_reason"],
-                    "checked_at": result["checked_at"],
-                    "claim_or_gap": str(queue["tasks"][index].get("claim_or_gap", "")),
-                    "expected_evidence": queue["tasks"][index].get("expected_evidence", []),
-                    "document_completion_status": "not_requested",
-                },
             )
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(

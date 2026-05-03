@@ -67,8 +67,10 @@ def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path)
     assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
     assert any(event["step_id"] == "structure_review" for event in payload["workflow_events"])
     assert any(event["step_id"] == "evidence_link_query" for event in payload["workflow_events"])
+    assert not any(event["step_id"] == "evidence_link_recorded" for event in payload["workflow_events"])
     assert all(task["task_type"] == "query" for task in payload["task_queue_snapshot"]["tasks"])
     assert any(task.get("selected_link") for task in payload["task_queue_snapshot"]["tasks"])
+    assert all("selected_link" not in node for node in payload["structure_graph"]["nodes"])
 
     knowledge_markdown = [
         path for path in (tmp_path / "save" / "知识工程").rglob("*.md")
@@ -433,7 +435,12 @@ def test_complete_documents_requires_finished_framework_then_expands_files(tmp_p
     assert payload["full_document_status"] == "generated"
     result = payload["document_completion_result"]
     assert result["completed_files"]
-    assert any(event["step_id"] == "document_completion" for event in payload["workflow_events"])
+    workflow_step_ids = [event["step_id"] for event in payload["workflow_events"]]
+    assert "evidence_link_recorded" in workflow_step_ids
+    assert "document_completion" in workflow_step_ids
+    assert workflow_step_ids.index("evidence_link_recorded") < workflow_step_ids.index("document_completion")
+    assert payload["document_evidence_sync"]["total_tasks"] >= 1
+    assert any("selected_link" in node for node in payload["request_context"]["structure_graph"]["nodes"])
 
     completed_path = Path(result["completed_files"][0])
     content = completed_path.read_text(encoding="utf-8")

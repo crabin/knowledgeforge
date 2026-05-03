@@ -39,7 +39,7 @@
 
 ## 2026-05-03 本地 Markdown 后置化决策
 - 用户已确认“不落本地文件”的范围指不生成本地知识 Markdown；任务状态、日志、缓存和运行态队列文件可以继续存在。
-- 默认主链路的事实源调整为 Neo4j 知识图谱：结构关系、review 结果、修补记录、证据链接、来源类型、可访问性、关联 claim、建议路径和补全文档状态都应优先写入图谱。
+- 默认主链路的事实源调整为 Neo4j 知识结构图谱：结构关系、review 结果、修补记录、建议路径和补全文档状态优先写入图谱；证据链接、来源类型、可访问性和关联 claim 默认先留在运行态队列，只有点击补全文档后才写入 Neo4j。
 - `save/{领域}/README.md` 与 `save/{领域}/{子领域}/{文档}.md` 只在用户点击 `/tasks/{task_id}/documents/complete` 后生成；未点击前不要求本地知识 Markdown 存在。
 - 补全文档动作需要先检查 Neo4j 架构 review、可信链接和治理状态，再消费图谱上下文生成 Markdown，并把 `generated_path` / `document_completion_status` 同步回图谱。
 
@@ -68,7 +68,7 @@
 - 第一批实施按“前半段主链路做实、后半段关键骨架接上”的方式推进。
 - 完整性评估为独立评估节点；Neo4j 失败采用 `graph_sync_pending` 异步补偿；版本冻结点在质量通过且文件图谱一致之后。
 - 核心模块边界固定为 Web Interface、Orchestrator、Context Builder、三大 Engine、Completeness Evaluator、Knowledge Document Writer、Post-Storage Pipeline、Report Branch。
-- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 两轮架构 review → 图谱补全 → 证据队列执行 → 图谱证据写入 → 后置治理 → 等待补全文档 / 可选研报”，并以 Neo4j 作为默认主链路事实源。
+- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 两轮架构 review → 图谱补全 → 证据队列执行 → 后置治理 → 等待补全文档 / 可选研报”；“图谱证据写入”是补全文档前置动作，不在默认链路执行。
 - 回流规则固定为 repair_flow 与 research_flow 两类，禁止仅返回模糊失败。
 - 质量状态固定为 `passed` / `repair_required` / `research_required`；达到最大轮次、补偿或最小新增阈值时转入 `needs_human_review`。
 

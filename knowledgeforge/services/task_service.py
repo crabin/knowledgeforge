@@ -859,6 +859,7 @@ class TaskService:
 
         request_context = self._deserialize_request_context(stored["request_context"])
         request_context.task_id = task_id
+        evidence_sync = self._sync_document_completion_evidence_to_graph(request_context, stored.get("task_queue_snapshot") or {})
         result = self._writer.complete_framework_documents(
             request_context,
             round_number=int(stored.get("round_number", 1)),
@@ -873,23 +874,85 @@ class TaskService:
             timestamp=now,
             details=result,
         )
+        evidence_event = WorkflowStepEvent(
+            step_id="evidence_link_recorded",
+            label="图谱证据写入",
+            status="completed",
+            timestamp=now,
+            details=evidence_sync,
+        )
         stored["request_context"] = request_context.to_dict()
         stored["completion_mode"] = "framework"
         stored["document_completion_status"] = "generated"
         stored["full_document_status"] = "generated"
+        stored["document_evidence_sync"] = evidence_sync
         stored["document_completion_result"] = result
         stored["current_step"] = "document_completion"
         stored["current_action"] = f"已补全 {len(result.get('completed_files', []))} 个框架文档。"
         stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(evidence_event.to_dict())
         stored.setdefault("workflow_events", []).append(event.to_dict())
         if isinstance(stored.get("document_artifact"), dict):
             stored["document_artifact"]["generated_files"] = result.get("completed_files", [])
         with self._task_lock:
             self._tasks[task_id] = stored
         self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "document_evidence_synced", evidence_sync)
         self._audit_logger.log(task_id, "documents_completed", result)
+        self._audit_logger.log(task_id, "workflow_step", evidence_event.to_dict())
         self._audit_logger.log(task_id, "workflow_step", event.to_dict())
         return self._attach_runtime_observability(stored)
+
+    def _sync_document_completion_evidence_to_graph(self, request_context: RequestContext, queue: dict[str, Any]) -> dict[str, Any]:
+        tasks = [task for task in queue.get("tasks", []) if isinstance(task, dict)]
+        synced: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        graph = request_context.structure_graph if isinstance(request_context.structure_graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        for task in tasks:
+            node_id = str(task.get("target_node_id", "")).strip()
+            if not node_id:
+                skipped.append({"task_id": str(task.get("task_id", "")), "reason": "missing_target_node_id"})
+                continue
+            selected_link = str(task.get("selected_link", "")).strip()
+            extra_properties = {
+                "evidence_links": [selected_link] if selected_link else [],
+                "selected_link": selected_link,
+                "source_kind": str(task.get("source_kind", "")),
+                "reachable": bool(task.get("reachable", False)),
+                "relevance_reason": str(task.get("relevance_reason", "")),
+                "checked_at": str(task.get("checked_at", "")),
+                "claim_or_gap": str(task.get("claim_or_gap", "")),
+                "expected_evidence": task.get("expected_evidence", []),
+                "document_completion_status": "pending",
+            }
+            for node in nodes:
+                if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                    node.update(extra_properties)
+            if self._graph_client is None:
+                skipped.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "reason": "neo4j_client_unavailable"})
+                continue
+            try:
+                self._graph_client.update_structure_node_status(
+                    domain=request_context.domain,
+                    task_id=request_context.task_id,
+                    node_id=node_id,
+                    generation_state="link_verified" if str(task.get("status", "")) == "completed" else "link_failed",
+                    generated_path="",
+                    pending_task_count=0 if str(task.get("status", "")) == "completed" else 1,
+                    completed_task_count=1 if str(task.get("status", "")) == "completed" else 0,
+                    extra_properties=extra_properties,
+                )
+                synced.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "selected_link": selected_link})
+            except Exception as exc:
+                skipped.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "reason": str(exc)})
+        return {
+            "status": "completed",
+            "synced_tasks": synced,
+            "skipped_tasks": skipped,
+            "total_tasks": len(tasks),
+            "synced_at": now_iso(),
+        }
 
     def _mark_completed_documents_on_graph(self, request_context: RequestContext, result: dict[str, Any]) -> None:
         completed_paths = {str(path) for path in result.get("completed_files", []) if str(path).strip()}
