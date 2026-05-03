@@ -42,8 +42,12 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "架构Review" in body
     assert "补全文档" in body
     assert "governing-flow-detail" in body
+    assert body.count('class="flow-step-detail"') == 10
+    assert body.count('tabindex="0" aria-describedby=') == 10
     assert "触发条件" in body
     assert "执行步骤" in body
+    assert "intent-flow-detail" in body
+    assert "versioning-flow-detail" in body
     assert body.index('data-step-id="governing"') < body.index('data-step-id="evidence_link_recorded"')
     assert body.index('data-step-id="evidence_link_recorded"') < body.index('data-step-id="document_completion"')
     assert "data-task-action=\"complete-documents\"" in body

@@ -41,35 +41,95 @@
           </div>
         </div>
         <div class="flow-grid flow-track" id="workflow-map" aria-label="实时流程步骤">
-          <article class="flow-step active" data-step-id="intent_recognition">
+          <article class="flow-step active" data-step-id="intent_recognition" tabindex="0" aria-describedby="intent-flow-detail">
             <span>01</span>
             <h3>意图识别</h3>
             <p>识别真实领域意图并归一化缩写。</p>
+            <div class="flow-step-detail" id="intent-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>用户提交领域、缩写或自然语言描述。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>识别是否为知识采集任务。</li>
+                <li>归一化领域名、语言、子领域和关注点。</li>
+                <li>写入 RequestContext，非采集意图会提示澄清。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="structure_graph_planning">
+          <article class="flow-step" data-step-id="structure_graph_planning" tabindex="0" aria-describedby="structure-flow-detail">
             <span>02</span>
             <h3>图谱生成</h3>
             <p>生成知识架构图谱和知识点文件蓝图。</p>
+            <div class="flow-step-detail" id="structure-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>意图识别通过，并已创建任务上下文。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>生成领域、子领域和知识点结构节点。</li>
+                <li>补充学习路径、节点关系和证据需求。</li>
+                <li>产出后续 Neo4j 同步和 review 使用的结构图谱。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="neo4j_structure_sync">
+          <article class="flow-step" data-step-id="neo4j_structure_sync" tabindex="0" aria-describedby="neo4j-sync-flow-detail">
             <span>03</span>
             <h3>Neo4j呈现</h3>
             <p>先将架构图谱同步到 Neo4j。</p>
+            <div class="flow-step-detail" id="neo4j-sync-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>结构图谱生成完成，节点具备稳定 node_id。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>写入 Domain、SubTopic、Article / StructureNode。</li>
+                <li>同步结构边、建议路径和 planned 状态。</li>
+                <li>刷新前端 Neo4j 图谱快照。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="structure_review">
+          <article class="flow-step" data-step-id="structure_review" tabindex="0" aria-describedby="review-flow-detail">
             <span>04</span>
             <h3>架构Review</h3>
             <p>执行两轮自动审查与修补。</p>
+            <div class="flow-step-detail" id="review-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>Neo4j 结构图谱已初始化，review 上下文可读取。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>结合 Neo4j 上下文检查结构完整性。</li>
+                <li>发现缺口时自动修补图谱并同步 Neo4j。</li>
+                <li>第二轮仍有缺口时继续自动修补，不等待人工恢复。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="graph_completion">
+          <article class="flow-step" data-step-id="graph_completion" tabindex="0" aria-describedby="completion-context-flow-detail">
             <span>05</span>
             <h3>图谱补全</h3>
             <p>写入补全文档所需的图谱上下文。</p>
+            <div class="flow-step-detail" id="completion-context-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>架构 review 通过或系统自动修补后进入主链路。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>生成知识点蓝图、建议路径和补全文档状态。</li>
+                <li>写入 review 结果、repair_log 和 expected_evidence。</li>
+                <li>创建图谱级证据任务队列。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="evidence_link_query">
+          <article class="flow-step" data-step-id="evidence_link_query" tabindex="0" aria-describedby="evidence-query-flow-detail">
             <span>06</span>
             <h3>证据链接</h3>
             <p>只记录官方或高公信力链接。</p>
+            <div class="flow-step-detail" id="evidence-query-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>图谱证据任务队列已生成。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>逐条查询官方、标准、论文或高可信来源。</li>
+                <li>选择最贴近 claim / gap 的可访问链接。</li>
+                <li>将 selected_link 等结果先保留在运行态队列。</li>
+              </ol>
+            </div>
           </article>
           <article class="flow-step" data-step-id="governing" tabindex="0" aria-describedby="governing-flow-detail">
             <span>07</span>
@@ -87,20 +147,50 @@
               </ol>
             </div>
           </article>
-          <article class="flow-step" data-step-id="evidence_link_recorded">
+          <article class="flow-step" data-step-id="evidence_link_recorded" tabindex="0" aria-describedby="evidence-record-flow-detail">
             <span>08</span>
             <h3>图谱证据写入</h3>
             <p>可选：补全文档前写入证据链接、来源类型和 claim。</p>
+            <div class="flow-step-detail" id="evidence-record-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>用户点击“补全文档”，且证据链接队列已有验证结果。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>把 selected_link、source_kind、reachable 写入 Neo4j。</li>
+                <li>关联 claim_or_gap、expected_evidence 和 checked_at。</li>
+                <li>记录 document_evidence_sync，供补全文档生成使用。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="document_completion">
+          <article class="flow-step" data-step-id="document_completion" tabindex="0" aria-describedby="document-completion-flow-detail">
             <span>09</span>
             <h3>补全文档</h3>
             <p>可选：验证后生成本地知识文档。</p>
+            <div class="flow-step-detail" id="document-completion-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>用户点击“补全文档”，且架构 review、证据和治理状态满足要求。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>按既有目录规范生成 README 和知识点 Markdown。</li>
+                <li>消费 Neo4j 图谱上下文和已验证证据链接。</li>
+                <li>同步 generated_path 与 document_completion_status。</li>
+              </ol>
+            </div>
           </article>
-          <article class="flow-step" data-step-id="versioning">
+          <article class="flow-step" data-step-id="versioning" tabindex="0" aria-describedby="versioning-flow-detail">
             <span>10</span>
             <h3>版本研报</h3>
             <p>可选：冻结版本并生成研报。</p>
+            <div class="flow-step-detail" id="versioning-flow-detail" role="tooltip">
+              <strong>触发条件</strong>
+              <p>治理通过并具备版本资格；研报仍是可选动作。</p>
+              <strong>执行步骤</strong>
+              <ol>
+                <li>冻结通过质量检测的知识版本。</li>
+                <li>记录来源轮次、图谱节点和文档路径。</li>
+                <li>后续研报只消费已冻结且可追溯的版本。</li>
+              </ol>
+            </div>
           </article>
         </div>
       </details>

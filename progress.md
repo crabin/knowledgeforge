@@ -4,6 +4,7 @@
 
 - 为前端流程图 07 “治理质检”卡片增加 hover / focus 详情层，说明触发条件与执行步骤。
 - 详情内容覆盖证据队列完成 / 达到治理资格、结构化抽取、Neo4j 路径关联、质量检测、repair_flow / research_flow 分类和版本资格记录。
+- 扩展为全部 10 个流程步骤都支持 hover / focus 查看详情；详情框采用浮动 popover，不占用流程图卡片布局空间。
 - 验证：`node --check knowledgeforge/web/static/js/dashboard.js`、`uv run ruff check tests/test_dashboard.py`、`PYTHONPATH=. pytest -q tests/test_dashboard.py` 均通过，相关测试结果 `7 passed`。
 
 ## 2026-05-03 恢复任务清理初始化取消标记
