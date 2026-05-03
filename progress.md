@@ -482,3 +482,9 @@
 
 - 运行 `node -e "JSON.parse(require('fs').readFileSync('docs/流程图.excalidraw','utf8')); console.log('ok')"`
 - 结果：`ok`
+
+## 2026-05-03 修正文案中的人工干预表述
+
+- 修正 `repair_required` 的 `current_action` 文案，不再声明“需要人工修复或重新生成图谱”。
+- 当前表述改为：两轮知识架构审查与自动修补后仍存在结构缺口，任务进入 `repair_required`，等待系统后续修复流处理。
+- 为工作流测试补充断言，防止失败态文案再次回退到人工介入口径。

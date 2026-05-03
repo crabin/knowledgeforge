@@ -1603,7 +1603,7 @@ class KnowledgeGraphWorkflow:
         updates = {
             "task_status": "repair_required",
             "current_step": "structure_review",
-            "current_action": "两轮知识架构审查后仍存在结构缺口，需要人工修复或重新生成图谱。",
+            "current_action": "两轮知识架构审查与自动修补后仍存在结构缺口，任务已进入 repair_required，等待系统后续修复流继续处理。",
             "completeness": CompletenessResult(
                 status="supplement_required",
                 reasons=[str(review.get("reasoning", "知识架构审查未通过。"))],

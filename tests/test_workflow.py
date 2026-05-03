@@ -196,6 +196,8 @@ def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeyp
     payload = response.get_json()
     assert payload["task_status"] == "repair_required"
     assert len(payload["structure_review_rounds"]) == 2
+    assert "人工" not in payload["current_action"]
+    assert "系统后续修复流" in payload["current_action"]
     assert "document_artifact" not in payload
     domain_dir = tmp_path / "save" / "知识工程"
     assert not domain_dir.exists()
