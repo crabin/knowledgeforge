@@ -321,6 +321,7 @@ def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path
     created["current_step"] = "structure_review"
     app.config["TASK_SERVICE"]._state_store.save(created["task_id"], created)
     app.config["TASK_SERVICE"]._tasks.pop(created["task_id"], None)
+    app.config["TASK_SERVICE"]._cancelled_task_ids.add(created["task_id"])
 
     resumed = client.post(f"/tasks/{created['task_id']}/resume")
 

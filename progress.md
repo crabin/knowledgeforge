@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-03 恢复任务清理初始化取消标记
+
+- 修复用户点击恢复旧 `repair_required` 检查点时报 `_TaskCancelled: task ... was stopped by system initialization` 的问题。
+- `resume_task(...)` 现在会在确认任务不是运行中后清理该 task id 的初始化取消标记，再进入结构修复接续或普通恢复流程；系统初始化仍会停止当时正在运行的任务。
+- 补充回归覆盖：旧结构修复检查点即使残留在 `_cancelled_task_ids` 中，显式恢复也能继续执行。
+- 验证：`uv run ruff check knowledgeforge/services/task_service.py tests/test_workflow.py tests/test_dashboard.py`、`python -m py_compile knowledgeforge/services/task_service.py`、`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 均通过，相关测试结果 `51 passed`。
+
 ## 2026-05-03 第二轮结构修补后自动继续主链路
 
 - 根据浏览器批注调整架构 review 后的修复流：第二轮 review 仍发现缺口时，不再停到 `repair_required / 可恢复`，而是执行第二轮自动修补、同步 Neo4j，并直接进入图谱补全和后续证据 / 治理链路。

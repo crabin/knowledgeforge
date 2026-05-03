@@ -1019,6 +1019,8 @@ class TaskService:
                 {"reason": "task_already_running", "status": stored.get("task_status", ""), "current_step": stored.get("current_step", "")},
             )
             return stored
+        with self._task_lock:
+            self._cancelled_task_ids.discard(task_id)
 
         if self._can_continue_after_structure_repair(stored):
             return self._continue_after_structure_repair(task_id, stored)
