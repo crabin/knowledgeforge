@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-05-03 流程步骤详情浮窗层级修复
+
+- 修复流程步骤详情 popover 被后续步骤卡片遮挡的问题：为普通卡片设置基础层级，hover / focus / focus-within 时抬高当前卡片层级，并提高详情浮窗 z-index。
+- 验证：`uv run ruff check tests/test_dashboard.py`、`PYTHONPATH=. pytest -q tests/test_dashboard.py` 均通过，相关测试结果 `7 passed`。
+
 ## 2026-05-03 治理质检步骤悬浮说明
 
 - 为前端流程图 07 “治理质检”卡片增加 hover / focus 详情层，说明触发条件与执行步骤。

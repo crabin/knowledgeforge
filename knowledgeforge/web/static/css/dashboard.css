@@ -849,6 +849,7 @@ h3 {
 
 .flow-step {
   position: relative;
+  z-index: 1;
   min-width: 0;
   min-height: 150px;
   padding: 38px 14px 14px;
@@ -860,8 +861,14 @@ h3 {
 }
 
 .flow-step:focus {
+  z-index: 80;
   outline: 3px solid rgba(47, 95, 145, 0.26);
   outline-offset: 3px;
+}
+
+.flow-step:hover,
+.flow-step:focus-within {
+  z-index: 80;
 }
 
 .flow-step::before {
@@ -995,7 +1002,7 @@ h3 {
 
 .flow-step-detail {
   position: absolute;
-  z-index: 20;
+  z-index: 90;
   top: calc(100% + 10px);
   left: 50%;
   width: min(340px, calc(100vw - 40px));
