@@ -33,6 +33,27 @@
 - 使用 in-app browser 刷新 `http://localhost:5001/`
 - 结果：页面不再显示 `client_error`，浏览器 error logs 为空。
 
+## 2026-05-03 开发期系统初始化功能
+
+- 新增 `POST /system/initialize`，用于开发 / 测试阶段初始化运行产物。
+- 初始化范围限定为任务状态、intake session、audit JSONL、冻结版本、`save/` 生成文件和 KnowledgeForge Neo4j 图谱节点。
+- 初始化会保留源代码、配置、项目文档、依赖、ChromaDB、MySQL 和应用日志等系统数据。
+- 若存在运行中任务，接口直接拒绝初始化，避免后台 workflow 继续写回已清理状态。
+- 前端任务操作区新增“初始化系统”按钮，点击后会二次确认清理范围。
+- Neo4j 清理只针对 KnowledgeForge 主标签节点，并仅删除由 Article 关联的实体，避免按泛用 `Entity` 标签误清全库实体。
+
+## Verification
+
+- 运行 `python -m py_compile knowledgeforge/graph/client.py knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.63s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 24.15s`
+- 尝试用 in-app browser 刷新验证按钮可见性时，Browser Use 因自身安全策略拒绝本次页面访问；未绕过该策略，改以模板测试覆盖按钮渲染。
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.

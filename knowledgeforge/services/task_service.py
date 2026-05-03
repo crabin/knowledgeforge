@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import suppress
 import json
+import shutil
 from threading import Lock, Thread
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -316,6 +318,48 @@ class TaskService:
         tasks = sorted(tasks, key=lambda item: item["updated_at"], reverse=True)
         return {"count": len(tasks), "tasks": tasks}
 
+    def initialize_system(self) -> dict[str, Any]:
+        running_task_ids = self._collect_running_task_ids()
+        if running_task_ids:
+            raise ValueError("cannot initialize system while tasks are running.")
+
+        with self._task_lock:
+            self._tasks.clear()
+
+        storage_roots = [
+            ("tasks", self._config.task_state_root),
+            ("sessions", self._config.intake_session_root),
+            ("audit", self._config.audit_root),
+            ("frozen_versions", self._config.frozen_root),
+            ("saved_files", self._config.save_root),
+        ]
+        storage_results = [self._clear_runtime_directory(name, path) for name, path in storage_roots]
+        graph_result: dict[str, Any]
+        try:
+            graph_result = self._graph_client.clear_knowledgeforge_graph()
+        except Exception as exc:  # pragma: no cover - depends on local Neo4j availability.
+            graph_result = {
+                "status": "unavailable",
+                "error": self._sanitize_graph_error(str(exc)),
+            }
+
+        return {
+            "status": "initialized",
+            "initialized_at": now_iso(),
+            "scope": "runtime_artifacts_only",
+            "preserved": [
+                "source_code",
+                "configuration",
+                "project_docs",
+                "dependencies",
+                "chroma_db",
+                "mysql",
+                "application_log_files",
+            ],
+            "storage": storage_results,
+            "neo4j": graph_result,
+        }
+
     def update_task(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
         if stored is None:
@@ -403,6 +447,60 @@ class TaskService:
             "state_deleted": state_deleted,
             "frozen_deleted": frozen_deleted,
         }
+
+    def _collect_running_task_ids(self) -> list[str]:
+        task_ids: set[str] = set()
+        for task in self._state_store.list():
+            if self._is_running_status(task.get("task_status", "")):
+                task_ids.add(str(task.get("task_id", "")))
+        with self._task_lock:
+            for task_id, state in self._tasks.items():
+                if self._is_running_status(state.get("task_status", "")):
+                    task_ids.add(task_id)
+        return sorted(task_id for task_id in task_ids if task_id)
+
+    def _clear_runtime_directory(self, name: str, path: Path) -> dict[str, Any]:
+        root = self._validate_initialization_root(path)
+        files_deleted = 0
+        directories_deleted = 0
+        if root.exists():
+            for child in root.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    files_deleted += sum(1 for nested in child.rglob("*") if nested.is_file() or nested.is_symlink())
+                    directories_deleted += sum(1 for nested in child.rglob("*") if nested.is_dir() and not nested.is_symlink())
+                    directories_deleted += 1
+                    shutil.rmtree(child)
+                else:
+                    with suppress(FileNotFoundError):
+                        child.unlink()
+                    files_deleted += 1
+        root.mkdir(parents=True, exist_ok=True)
+        return {
+            "name": name,
+            "path": root.as_posix(),
+            "files_deleted": files_deleted,
+            "directories_deleted": directories_deleted,
+        }
+
+    @staticmethod
+    def _validate_initialization_root(path: Path) -> Path:
+        root = path.resolve()
+        cwd = Path.cwd().resolve()
+        forbidden = {Path("/").resolve(), cwd, cwd.parent, Path.home().resolve()}
+        if root in forbidden or cwd.is_relative_to(root):
+            raise ValueError(f"refusing to initialize unsafe path: {root}")
+        if root.is_symlink():
+            raise ValueError(f"refusing to initialize symlink path: {root}")
+        return root
+
+    @staticmethod
+    def _sanitize_graph_error(message: str) -> str:
+        lowered = message.lower()
+        if "authentication" in lowered or "password" in lowered or "credentials" in lowered:
+            return "Neo4j authentication failed."
+        if "bolt://" in message or "neo4j://" in message:
+            return "Neo4j connection failed."
+        return message[:200]
 
     def create_intake_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = str(payload.get("message", payload.get("domain", ""))).strip()

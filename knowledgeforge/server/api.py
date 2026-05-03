@@ -88,6 +88,14 @@ def create_app(config: AppConfig | None = None) -> Flask:
     def config_status():
         return jsonify(service.get_config_status()), 200
 
+    @app.post("/system/initialize")
+    def initialize_system():
+        try:
+            result = service.initialize_system()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(result), 200
+
     @app.get("/tasks")
     def list_tasks():
         return jsonify(service.list_tasks()), 200

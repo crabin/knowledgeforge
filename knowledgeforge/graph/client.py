@@ -148,6 +148,20 @@ class Neo4jGraphClient:
             with suppress(Exception):
                 driver.close()
 
+    def clear_knowledgeforge_graph(self) -> dict[str, Any]:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                return session.execute_write(self._delete_knowledgeforge_graph)
+        finally:
+            with suppress(Exception):
+                driver.close()
+
     @staticmethod
     def _write_graph(
         tx: Any,
@@ -399,6 +413,61 @@ class Neo4jGraphClient:
             """,
             domain=domain,
         )
+
+    @staticmethod
+    def _delete_knowledgeforge_graph(tx: Any) -> dict[str, Any]:
+        labels = [
+            "Domain",
+            "SubTopic",
+            "Article",
+            "Source",
+            "KnowledgePoint",
+            "KnowledgeStructureNode",
+            "KnowledgeIndex",
+            "KnowledgeSection",
+        ]
+        relationships = tx.run(
+            """
+            MATCH (n)
+            WHERE any(label IN labels(n) WHERE label IN $labels)
+            OPTIONAL MATCH (article:Article)-[:MENTIONS]->(entity:Entity)
+            WITH collect(DISTINCT n) + collect(DISTINCT entity) AS raw_nodes
+            UNWIND raw_nodes AS app_node
+            WITH DISTINCT app_node
+            WHERE app_node IS NOT NULL
+            MATCH (app_node)-[r]-()
+            RETURN count(DISTINCT r) AS count
+            """,
+            labels=labels,
+        ).single()
+        relationship_count = int(relationships["count"] if relationships else 0)
+        deleted_nodes = 0
+        while True:
+            record = tx.run(
+                """
+                MATCH (n)
+                WHERE any(label IN labels(n) WHERE label IN $labels)
+                OPTIONAL MATCH (article:Article)-[:MENTIONS]->(entity:Entity)
+                WITH collect(DISTINCT n) + collect(DISTINCT entity) AS raw_nodes
+                UNWIND raw_nodes AS app_node
+                WITH DISTINCT app_node
+                WHERE app_node IS NOT NULL
+                WITH app_node LIMIT 1000
+                DETACH DELETE app_node
+                RETURN count(app_node) AS count
+                """,
+                labels=labels,
+            ).single()
+            count = int(record["count"] if record else 0)
+            deleted_nodes += count
+            if count == 0:
+                break
+        return {
+            "status": "cleared",
+            "labels": labels,
+            "deleted_nodes": deleted_nodes,
+            "deleted_relationships": relationship_count,
+        }
 
     @staticmethod
     def _read_domain_graph(

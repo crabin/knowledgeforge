@@ -46,6 +46,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "查看队列" in body
     assert "原始响应 JSON" in body
     assert "查看任务列表" in body
+    assert "初始化系统" in body
     assert "/static/css/dashboard.css" in body
     assert "/static/js/dashboard.js" in body
 
@@ -93,6 +94,79 @@ def test_task_graph_endpoint_returns_404_for_missing_task(tmp_path: Path) -> Non
 
     assert response.status_code == 404
     assert response.get_json() == {"error": "task not found"}
+
+
+def test_system_initialize_clears_runtime_artifacts_only(tmp_path: Path, monkeypatch) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        intake_session_root=tmp_path / "runtime" / "intake",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    runtime_files = [
+        config.task_state_root / "task.json",
+        config.intake_session_root / "session.json",
+        config.audit_root / "task.jsonl",
+        config.frozen_root / "frozen.json",
+        config.save_root / "Deep Learning" / "README.md",
+    ]
+    for path in runtime_files:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("runtime data", encoding="utf-8")
+    system_file = tmp_path / "system-data.md"
+    system_file.write_text("must stay", encoding="utf-8")
+
+    def fake_clear_graph(self):
+        return {"status": "cleared", "deleted_nodes": 2, "deleted_relationships": 1}
+
+    monkeypatch.setattr(Neo4jGraphClient, "clear_knowledgeforge_graph", fake_clear_graph)
+    client = app.test_client()
+
+    response = client.post("/system/initialize")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "initialized"
+    assert payload["scope"] == "runtime_artifacts_only"
+    assert payload["neo4j"] == {"status": "cleared", "deleted_nodes": 2, "deleted_relationships": 1}
+    assert "source_code" in payload["preserved"]
+    assert system_file.read_text(encoding="utf-8") == "must stay"
+    for root in [
+        config.task_state_root,
+        config.intake_session_root,
+        config.audit_root,
+        config.frozen_root,
+        config.save_root,
+    ]:
+        assert root.exists()
+        assert list(root.iterdir()) == []
+
+
+def test_system_initialize_rejects_running_tasks(tmp_path: Path) -> None:
+    task_root = tmp_path / "runtime" / "tasks"
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=task_root,
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    running_task = task_root / "task-running.json"
+    running_task.write_text(
+        json.dumps({"task_id": "task-running", "task_status": "running"}),
+        encoding="utf-8",
+    )
+    client = app.test_client()
+
+    response = client.post("/system/initialize")
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "cannot initialize system while tasks are running."}
+    assert running_task.exists()
 
 
 def test_task_graph_endpoint_returns_neo4j_snapshot(tmp_path: Path, monkeypatch) -> None:

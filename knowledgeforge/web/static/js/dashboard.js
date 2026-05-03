@@ -1353,6 +1353,28 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
   });
 });
 
+document.querySelector("#initialize-system")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const confirmed = window.confirm(
+    "确认初始化开发环境？这会清空任务、session、audit、冻结版本、save/ 生成文件和 KnowledgeForge Neo4j 图谱；不会清理代码、配置、项目文档、依赖、ChromaDB、MySQL 或应用日志。"
+  );
+  if (!confirmed) return;
+  setBusy(button, true);
+  try {
+    stopTaskStream();
+    const payload = await requestJson("/system/initialize", { method: "POST" });
+    taskIdInput.value = "";
+    intakeSessionInput.value = "";
+    state.neo4jGraphSnapshot = { status: "local", graph: { nodes: [], edges: [] } };
+    renderNeo4jGraphSnapshot({ status: "local", domain: "暂无", graph: { nodes: [], edges: [] } }, null);
+    showPayload(payload);
+  } catch (error) {
+    showError(error);
+  } finally {
+    setBusy(button, false);
+  }
+});
+
 document.querySelector("#task-manage-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
