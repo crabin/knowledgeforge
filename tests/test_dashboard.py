@@ -144,7 +144,7 @@ def test_system_initialize_clears_runtime_artifacts_only(tmp_path: Path, monkeyp
         assert list(root.iterdir()) == []
 
 
-def test_system_initialize_rejects_running_tasks(tmp_path: Path) -> None:
+def test_system_initialize_stops_running_tasks_before_clearing(tmp_path: Path, monkeypatch) -> None:
     task_root = tmp_path / "runtime" / "tasks"
     app = create_app(
         AppConfig(
@@ -155,6 +155,10 @@ def test_system_initialize_rejects_running_tasks(tmp_path: Path) -> None:
             frozen_root=tmp_path / "runtime" / "frozen",
         )
     )
+    def fake_clear_graph(self):
+        return {"status": "cleared", "deleted_nodes": 0, "deleted_relationships": 0}
+
+    monkeypatch.setattr(Neo4jGraphClient, "clear_knowledgeforge_graph", fake_clear_graph)
     running_task = task_root / "task-running.json"
     running_task.write_text(
         json.dumps({"task_id": "task-running", "task_status": "running"}),
@@ -164,9 +168,11 @@ def test_system_initialize_rejects_running_tasks(tmp_path: Path) -> None:
 
     response = client.post("/system/initialize")
 
-    assert response.status_code == 400
-    assert response.get_json() == {"error": "cannot initialize system while tasks are running."}
-    assert running_task.exists()
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "initialized"
+    assert payload["stopped_task_ids"] == ["task-running"]
+    assert not running_task.exists()
 
 
 def test_task_graph_endpoint_returns_neo4j_snapshot(tmp_path: Path, monkeypatch) -> None:

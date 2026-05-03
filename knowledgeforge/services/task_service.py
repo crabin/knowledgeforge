@@ -62,6 +62,10 @@ from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
 
+class _TaskCancelled(RuntimeError):
+    pass
+
+
 def _format_generation_prefix(details: dict[str, Any]) -> str:
     current_file = str(details.get("current_file", "") or "").strip()
     completed_files = details.get("completed_files")
@@ -186,6 +190,7 @@ class TaskService:
             generation_chat_client=generation_chat_client,
         )
         self._tasks: dict[str, WorkflowState] = {}
+        self._cancelled_task_ids: set[str] = set()
         self._task_lock = Lock()
 
     def get_config_status(self) -> dict[str, Any]:
@@ -230,6 +235,7 @@ class TaskService:
         initial_state = self._create_initial_state(request_context, audit_source="api_async")
         task_id = initial_state["task_id"]
         with self._task_lock:
+            self._cancelled_task_ids.discard(task_id)
             self._tasks[task_id] = initial_state
         payload_dict = self._serialize_state(initial_state)
         self._state_store.save(task_id, payload_dict)
@@ -320,10 +326,8 @@ class TaskService:
 
     def initialize_system(self) -> dict[str, Any]:
         running_task_ids = self._collect_running_task_ids()
-        if running_task_ids:
-            raise ValueError("cannot initialize system while tasks are running.")
-
         with self._task_lock:
+            self._cancelled_task_ids.update(running_task_ids)
             self._tasks.clear()
 
         storage_roots = [
@@ -347,6 +351,7 @@ class TaskService:
             "status": "initialized",
             "initialized_at": now_iso(),
             "scope": "runtime_artifacts_only",
+            "stopped_task_ids": running_task_ids,
             "preserved": [
                 "source_code",
                 "configuration",
@@ -664,7 +669,11 @@ class TaskService:
         try:
             with token_tracking_context(task_id):
                 final_state = self._workflow.run(initial_state)
+        except _TaskCancelled:
+            return
         except Exception as exc:
+            if self._is_cancelled(task_id):
+                return
             failed_state = dict(initial_state)
             failed_state["task_status"] = "failed"
             with self._task_lock:
@@ -672,6 +681,8 @@ class TaskService:
             payload = self._serialize_state(failed_state)
             self._state_store.save(task_id, payload)
             self._audit_logger.log(task_id, "task_failed", {"error": str(exc)})
+            return
+        if self._is_cancelled(task_id):
             return
         self._persist_and_serialize(final_state, "task_completed")
 
@@ -857,6 +868,8 @@ class TaskService:
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
         task_id = state["task_id"]
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
         self._finalize_successful_plan_statuses(state)
         with self._task_lock:
             self._tasks[task_id] = state
@@ -876,6 +889,8 @@ class TaskService:
         return payload
 
     def _record_token_usage(self, record: TokenUsageRecord) -> None:
+        if self._is_cancelled(record.task_id):
+            return
         self._audit_logger.log(record.task_id, "token_usage_recorded", record.to_dict())
 
     def _log_llm_event(self, payload: dict[str, Any]) -> None:
@@ -883,6 +898,8 @@ class TaskService:
 
         task_id = str(payload.get("task_id") or current_token_task_id() or "")
         if not task_id:
+            return
+        if self._is_cancelled(task_id):
             return
         enriched_payload = dict(payload)
         task_snapshot = self.get_task(task_id)
@@ -1189,7 +1206,11 @@ class TaskService:
         return (event_name, event_timestamp, node, str(sorted(stable_details.items())))
 
     def _refresh_running_task_snapshot(self, task_id: str, entry: dict[str, Any]) -> None:
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
         with self._task_lock:
+            if task_id in self._cancelled_task_ids:
+                raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
             state = self._tasks.get(task_id)
             if state is None:
                 stored = self._state_store.load(task_id)
@@ -1212,10 +1233,18 @@ class TaskService:
             self._state_store.save(task_id, payload)
 
     def _persist_running_state_update(self, task_id: str, state: WorkflowState) -> None:
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
         with self._task_lock:
+            if task_id in self._cancelled_task_ids:
+                raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
             state["updated_at"] = now_iso()
             self._tasks[task_id] = state
             self._state_store.save(task_id, self._serialize_state(state))
+
+    def _is_cancelled(self, task_id: str) -> bool:
+        with self._task_lock:
+            return task_id in self._cancelled_task_ids
 
     @staticmethod
     def _describe_realtime_action(entry: dict[str, Any]) -> str:

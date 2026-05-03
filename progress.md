@@ -54,6 +54,23 @@
 - 结果：`154 passed in 24.15s`
 - 尝试用 in-app browser 刷新验证按钮可见性时，Browser Use 因自身安全策略拒绝本次页面访问；未绕过该策略，改以模板测试覆盖按钮渲染。
 
+## 2026-05-03 初始化前停止运行任务
+
+- 调整 `POST /system/initialize`：不再因为存在运行中任务直接返回 400，而是先登记运行中任务为 stopped / cancelled，再清理运行产物。
+- 后台 workflow 线程如果在初始化后继续触发状态写回，会被服务层取消标记拦截，不再重新写出已清理的 task state。
+- 初始化响应新增 `stopped_task_ids`，便于前端和调试时确认本次初始化停止了哪些任务。
+
+## Verification
+
+- 运行 `python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py knowledgeforge/graph/client.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.73s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 24.44s`
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.
