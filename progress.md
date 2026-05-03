@@ -32,12 +32,21 @@
 - 旧任务的 `/tasks/{task_id}/resume` 兼容入口仍保留，但新任务不再需要用户点击恢复才能继续。
 - 验证：`uv run ruff check knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py tests/test_workflow.py tests/test_dashboard.py`、`python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py`、`node --check knowledgeforge/web/static/js/dashboard.js`、`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 均通过，相关测试结果 `51 passed`。
 
+## 2026-05-03 图谱证据写入改为 Neo4j 必需步骤
+
+- 根据浏览器批注修正 08「图谱证据写入」定位：它属于默认 Neo4j 主链路必需能力，不再标记为可选。
+- Workflow 新增自动 `record_evidence_to_graph` 节点：治理质检后写入 `selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap/expected_evidence` 等字段，并记录 `document_evidence_sync` 与 `evidence_link_recorded` 事件。
+- 前端 Flow Map 与 `FLOW_STEPS` 文案同步为必需步骤；09「补全文档」和 10「版本研报」仍保持可选。
+- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`task_plan.md` 和 `findings.md`。
+- 验证：`python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py`、`node --check knowledgeforge/web/static/js/dashboard.js`、`uv run ruff check knowledgeforge/orchestrator/graph.py tests/test_workflow.py tests/test_dashboard.py`、`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 均通过，相关测试结果 `51 passed`。
+- 记录：曾误把 JavaScript 文件传给 `ruff`，该命令按 Python 解析 JS 后失败；已改用 `node --check` 验证 JS、`ruff` 只检查 Python 文件。
+
 ## 2026-05-03 图谱证据写入改为补全文档前置可选步骤
 
 - 根据浏览器批注调整流程：默认主链路保留 `evidence_link_query` 可信链接查询，但不再触发 `evidence_link_recorded`，也不再把 `selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap` 等证据字段写入 Neo4j。
 - `/tasks/{task_id}/documents/complete` 现在会先执行图谱证据同步，记录 `document_evidence_sync`，追加 `evidence_link_recorded` workflow event，再生成本地 Markdown。
-- 前端流程顺序更新为“证据链接 → 治理质检 → 可选图谱证据写入 → 补全文档”，避免暗示默认链路已经落图谱证据。
-- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`task_plan.md` 和 `findings.md`，把图谱证据写入口径统一为补全文档前的可选动作。
+- 历史记录：当时前端流程顺序曾更新为“证据链接 → 治理质检 → 可选图谱证据写入 → 补全文档”；后续已按最新批注改为必需 Neo4j 步骤。
+- 历史记录：当时曾把图谱证据写入口径统一为补全文档前的可选动作；后续已按最新批注改为默认主链路必需动作。
 - 验证：`uv run ruff check knowledgeforge/services/task_service.py knowledgeforge/orchestrator/graph.py tests/test_workflow.py tests/test_dashboard.py`、`python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/orchestrator/graph.py`、`node --check knowledgeforge/web/static/js/dashboard.js`、`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 均通过，相关测试结果 `51 passed`。
 
 ## 2026-05-03 Neo4j 图谱优先与补全文档后置文档同步
@@ -54,7 +63,7 @@
 - 证据阶段继续使用 QueryEngine 查询可信链接，但实时文件保存会在默认主链路中跳过；证据结果先写入运行态队列、SSE payload 和本地图谱快照，Neo4j 证据字段改由补全文档动作前置写入。
 - 治理阶段改用 `.knowledgeforge/tasks/graph_governance/` 下的运行态图谱治理摘要，避免把治理摘要当作本地知识库 Markdown 落到 `save/`。
 - `/tasks/{task_id}/documents/complete` 现在负责唯一的知识 Markdown 落盘入口：前置检查通过后创建缺失的文档骨架、消费队列证据补全文档，并把 `generated_path` / `document_completion_status=generated` 同步回图谱。
-- 前端流程和图谱状态文案同步为“图谱补全 / 证据链接 / 治理质检 / 可选图谱证据写入 / 补全文档”，并新增 `completion_ready`、`document_generating` 状态展示。
+- 历史记录：前端流程和图谱状态文案曾同步为“图谱补全 / 证据链接 / 治理质检 / 可选图谱证据写入 / 补全文档”，并新增 `completion_ready`、`document_generating` 状态展示；后续 08 已改为必需 Neo4j 步骤。
 - 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_knowledge_blueprint.py tests/test_integration_layers.py tests/test_dashboard.py`，结果：`60 passed`。
 - 运行 `PYTHONPATH=. pytest -q tests/test_quality_source_checks.py tests/test_ml_regression.py tests/test_writer_dynamic_status.py`，修复质量门禁后相关用例通过。
 - 运行 `PYTHONPATH=. pytest -q`，结果：`165 passed, 1 failed`；唯一失败为 live browser 外网用例 `tests/test_agent_browser_live.py::test_agent_browser_can_fetch_page_text` 访问 LangGraph 站点超时，非本地代码回归。

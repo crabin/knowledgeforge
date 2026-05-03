@@ -41,6 +41,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "图谱补全" in body
     assert "架构Review" in body
     assert "补全文档" in body
+    assert "写入证据链接、来源类型和 claim 到 Neo4j。" in body
+    assert "可选：补全文档前写入证据链接、来源类型和 claim。" not in body
     assert "governing-flow-detail" in body
     assert body.count('class="flow-step-detail"') == 10
     assert body.count('tabindex="0" aria-describedby=') == 10

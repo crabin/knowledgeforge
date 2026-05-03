@@ -167,6 +167,7 @@ class KnowledgeGraphWorkflow:
             if self._route_after_validation(state) == "run_post_storage":
                 break
         self._run_post_storage(state)
+        self._record_evidence_to_graph(state)
         return state
 
     def generate_plans(self, state: WorkflowState) -> WorkflowState:
@@ -184,6 +185,7 @@ class KnowledgeGraphWorkflow:
         graph.add_node("enrich_graph_for_completion", self._enrich_graph_for_completion)
         graph.add_node("query_evidence_links", self._run_query_queue)
         graph.add_node("validate_round", self._validate_round)
+        graph.add_node("record_evidence_to_graph", self._record_evidence_to_graph)
         graph.add_node("run_post_storage", self._run_post_storage)
         graph.set_entry_point("generate_structure_graph")
         graph.add_edge("generate_structure_graph", "sync_structure_graph_to_neo4j")
@@ -225,7 +227,8 @@ class KnowledgeGraphWorkflow:
             },
         )
         graph.add_edge("finalize_structure_review_failure", END)
-        graph.add_edge("run_post_storage", END)
+        graph.add_edge("run_post_storage", "record_evidence_to_graph")
+        graph.add_edge("record_evidence_to_graph", END)
         return graph.compile()
 
     def _generate_structure_graph(self, state: WorkflowState) -> dict[str, Any]:
@@ -940,6 +943,88 @@ class KnowledgeGraphWorkflow:
             "图谱证据任务已收尾",
             "completed",
             {"completion_mode": context.completion_mode, "full_document_status": full_document_status},
+        )
+        return updates
+
+    def _record_evidence_to_graph(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        queue = state.get("task_queue_snapshot", {})
+        tasks = [task for task in queue.get("tasks", []) if isinstance(task, dict)]
+        graph = context.structure_graph if isinstance(context.structure_graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        synced: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        self._emit_workflow_event(
+            state,
+            "evidence_link_recorded",
+            "写入 Neo4j 图谱证据",
+            "active",
+            {"total_tasks": len(tasks)},
+        )
+        for task in tasks:
+            node_id = str(task.get("target_node_id", "")).strip()
+            task_id = str(task.get("task_id", "")).strip()
+            if not node_id:
+                skipped.append({"task_id": task_id, "reason": "missing_target_node_id"})
+                continue
+            selected_link = str(task.get("selected_link", "")).strip()
+            task_status = str(task.get("status", ""))
+            extra_properties = {
+                "evidence_links": [selected_link] if selected_link else [],
+                "selected_link": selected_link,
+                "source_kind": str(task.get("source_kind", "")),
+                "reachable": bool(task.get("reachable", False)),
+                "relevance_reason": str(task.get("relevance_reason", "")),
+                "checked_at": str(task.get("checked_at", "")),
+                "claim_or_gap": str(task.get("claim_or_gap", "")),
+                "expected_evidence": task.get("expected_evidence", []),
+                "document_completion_status": state.get("document_completion_status", "not_requested"),
+            }
+            for node in nodes:
+                if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                    node.update(extra_properties)
+            try:
+                result = self._post_storage_pipeline.update_structure_node_status(
+                    domain=context.domain,
+                    task_id=state["task_id"],
+                    node_id=node_id,
+                    generation_state="link_verified" if task_status == "completed" else "link_failed",
+                    generated_path="",
+                    pending_task_count=0 if task_status == "completed" else 1,
+                    completed_task_count=1 if task_status == "completed" else 0,
+                    extra_properties=extra_properties,
+                )
+            except Exception as exc:
+                skipped.append({"task_id": task_id, "node_id": node_id, "reason": str(exc)})
+                continue
+            if result is None:
+                skipped.append({"task_id": task_id, "node_id": node_id, "reason": "graph_mapper_unavailable"})
+                continue
+            if result.status == "failed":
+                skipped.append({"task_id": task_id, "node_id": node_id, "reason": result.error or "graph_write_failed"})
+                continue
+            synced.append({"task_id": task_id, "node_id": node_id, "selected_link": selected_link})
+        evidence_sync = {
+            "status": "completed",
+            "synced_tasks": synced,
+            "skipped_tasks": skipped,
+            "total_tasks": len(tasks),
+            "synced_at": now_iso(),
+        }
+        updates = {
+            "request_context": context,
+            "document_evidence_sync": evidence_sync,
+            "task_status": state.get("task_status", "running"),
+            "current_step": "evidence_link_recorded",
+            "current_action": f"Neo4j 图谱证据写入完成：{len(synced)}/{len(tasks)}。",
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(
+            state,
+            "evidence_link_recorded",
+            "Neo4j 图谱证据已写入",
+            "completed",
+            evidence_sync,
         )
         return updates
 

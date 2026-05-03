@@ -45,7 +45,7 @@ const workflowSteps = [
   { id: "graph_completion", order: "05", title: "图谱补全", description: "写入补全文档所需的图谱上下文。" },
   { id: "evidence_link_query", order: "06", title: "证据链接", description: "只记录官方或高公信力链接。" },
   { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "evidence_link_recorded", order: "08", title: "图谱证据写入", description: "可选：补全文档前写入证据链接、来源类型和 claim。", optional: true },
+  { id: "evidence_link_recorded", order: "08", title: "图谱证据写入", description: "写入证据链接、来源类型和 claim 到 Neo4j。", optional: false },
   { id: "document_completion", order: "09", title: "补全文档", description: "可选：验证后生成本地知识文档。", optional: true },
   { id: "versioning", order: "10", title: "版本研报", description: "可选：冻结版本并生成研报。", optional: true },
 ];
