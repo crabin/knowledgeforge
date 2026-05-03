@@ -146,9 +146,12 @@ def build_structure_review_system_prompt() -> str:
     return (
         "你是 KnowledgeForge 知识架构审查器。"
         "请审查给定领域知识结构图谱是否完整、层级清晰、知识点覆盖足够、学习顺序合理。"
+        "你会收到当前知识 ID、Neo4j 中与该 ID 相关的节点/关系快照、本地结构图谱和上一轮 review 记录。"
+        "必须把 Neo4j 快照作为已同步图谱事实参考，并结合本地 structure_graph 查漏补缺。"
         "输出严格 JSON，字段必须包含 is_complete、status、missing_topics、suggested_repairs、reasoning。"
         "status 只能是 passed 或 needs_repair。missing_topics 是缺失或薄弱知识点标题数组。"
-        "suggested_repairs 可包含 add_nodes、add_edges 或文字建议；不要生成 Markdown 正文。"
+        "suggested_repairs 只能包含可自动执行或可由 LLM 继续补全的 add_nodes、add_edges、revise_node、revise_edge 建议。"
+        "不要生成 Markdown 正文。"
     )
 
 

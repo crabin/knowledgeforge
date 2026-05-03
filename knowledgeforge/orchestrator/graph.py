@@ -96,6 +96,23 @@ def _infer_source_kind(url: str) -> str:
     return "authoritative_link"
 
 
+def _is_manual_review_suggestion(item: Any) -> bool:
+    text = json.dumps(item, ensure_ascii=False).lower() if isinstance(item, (dict, list)) else str(item).lower()
+    return any(
+        marker in text
+        for marker in (
+            "manual_review",
+            "human_intervention",
+            "human_review",
+            "code_review",
+            "人工",
+            "代码审核",
+            "人工干预",
+            "人工介入",
+        )
+    )
+
+
 class KnowledgeGraphWorkflow:
     def __init__(
         self,
@@ -290,16 +307,19 @@ class KnowledgeGraphWorkflow:
         context = state["request_context"]
         self._emit_workflow_event(state, "structure_review", f"第 {round_number} 轮知识架构审查", "active", {"round": round_number})
         self._set_all_structure_nodes_status(context, "reviewing")
-        review = self._run_structure_review(context, round_number)
+        review = self._run_structure_review(state, context, round_number)
         review["round"] = round_number
         review["reviewed_at"] = now_iso()
         rounds = [*state.get("structure_review_rounds", []), review]
         status = "passed" if review.get("is_complete") else "needs_repair"
         if status == "passed":
             self._set_all_structure_nodes_status(context, "approved")
+        review_sync_after = self._sync_structure_graph_after_review(state, context)
+        review["neo4j_sync_after_review"] = review_sync_after
         updates = {
             "request_context": context,
             "structure_graph": context.structure_graph,
+            "structure_graph_sync": review_sync_after,
             "structure_review_rounds": rounds,
             "structure_review_status": status,
             "graph_snapshot": self._local_graph_snapshot(context),
@@ -1262,8 +1282,16 @@ class KnowledgeGraphWorkflow:
             artifacts=[*existing.artifacts, *new_output.artifacts],
         )
 
-    def _run_structure_review(self, context: RequestContext, round_number: int) -> dict[str, Any]:
+    def _run_structure_review(self, state: WorkflowState, context: RequestContext, round_number: int) -> dict[str, Any]:
         chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
+        knowledge_id = self._current_review_knowledge_id(context)
+        neo4j_context = self._structure_review_context_from_neo4j(
+            state=state,
+            task_id=state["task_id"],
+            context=context,
+            knowledge_id=knowledge_id,
+        )
+        previous_reviews = state.get("structure_review_rounds", [])
         if chat_client is not None:
             try:
                 payload = chat_client.complete_json(
@@ -1272,18 +1300,41 @@ class KnowledgeGraphWorkflow:
                         {
                             "domain": context.domain,
                             "round": round_number,
+                            "knowledge_id": knowledge_id,
+                            "neo4j_review_context": neo4j_context,
                             "structure_graph": context.structure_graph,
                             "subdomains": context.subdomains,
                             "focus_points": context.focus_points,
+                            "previous_review_rounds": previous_reviews,
+                            "instruction": (
+                                "基于当前知识 ID 的 Neo4j 相关节点/关系、本地结构图谱和上一轮 review 记录进行查漏补缺。"
+                                "只输出 LLM 可继续自动补全的结构修补建议。"
+                            ),
                         },
                         ensure_ascii=False,
                     ),
                 )
                 if payload:
-                    return self._normalize_structure_review(payload)
+                    review = self._normalize_structure_review(payload)
+                    review["knowledge_id"] = knowledge_id
+                    review["neo4j_review_context"] = neo4j_context
+                    return review
             except Exception as exc:
                 logger.warning("Structure review round %s failed for %s: %s", round_number, context.domain, exc)
-        return self._fallback_structure_review(context)
+        review = self._fallback_structure_review(context)
+        review["knowledge_id"] = knowledge_id
+        review["neo4j_review_context"] = neo4j_context
+        return review
+
+    def _sync_structure_graph_after_review(self, state: WorkflowState, context: RequestContext) -> dict[str, Any]:
+        previous_sync = state.get("structure_graph_sync") or {}
+        if previous_sync.get("status") in {"failed", "skipped"}:
+            return {
+                "status": "skipped",
+                "reason": "previous_neo4j_sync_unavailable",
+                "previous_sync": previous_sync,
+            }
+        return self._sync_structure_graph_for_generation(state["task_id"], context)
 
     @staticmethod
     def _normalize_structure_review(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1291,11 +1342,11 @@ class KnowledgeGraphWorkflow:
         missing_topics = [str(item).strip() for item in payload.get("missing_topics", []) if str(item).strip()]
         suggested_repairs = payload.get("suggested_repairs", [])
         if isinstance(suggested_repairs, dict):
-            normalized_repairs: list[Any] = [suggested_repairs]
+            normalized_repairs: list[Any] = [] if _is_manual_review_suggestion(suggested_repairs) else [suggested_repairs]
         elif isinstance(suggested_repairs, list):
-            normalized_repairs = suggested_repairs
+            normalized_repairs = [item for item in suggested_repairs if not _is_manual_review_suggestion(item)]
         elif suggested_repairs:
-            normalized_repairs = [str(suggested_repairs)]
+            normalized_repairs = [] if _is_manual_review_suggestion(suggested_repairs) else [str(suggested_repairs)]
         else:
             normalized_repairs = []
         return {
@@ -1305,6 +1356,82 @@ class KnowledgeGraphWorkflow:
             "suggested_repairs": normalized_repairs,
             "reasoning": str(payload.get("reasoning", "")).strip() or ("知识架构审查通过。" if is_complete else "知识架构仍存在缺口。"),
         }
+
+    def _structure_review_context_from_neo4j(self, *, state: WorkflowState, task_id: str, context: RequestContext, knowledge_id: str) -> dict[str, Any]:
+        if not knowledge_id:
+            return {"status": "skipped", "reason": "missing_knowledge_id", "nodes": [], "edges": []}
+        previous_sync = state.get("structure_graph_sync") or {}
+        if previous_sync.get("status") in {"failed", "skipped"}:
+            fallback = self._local_structure_review_context(context, knowledge_id, status="local_fallback")
+            fallback["neo4j_lookup"] = {
+                "status": "skipped",
+                "reason": "previous_neo4j_sync_unavailable",
+                "previous_sync": previous_sync,
+            }
+            return fallback
+        try:
+            payload = self._post_storage_pipeline.structure_review_context(
+                domain=context.domain,
+                task_id=task_id,
+                knowledge_id=knowledge_id,
+            )
+        except Exception as exc:
+            logger.warning("Structure review Neo4j context lookup failed for %s: %s", knowledge_id, exc)
+            return self._local_structure_review_context(context, knowledge_id, status="failed", error=str(exc))
+        if not payload or payload.get("status") in {"skipped", "failed"}:
+            fallback = self._local_structure_review_context(context, knowledge_id, status=str((payload or {}).get("status", "local_fallback")))
+            if isinstance(payload, dict):
+                fallback["neo4j_lookup"] = payload
+            return fallback
+        return payload
+
+    @staticmethod
+    def _current_review_knowledge_id(context: RequestContext) -> str:
+        graph = context.structure_graph if isinstance(context.structure_graph, dict) else {}
+        root_id = str(graph.get("root_node_id", "")).strip()
+        if root_id:
+            return root_id
+        for node in graph.get("nodes", []):
+            if isinstance(node, dict) and str(node.get("node_id", "")).strip():
+                return str(node["node_id"]).strip()
+        return sanitize_path_segment(context.domain, "domain")
+
+    @staticmethod
+    def _local_structure_review_context(
+        context: RequestContext,
+        knowledge_id: str,
+        *,
+        status: str = "local_fallback",
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        graph = context.structure_graph if isinstance(context.structure_graph, dict) else {}
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        related_ids = {knowledge_id}
+        for edge in edges:
+            source = str(edge.get("from_node_id", ""))
+            target = str(edge.get("to_node_id", ""))
+            if source == knowledge_id and target:
+                related_ids.add(target)
+            if target == knowledge_id and source:
+                related_ids.add(source)
+        related_nodes = [node for node in nodes if str(node.get("node_id", "")) in related_ids]
+        related_edges = [
+            edge
+            for edge in edges
+            if str(edge.get("from_node_id", "")) in related_ids and str(edge.get("to_node_id", "")) in related_ids
+        ]
+        payload: dict[str, Any] = {
+            "status": status,
+            "source": "local_structure_graph",
+            "domain": context.domain,
+            "knowledge_id": knowledge_id,
+            "nodes": related_nodes,
+            "edges": related_edges,
+        }
+        if error:
+            payload["error"] = error
+        return payload
 
     @staticmethod
     def _fallback_structure_review(context: RequestContext) -> dict[str, Any]:
@@ -1690,12 +1817,18 @@ class KnowledgeGraphWorkflow:
         graph = context.structure_graph or {}
         if not isinstance(graph, dict):
             return
+        is_generated = generation_state in {"documented", "link_querying", "link_verified", "approved"}
+        is_completed = generation_state in {"documented", "link_verified", "approved"}
         for node in graph.get("nodes", []):
             if not isinstance(node, dict):
                 continue
             node["generation_state"] = generation_state
             node["self_generation_state"] = generation_state
+            node["is_generated"] = is_generated
+            node["is_completed"] = is_completed
             node["updated_at"] = now_iso()
+            if is_completed:
+                node["completed_at"] = now_iso()
 
     def _set_local_structure_node_status(
         self,

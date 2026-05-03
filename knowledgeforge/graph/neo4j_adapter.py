@@ -15,14 +15,16 @@ class Neo4jPathMapper:
             for node in structure_graph.get("nodes", []):
                 if not isinstance(node, dict):
                     continue
+                generation_state = str(node.get("generation_state", "planned"))
                 nodes.append(
                     {
                         "label": _graph_label_for_structure_type(str(node.get("node_type", ""))),
                         "id": str(node.get("node_id", "")),
                         "title": str(node.get("title", "")),
                         "path": str(node.get("relative_path", "")),
-                        "is_generated": False,
-                        "generation_state": "planned",
+                        "is_generated": bool(node.get("is_generated", False)) or generation_state in {"documented", "link_querying", "link_verified", "approved"},
+                        "is_completed": bool(node.get("is_completed", False)) or generation_state in {"documented", "link_verified", "approved"},
+                        "generation_state": generation_state,
                     }
                 )
             for edge in structure_graph.get("edges", []):
@@ -51,6 +53,42 @@ class Neo4jPathMapper:
             status=status,
             error=error,
         )
+
+    def structure_review_context(self, *, domain: str, task_id: str, knowledge_id: str) -> dict:
+        if self._client is None:
+            return {
+                "status": "skipped",
+                "reason": "neo4j_client_unavailable",
+                "domain": domain,
+                "task_id": task_id,
+                "knowledge_id": knowledge_id,
+                "nodes": [],
+                "edges": [],
+            }
+        try:
+            graph = self._client.structure_review_context(
+                domain=domain,
+                task_id=task_id,
+                knowledge_id=knowledge_id,
+            )
+        except Exception as exc:
+            return {
+                "status": "failed",
+                "error": str(exc),
+                "domain": domain,
+                "task_id": task_id,
+                "knowledge_id": knowledge_id,
+                "nodes": [],
+                "edges": [],
+            }
+        return {
+            "status": "ok",
+            "domain": domain,
+            "task_id": task_id,
+            "knowledge_id": knowledge_id,
+            "nodes": graph.get("nodes", []),
+            "edges": graph.get("edges", []),
+        }
 
     def mark_structure_node_generated(
         self,

@@ -80,6 +80,15 @@ class PostStoragePipeline:
             return None
         return self._graph_mapper.sync_structure_graph(domain=domain, task_id=task_id, structure_graph=structure_graph)
 
+    def structure_review_context(self, *, domain: str, task_id: str, knowledge_id: str):
+        if not hasattr(self._graph_mapper, "structure_review_context"):
+            return None
+        return self._graph_mapper.structure_review_context(
+            domain=domain,
+            task_id=task_id,
+            knowledge_id=knowledge_id,
+        )
+
     def mark_structure_node_generated(
         self,
         *,

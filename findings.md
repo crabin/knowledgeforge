@@ -31,6 +31,12 @@
 - 前端实时同步的主通道是 SSE。`/tasks/{task_id}/stream` 直接带 `graph_snapshot`、`graph_event`、`file_update`，`/tasks/{task_id}/graph` 只保留给手动刷新、Neo4j 重连和兜底展示。
 - 历史文档中“前端轮询后再拉图谱”“最后统一回填”“默认等待三路计划确认”的描述均视为旧阶段记录，不再代表当前主流程。
 
+## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
+- 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
+- 当前图执行顺序是生成结构图谱后先同步 Neo4j；第一轮 review 如果直接通过，会进入第二轮，中间没有再同步 Neo4j；第一轮有缺口时会在 repair 后同步。
+- `sync_structure_graph` 写 Neo4j 时使用 `coalesce(n.generation_state, 'planned')`，会保留旧状态，无法用后续 review 阶段的本地 `reviewing/approved` 状态覆盖 Neo4j。
+- 测试中已有失败态文案不包含“人工”的回归断言，但 review payload 仍可能传入 `suggested_repairs=[{"type": "manual_review"}]` 并被原样保存。
+
 ## 遇到的问题
 | 问题 | 解决方案 |
 |------|---------|

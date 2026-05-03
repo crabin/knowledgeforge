@@ -1018,7 +1018,7 @@ class MarkdownKnowledgeWriter:
                 "",
                 "## 后续动作",
                 "",
-                "- 对 status=insufficient 的计划项执行补检索或人工复核。",
+                "- 对 status=insufficient 的计划项执行补检索或系统复核。",
                 "",
                 "## 变更记录",
                 "",

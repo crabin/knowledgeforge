@@ -17,6 +17,11 @@
 - 后置治理分支：`completion_mode=framework` 时治理框架图谱与证据文件并跳过完整文档；`completion_mode=full_document` 时在证据完成后补全最终 mixed 完整文档；旧值 `file_level` 兼容为 `full_document`。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
+- 架构 review 去人工化与 Neo4j 上下文增强（2026-05-03）
+  - [complete] 定位现有 review / repair / Neo4j 同步实现与测试覆盖。
+  - [complete] 新增按当前知识 ID 读取 Neo4j 相关图谱上下文，并拼接进 LLM review 输入。
+  - [complete] 调整两轮 review：每轮 review 后同步一次 Neo4j，缺口仍走 LLM 查漏补缺和自动修补，不引入代码审核或人工干预。
+  - [complete] 更新测试、进度记录并完成验证。
 - 项目结构重组
   - 已完成：将前端模板与静态资源收拢到 `knowledgeforge/web`。
   - 已完成：将 Flask 后端入口收拢到 `knowledgeforge/server`。

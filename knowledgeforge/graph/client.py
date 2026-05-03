@@ -88,6 +88,35 @@ class Neo4jGraphClient:
             with suppress(Exception):
                 driver.close()
 
+    def structure_review_context(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        knowledge_id: str,
+        node_limit: int = 80,
+        relationship_limit: int = 160,
+    ) -> dict[str, Any]:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                return session.execute_read(
+                    self._read_structure_review_context,
+                    domain,
+                    task_id,
+                    knowledge_id,
+                    node_limit,
+                    relationship_limit,
+                )
+        finally:
+            with suppress(Exception):
+                driver.close()
+
     def mark_structure_node_generated(
         self,
         *,
@@ -249,6 +278,7 @@ class Neo4jGraphClient:
             node_id = str(node.get("node_id", ""))
             if not node_id:
                 continue
+            generation_state = str(node.get("generation_state", "planned") or "planned")
             tx.run(
                 """
                 MATCH (d:Domain {id: $domain})
@@ -260,11 +290,11 @@ class Neo4jGraphClient:
                     n.parent_node_id = $parent_node_id,
                     n.task_id = $task_id,
                     n.domain = $domain,
-                    n.is_generated = coalesce(n.is_generated, false),
-                    n.is_completed = coalesce(n.is_completed, false),
-                    n.generation_state = coalesce(n.generation_state, 'planned'),
-                    n.pending_task_count = coalesce(n.pending_task_count, 0),
-                    n.completed_task_count = coalesce(n.completed_task_count, 0),
+                    n.is_generated = $is_generated,
+                    n.is_completed = $is_completed,
+                    n.generation_state = $generation_state,
+                    n.pending_task_count = $pending_task_count,
+                    n.completed_task_count = $completed_task_count,
                     n.updated_at = $updated_at
                 MERGE (d)-[:HAS_STRUCTURE_NODE]->(n)
                 """,
@@ -276,6 +306,11 @@ class Neo4jGraphClient:
                 path=str(node.get("relative_path", "")),
                 doc_type=str(node.get("doc_type", "")),
                 parent_node_id=str(node.get("parent_node_id", "")),
+                generation_state=generation_state,
+                is_generated=bool(node.get("is_generated", False)) or generation_state in {"documented", "link_querying", "link_verified", "approved"},
+                is_completed=bool(node.get("is_completed", False)) or generation_state in {"documented", "link_verified", "approved"},
+                pending_task_count=int(node.get("pending_task_count", 0) or 0),
+                completed_task_count=int(node.get("completed_task_count", 0) or 0),
                 updated_at=str(structure_graph.get("generated_at", "")),
             )
         for edge in structure_graph.get("edges", []):
@@ -478,6 +513,60 @@ class Neo4jGraphClient:
             LIMIT $relationship_limit
             """,
             domain=domain,
+            relationship_limit=relationship_limit,
+        )
+        edges = [
+            _normalize_relationship_row(row)
+            for row in relationship_rows
+            if row["source"] in visible_node_ids and row["target"] in visible_node_ids
+        ]
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _read_structure_review_context(
+        tx: Any,
+        domain: str,
+        task_id: str,
+        knowledge_id: str,
+        node_limit: int,
+        relationship_limit: int,
+    ) -> dict[str, Any]:
+        node_rows = tx.run(
+            """
+            MATCH (d:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(current:KnowledgeStructureNode {id: $knowledge_id})
+            WHERE current.task_id = $task_id OR current.task_id IS NULL
+            OPTIONAL MATCH (current)-[:STRUCTURE_EDGE]-(neighbor:KnowledgeStructureNode)
+            WITH collect(DISTINCT current) + collect(DISTINCT neighbor) AS raw_nodes
+            UNWIND raw_nodes AS node
+            WITH DISTINCT node
+            WHERE node IS NOT NULL
+            RETURN elementId(node) AS graph_id, labels(node) AS labels, properties(node) AS properties
+            LIMIT $node_limit
+            """,
+            domain=domain,
+            task_id=task_id,
+            knowledge_id=knowledge_id,
+            node_limit=node_limit,
+        )
+        nodes = [_normalize_node_row(row) for row in node_rows]
+        visible_node_ids = {node["id"] for node in nodes}
+        if not visible_node_ids:
+            return {"nodes": [], "edges": []}
+
+        relationship_rows = tx.run(
+            """
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(current:KnowledgeStructureNode {id: $knowledge_id})-[r:STRUCTURE_EDGE]-(neighbor:KnowledgeStructureNode)
+            WHERE current.task_id = $task_id OR current.task_id IS NULL
+            RETURN elementId(r) AS graph_id,
+                   elementId(startNode(r)) AS source,
+                   elementId(endNode(r)) AS target,
+                   type(r) AS type,
+                   properties(r) AS properties
+            LIMIT $relationship_limit
+            """,
+            domain=domain,
+            task_id=task_id,
+            knowledge_id=knowledge_id,
             relationship_limit=relationship_limit,
         )
         edges = [

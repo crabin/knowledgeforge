@@ -488,3 +488,26 @@
 - 修正 `repair_required` 的 `current_action` 文案，不再声明“需要人工修复或重新生成图谱”。
 - 当前表述改为：两轮知识架构审查与自动修补后仍存在结构缺口，任务进入 `repair_required`，等待系统后续修复流处理。
 - 为工作流测试补充断言，防止失败态文案再次回退到人工介入口径。
+
+## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
+
+- 使用 `planning-with-files` 恢复计划上下文并记录本轮任务。
+- 阅读了 `docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md`、`knowledgeforge/orchestrator/graph.py`、`knowledgeforge/prompts/knowledge_file_generation.py`、Neo4j mapper/client 与相关 workflow 测试。
+- 发现当前 review 输入未拼接 Neo4j 上下文；第一轮通过时两轮 review 之间不做 Neo4j 同步；Neo4j 结构图谱同步保留旧状态，无法反映 review 后状态；`manual_review` 建议可能被原样记录。
+- 已新增 review 专用 Neo4j 上下文读取链路：`PostStoragePipeline -> Neo4jPathMapper -> Neo4jGraphClient.structure_review_context`。
+- 已调整 `_run_structure_review` 的 LLM 输入，拼接当前 `knowledge_id`、Neo4j 相关图谱上下文、本地 `structure_graph`、上一轮 review 记录和自动补全约束。
+- 已调整每轮 review：Neo4j 初始同步可用时查询当前知识 ID 上下文；review 结束后同步结构状态，Neo4j 不可用时使用本地图谱 fallback 并跳过重复连接。
+- 已过滤非自动化 review 建议，并把文档/生成器中的人工处理表述收敛为系统复核、repair flow 或 research flow。
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/prompts/knowledge_file_generation.py knowledgeforge/postprocess/pipeline.py knowledgeforge/graph/neo4j_adapter.py knowledgeforge/graph/client.py knowledgeforge/storage/markdown_writer.py`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py::test_structure_review_uses_neo4j_context_and_syncs_each_round tests/test_workflow.py::test_structure_review_repairs_first_round_before_documents tests/test_workflow.py::test_structure_review_failure_stops_before_documents`
+- 结果：`3 passed in 4.05s`
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_knowledge_blueprint.py tests/test_dashboard.py`
+- 结果：`53 passed in 23.14s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 第一次结果：`1 failed, 161 passed`，失败用例为 `test_async_task_streams_query_progress_before_completion`；原因是 Neo4j 不可用时 review 前查询/同步重复触发连接重试，异步轮询窗口内仍处于 running。
+- 修复：Neo4j 初始同步失败或跳过时，review 上下文改用本地 structure graph fallback；review 结束同步也记录 skipped，避免重复连接不可用 Neo4j。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py::test_structure_review_uses_neo4j_context_and_syncs_each_round tests/test_workflow.py::test_async_task_streams_query_progress_before_completion`
+- 结果：`2 passed in 2.92s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 最终结果：`162 passed in 30.12s`

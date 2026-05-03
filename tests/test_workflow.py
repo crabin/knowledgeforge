@@ -7,7 +7,9 @@ from pathlib import Path
 from knowledgeforge.server import create_app
 from knowledgeforge.config import AppConfig
 from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.models import GraphSyncResult
 from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
+from knowledgeforge.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.services.task_service import TaskService
 
 
@@ -163,6 +165,78 @@ def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, m
     assert payload["document_artifact"]["generated_files"]
 
 
+def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+    review_prompts: list[dict] = []
+    sync_states: list[str] = []
+
+    def structure_review_context(self, *, domain: str, task_id: str, knowledge_id: str):
+        return {
+            "status": "ok",
+            "domain": domain,
+            "task_id": task_id,
+            "knowledge_id": knowledge_id,
+            "nodes": [
+                {
+                    "id": "neo4j-node-1",
+                    "title": "Neo4j 里的结构节点",
+                    "properties": {"id": knowledge_id, "generation_state": "reviewing"},
+                }
+            ],
+            "edges": [{"source": "neo4j-node-1", "target": "neo4j-node-2", "type": "STRUCTURE_EDGE"}],
+        }
+
+    def sync_structure_graph(self, *, domain: str, task_id: str, structure_graph: dict):
+        first_node = next((node for node in structure_graph.get("nodes", []) if isinstance(node, dict)), {})
+        sync_states.append(str(first_node.get("generation_state", "")))
+        return GraphSyncResult(
+            document_id=f"{domain}-structure-graph",
+            article_path="",
+            nodes=[],
+            relationships=[],
+            status="passed",
+        )
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "知识架构审查器" in system_prompt:
+            prompt = json.loads(user_prompt)
+            review_prompts.append(prompt)
+            return {
+                "is_complete": True,
+                "status": "passed",
+                "missing_topics": [],
+                "suggested_repairs": [],
+                "reasoning": "结合 Neo4j 上下文完成查漏补缺。",
+            }
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(PostStoragePipeline, "structure_review_context", structure_review_context)
+    monkeypatch.setattr(PostStoragePipeline, "sync_structure_graph", sync_structure_graph)
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["task_status"] == "verified"
+    assert len(review_prompts) == 2
+    assert all(prompt["knowledge_id"] for prompt in review_prompts)
+    assert all(prompt["neo4j_review_context"]["status"] == "ok" for prompt in review_prompts)
+    assert review_prompts[0]["neo4j_review_context"]["nodes"][0]["title"] == "Neo4j 里的结构节点"
+    assert review_prompts[1]["previous_review_rounds"][0]["neo4j_review_context"]["status"] == "ok"
+    assert sync_states.count("approved") >= 2
+
+
 def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeypatch) -> None:
     original_complete_json = OpenAICompatibleChatClient.complete_json
 
@@ -196,6 +270,7 @@ def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeyp
     payload = response.get_json()
     assert payload["task_status"] == "repair_required"
     assert len(payload["structure_review_rounds"]) == 2
+    assert payload["structure_review_rounds"][-1]["suggested_repairs"] == []
     assert "人工" not in payload["current_action"]
     assert "系统后续修复流" in payload["current_action"]
     assert "document_artifact" not in payload
