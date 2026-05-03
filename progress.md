@@ -1,5 +1,17 @@
 # Progress
 
+## 2026-05-03 Neo4j 图谱可读性优化
+
+- 将前端 Neo4j 图谱主体从紧凑节点列表升级为分层连线知识图谱：节点按 Domain / 结构节点层级自上而下排布，边以曲线箭头连接，并显示短关系标签。
+- 节点改为可点击的大文本卡片，保留状态、类型、标题和路径；右侧新增选中节点详情，展示路径、任务计数、Task ID 和相邻关系。
+- 优化图谱在窄视口下的布局：详情面板上移，图谱宽度不再固定 920px，避免首屏只看到大面积空白。
+- 修复页面初始 `lastPayload=null` 时手动刷新 Neo4j 图谱会触发 `task_id` 空值读取错误的问题。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.68s`
+- 使用 in-app browser 打开 `http://127.0.0.1:5001/`，用现有任务 `5ff363b2fa9f4814811ffe5aa0d9bcf2` 手动刷新图谱，确认 Deep Learning 图谱、详情面板和节点关系可见。
+
 ## 2026-05-03
 
 - 按当前真实代码流程同步核心设计与执行文档：`README.md`、`docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md`、`docs/知识库文件架构设计.md`、`task_plan.md`、`findings.md`。

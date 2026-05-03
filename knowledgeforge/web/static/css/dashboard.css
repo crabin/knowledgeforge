@@ -334,7 +334,7 @@ h3 {
 
 .neo4j-graph {
   width: 100%;
-  max-height: 360px;
+  max-height: 620px;
   overflow: auto;
   border: 1px solid rgba(23, 33, 31, 0.14);
   border-radius: 8px;
@@ -386,6 +386,235 @@ h3 {
 .neo4j-state-badge strong {
   color: var(--ink);
   font-size: 0.95rem;
+}
+
+.neo4j-map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.neo4j-map-frame {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.82);
+}
+
+.neo4j-map-viewport {
+  position: relative;
+  overflow: hidden;
+}
+
+.neo4j-map-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.neo4j-map-edge path {
+  fill: none;
+  stroke: rgba(93, 106, 102, 0.54);
+  stroke-width: 1.5;
+  marker-end: url("#neo4j-arrow");
+}
+
+.neo4j-map-edge text {
+  fill: rgba(93, 106, 102, 0.88);
+  paint-order: stroke;
+  stroke: #fffdf8;
+  stroke-width: 4px;
+  font-size: 10px;
+  font-weight: 850;
+  text-anchor: middle;
+}
+
+.neo4j-map-edge.is-new path {
+  stroke: var(--blue);
+  stroke-width: 2.4;
+}
+
+.neo4j-map-node {
+  position: absolute;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(23, 33, 31, 0.15);
+  border-left: 5px solid #8f9a95;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.96);
+  box-shadow: 0 8px 18px rgba(23, 33, 31, 0.06);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.neo4j-map-node:hover,
+.neo4j-map-node.is-selected {
+  border-color: rgba(23, 33, 31, 0.42);
+  box-shadow:
+    0 0 0 4px rgba(47, 95, 145, 0.12),
+    0 13px 26px rgba(47, 95, 145, 0.14);
+}
+
+.neo4j-map-node span,
+.neo4j-map-node small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.neo4j-map-node strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.22;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.neo4j-map-node.is-new {
+  box-shadow:
+    0 0 0 3px rgba(47, 95, 145, 0.16),
+    0 12px 24px rgba(47, 95, 145, 0.14);
+}
+
+.neo4j-map-node.state-approved,
+.neo4j-map-node.state-documented,
+.neo4j-map-node.state-link_verified,
+.neo4j-map-node.state-completed,
+.neo4j-map-node.state-generated {
+  border-left-color: var(--green);
+  background: #f1f8f2;
+}
+
+.neo4j-map-node.state-reviewing,
+.neo4j-map-node.state-repairing,
+.neo4j-map-node.state-documenting,
+.neo4j-map-node.state-link_querying {
+  border-left-color: var(--blue);
+  background: #f2f6fb;
+}
+
+.neo4j-map-node.state-failed,
+.neo4j-map-node.state-link_failed {
+  border-left-color: var(--red);
+  background: #fff3ef;
+}
+
+.neo4j-map-foot {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(23, 33, 31, 0.1);
+  background: rgba(255, 253, 248, 0.94);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.neo4j-node-inspector {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.92);
+}
+
+.neo4j-inspector-head {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.neo4j-inspector-head span,
+.neo4j-inspector-head small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.neo4j-inspector-head strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.neo4j-node-fields {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.neo4j-node-fields div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: #fbf8ee;
+}
+
+.neo4j-node-fields dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.neo4j-node-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.neo4j-inspector-relations {
+  display: grid;
+  gap: 7px;
+}
+
+.neo4j-inspector-relations h3 {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.neo4j-inspector-edge {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: #f2f6fb;
+}
+
+.neo4j-inspector-edge span {
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 900;
+}
+
+.neo4j-inspector-edge strong {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.76rem;
+  line-height: 1.28;
 }
 
 .neo4j-html-layout {
@@ -1417,6 +1646,14 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .neo4j-map-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .neo4j-node-inspector {
+    order: -1;
+  }
+
   .plan-full-list {
     grid-template-columns: 1fr;
   }
@@ -1456,7 +1693,7 @@ button:disabled {
   }
 
   .neo4j-graph {
-    max-height: 320px;
+    max-height: 520px;
   }
 
   .neo4j-state-strip,

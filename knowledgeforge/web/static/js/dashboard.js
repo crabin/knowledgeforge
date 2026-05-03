@@ -8,6 +8,7 @@ const state = {
   neo4jGraphSnapshot: null,
   neo4jGraphRefreshTimer: null,
   neo4jAutoFollow: true,
+  neo4jSelectedNodeId: "",
 };
 
 const output = document.querySelector("#response-output");
@@ -589,6 +590,7 @@ function getWorkflowEdgeAttrs(status) {
 }
 
 function getTaskIdFromPayload(payload = {}) {
+  payload = payload && typeof payload === "object" ? payload : {};
   return payload.task_id || payload.task?.task_id || payload.intake_session?.task_id || taskIdInput?.value?.trim() || "";
 }
 
@@ -660,43 +662,74 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     renderNeo4jGraphFallback(payload.error || "选择或启动任务后显示当前领域的 Neo4j 图谱");
     return;
   }
+  if (!nodes.some((node) => node.id === state.neo4jSelectedNodeId)) {
+    state.neo4jSelectedNodeId = chooseDefaultNeo4jSelectedNode(nodes)?.id || "";
+  }
   const counts = summarizeNeo4jNodeStates(nodes);
-  const visibleNodes = selectNeo4jHtmlNodes(nodes);
+  const generatingCount = counts.generating + counts.generated + counts.documenting;
+  const evidenceCount = counts.evidence_pending + counts.evidence_running + counts.link_querying;
+  const completedCount = counts.completed + counts.approved + counts.documented + counts.link_verified;
+  const visibleNodes = selectNeo4jMapNodes(nodes);
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
-  const visibleEdges = edges.filter((edge) => visibleNodeIds.has(edge.source) || visibleNodeIds.has(edge.target)).slice(0, 12);
+  const visibleEdges = edges.filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
   const hiddenNodeCount = Math.max(0, nodes.length - visibleNodes.length);
   const hiddenEdgeCount = Math.max(0, edges.length - visibleEdges.length);
+  const map = buildNeo4jReadableMap(visibleNodes, visibleEdges);
+  const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
   neo4jGraphContainer.innerHTML = `
     <div class="neo4j-html-graph" data-node-count="${escapeHtml(String(nodes.length))}">
       <div class="neo4j-state-strip" aria-label="图谱状态统计">
         ${renderNeo4jStateBadge("规划", counts.planned)}
-        ${renderNeo4jStateBadge("生成中", counts.generating + counts.generated)}
-        ${renderNeo4jStateBadge("证据中", counts.evidence_pending + counts.evidence_running)}
-        ${renderNeo4jStateBadge("完成", counts.completed)}
+        ${renderNeo4jStateBadge("生成中", generatingCount)}
+        ${renderNeo4jStateBadge("证据中", evidenceCount)}
+        ${renderNeo4jStateBadge("完成", completedCount)}
         ${renderNeo4jStateBadge("失败", counts.failed)}
       </div>
-      <div class="neo4j-html-layout">
-        <section class="neo4j-node-grid" aria-label="Neo4j 节点">
-          ${visibleNodes.map((node) => renderNeo4jHtmlNode(node, !previousNodeIds.has(node.id))).join("")}
-          ${hiddenNodeCount ? `<article class="neo4j-node-card muted"><span>更多节点</span><strong>+${escapeHtml(String(hiddenNodeCount))}</strong><small>通过刷新或任务推进继续更新</small></article>` : ""}
+      <div class="neo4j-map-layout">
+        <section class="neo4j-map-frame" aria-label="Neo4j 知识结构图谱">
+          <div class="neo4j-map-viewport" style="min-width:${escapeHtml(String(map.width))}px; height:${escapeHtml(String(map.height))}px;">
+            <svg class="neo4j-map-edges" width="${escapeHtml(String(map.width))}" height="${escapeHtml(String(map.height))}" viewBox="0 0 ${escapeHtml(String(map.width))} ${escapeHtml(String(map.height))}" aria-hidden="true">
+              <defs>
+                <marker id="neo4j-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+                  <path d="M 0 0 L 8 4 L 0 8 z"></path>
+                </marker>
+              </defs>
+              ${map.edges.map((edge) => renderNeo4jMapEdge(edge, !previousEdgeIds.has(edge.id))).join("")}
+            </svg>
+            ${map.nodes.map((item) => renderNeo4jMapNode(item, !previousNodeIds.has(item.node.id), item.node.id === selectedNode?.id)).join("")}
+          </div>
+          <div class="neo4j-map-foot">
+            <span>显示 ${escapeHtml(String(visibleNodes.length))}/${escapeHtml(String(nodes.length))} 个节点</span>
+            ${hiddenNodeCount ? `<span>隐藏 ${escapeHtml(String(hiddenNodeCount))} 个低优先级节点</span>` : ""}
+            ${hiddenEdgeCount ? `<span>隐藏 ${escapeHtml(String(hiddenEdgeCount))} 条跨层关系</span>` : ""}
+          </div>
         </section>
-        <section class="neo4j-edge-list" aria-label="Neo4j 关系">
-          <h3>关系摘要</h3>
-          ${visibleEdges.length ? visibleEdges.map((edge) => renderNeo4jHtmlEdge(edge, nodes, !previousEdgeIds.has(edge.id))).join("") : '<div class="neo4j-edge-empty">暂无关系</div>'}
-          ${hiddenEdgeCount ? `<div class="neo4j-edge-more">还有 ${escapeHtml(String(hiddenEdgeCount))} 条关系未展开</div>` : ""}
-        </section>
+        ${renderNeo4jNodeInspector(selectedNode, nodes, edges)}
       </div>
     </div>`;
+  neo4jGraphContainer.querySelectorAll("[data-neo4j-node-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.neo4jSelectedNodeId = button.dataset.neo4jNodeId || "";
+      renderNeo4jGraphHtml(graph, payload, previousPayload);
+    });
+  });
 }
 
 function summarizeNeo4jNodeStates(nodes) {
   const counts = {
     planned: 0,
+    generating: 0,
+    generated: 0,
+    evidence_pending: 0,
+    evidence_running: 0,
     reviewing: 0,
     repairing: 0,
+    approved: 0,
+    documenting: 0,
     documented: 0,
     link_querying: 0,
     link_verified: 0,
+    completed: 0,
     failed: 0,
   };
   nodes.forEach((node) => {
@@ -708,6 +741,19 @@ function summarizeNeo4jNodeStates(nodes) {
 
 function renderNeo4jStateBadge(label, count) {
   return `<span class="neo4j-state-badge"><strong>${escapeHtml(String(count))}</strong>${escapeHtml(label)}</span>`;
+}
+
+function chooseDefaultNeo4jSelectedNode(nodes) {
+  return [...nodes].sort((a, b) => getNeo4jHtmlNodePriority(a) - getNeo4jHtmlNodePriority(b) || compareNeo4jNodesForLayout(a, b))[0];
+}
+
+function selectNeo4jMapNodes(nodes) {
+  const sorted = [...nodes].sort((a, b) => getNeo4jHtmlNodePriority(a) - getNeo4jHtmlNodePriority(b) || compareNeo4jNodesForLayout(a, b));
+  const structural = sorted.filter((node) => node.type === "Domain" || isNeo4jStructureNode(node));
+  const others = sorted.filter((node) => node.type !== "Domain" && !isNeo4jStructureNode(node));
+  const selected = nodes.find((node) => node.id === state.neo4jSelectedNodeId);
+  const byId = new Map([...structural, ...others.slice(0, Math.max(0, 72 - structural.length)), selected].filter(Boolean).map((node) => [node.id, node]));
+  return [...byId.values()].slice(0, 80);
 }
 
 function selectNeo4jHtmlNodes(nodes) {
@@ -766,6 +812,113 @@ function renderNeo4jHtmlEdge(edge, nodes, isNew) {
       <em aria-hidden="true">&rarr;</em>
       <strong>${escapeHtml(target?.title || edge.target)}</strong>
     </div>`;
+}
+
+function buildNeo4jReadableMap(nodes, edges) {
+  const containerWidth = neo4jGraphContainer?.clientWidth || 920;
+  const width = Math.max(containerWidth < 900 ? 560 : 920, containerWidth < 900 ? containerWidth - 28 : containerWidth - 340);
+  const compact = width < 720;
+  const nodeWidth = compact ? 220 : 210;
+  const nodeHeight = 78;
+  const layout = nodes.some((node) => isNeo4jStructureNode(node))
+    ? layoutNeo4jStructureNodes(nodes, compact, width, nodeWidth, nodeHeight)
+    : layoutNeo4jNodesByType(nodes, compact, width, nodeWidth, nodeHeight);
+  const layoutNodes = layout.nodes.map((item) => ({ ...item, width: nodeWidth, height: nodeHeight }));
+  const byId = new Map(layoutNodes.map((item) => [item.node.id, item]));
+  const layoutEdges = edges
+    .filter((edge) => byId.has(edge.source) && byId.has(edge.target))
+    .map((edge) => {
+      const source = byId.get(edge.source);
+      const target = byId.get(edge.target);
+      return {
+        ...edge,
+        sourceX: source.x + nodeWidth / 2,
+        sourceY: source.y + nodeHeight,
+        targetX: target.x + nodeWidth / 2,
+        targetY: target.y,
+      };
+    });
+  return { nodes: layoutNodes, edges: layoutEdges, width: layout.width, height: layout.height };
+}
+
+function renderNeo4jMapEdge(edge, isNew) {
+  const midY = Math.max(edge.sourceY + 24, Math.floor((edge.sourceY + edge.targetY) / 2));
+  const path = `M ${edge.sourceX} ${edge.sourceY} C ${edge.sourceX} ${midY}, ${edge.targetX} ${midY}, ${edge.targetX} ${edge.targetY}`;
+  const labelX = Math.floor((edge.sourceX + edge.targetX) / 2);
+  const labelY = Math.floor(midY - 5);
+  return `
+    <g class="neo4j-map-edge${isNew ? " is-new" : ""}">
+      <path d="${escapeHtml(path)}"></path>
+      <text x="${escapeHtml(String(labelX))}" y="${escapeHtml(String(labelY))}">${escapeHtml(formatNeo4jEdgeType(edge.type))}</text>
+    </g>`;
+}
+
+function renderNeo4jMapNode(item, isNew, isSelected) {
+  const node = item.node;
+  const stateName = getNeo4jGenerationState(node);
+  const statusLabel = formatNeo4jGenerationState(stateName);
+  const kind = formatNeo4jNodeKind(node);
+  const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  return `
+    <button class="neo4j-map-node state-${escapeHtml(sanitizeClassName(stateName))}${isNew ? " is-new" : ""}${isSelected ? " is-selected" : ""}"
+      type="button"
+      data-neo4j-node-id="${escapeHtml(node.id)}"
+      style="left:${escapeHtml(String(item.x))}px; top:${escapeHtml(String(item.y))}px; width:${escapeHtml(String(item.width))}px; height:${escapeHtml(String(item.height))}px;"
+      title="${escapeHtml(path)}">
+      <span>${escapeHtml(statusLabel)} · ${escapeHtml(kind)}</span>
+      <strong>${escapeHtml(node.title || node.id)}</strong>
+      <small>${escapeHtml(path)}</small>
+    </button>`;
+}
+
+function renderNeo4jNodeInspector(node, nodes, edges) {
+  if (!node) return '<aside class="neo4j-node-inspector"><div class="neo4j-edge-empty">暂无可查看节点</div></aside>';
+  const adjacent = edges.filter((edge) => edge.source === node.id || edge.target === node.id).slice(0, 10);
+  const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  return `
+    <aside class="neo4j-node-inspector" aria-label="选中节点详情">
+      <div class="neo4j-inspector-head">
+        <span>${escapeHtml(formatNeo4jGenerationState(getNeo4jGenerationState(node)))}</span>
+        <strong>${escapeHtml(node.title || node.id)}</strong>
+        <small>${escapeHtml(formatNeo4jNodeKind(node))}</small>
+      </div>
+      <dl class="neo4j-node-fields">
+        ${renderNeo4jNodeField("路径", path)}
+        ${renderNeo4jNodeField("待查证据", node.properties?.pending_task_count)}
+        ${renderNeo4jNodeField("已完成证据", node.properties?.completed_task_count)}
+        ${renderNeo4jNodeField("Task", node.properties?.task_id)}
+      </dl>
+      <div class="neo4j-inspector-relations">
+        <h3>相邻关系</h3>
+        ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
+      </div>
+    </aside>`;
+}
+
+function renderNeo4jNodeField(label, value) {
+  if (value === undefined || value === null || value === "") return "";
+  return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function renderNeo4jInspectorEdge(edge, selectedNode, nodes) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const isOutgoing = edge.source === selectedNode.id;
+  const peer = byId.get(isOutgoing ? edge.target : edge.source);
+  return `
+    <div class="neo4j-inspector-edge">
+      <span>${escapeHtml(isOutgoing ? "指向" : "来自")} · ${escapeHtml(formatNeo4jEdgeType(edge.type))}</span>
+      <strong>${escapeHtml(peer?.title || (isOutgoing ? edge.target : edge.source))}</strong>
+    </div>`;
+}
+
+function formatNeo4jEdgeType(type) {
+  return {
+    STRUCTURE_EDGE: "结构",
+    HAS_STRUCTURE_NODE: "包含",
+    HAS_SUBTOPIC: "子领域",
+    HAS_ARTICLE: "文章",
+    MENTIONS: "提及",
+  }[type] || type || "关联";
 }
 
 function getNeo4jGenerationState(node) {
