@@ -281,7 +281,7 @@ function renderWorkflowX6(byStep, current) {
   workflowX6Container.style.height = `${height}px`;
   graph.resize(width, height);
   graph.fromJSON(data);
-  graph.centerContent({ padding: 16 });
+  fitGraphToContainer(graph, workflowX6Container, 18, 1);
 }
 
 function ensureWorkflowGraph() {
@@ -316,16 +316,17 @@ function ensureWorkflowGraph() {
 
 function buildWorkflowGraphData(byStep, current) {
   const width = workflowX6Container?.clientWidth || 960;
-  const compact = width < 920;
-  const nodeWidth = compact ? Math.max(180, width - 48) : 204;
-  const nodeHeight = compact ? 122 : 118;
-  const gapX = compact ? 0 : Math.max(22, Math.floor((width - 48 - nodeWidth * 4) / 3));
+  const compact = width < 760;
+  const nodeWidth = compact ? Math.max(220, width - 48) : Math.max(178, Math.floor((width - 48 - 7 * 22) / 8));
+  const nodeHeight = compact ? 96 : 116;
   const startX = 24;
   const startY = 24;
-  const rowGap = compact ? 18 : 42;
-  const columnGap = compact ? 0 : nodeWidth + gapX;
+  const gapX = compact ? 0 : 22;
+  const gapY = compact ? 18 : 0;
   const nodes = workflowSteps.map((step, index) => {
-    const position = getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap);
+    const position = compact
+      ? { x: startX, y: startY + index * (nodeHeight + gapY) }
+      : { x: startX + index * (nodeWidth + gapX), y: startY };
     const status = getWorkflowStepStatus(step.id, byStep, current);
     return {
       id: step.id,
@@ -334,6 +335,7 @@ function buildWorkflowGraphData(byStep, current) {
       y: position.y,
       width: nodeWidth,
       height: nodeHeight,
+      ports: workflowNodePorts(compact),
       data: { status },
       markup: [
         { tagName: "rect", selector: "body" },
@@ -352,23 +354,60 @@ function buildWorkflowGraphData(byStep, current) {
     return {
       id: `${step.id}-${next.id}`,
       shape: "edge",
-      source: step.id,
-      target: next.id,
-      router: compact ? { name: "manhattan" } : { name: "orth" },
-      connector: { name: "rounded" },
+      source: { cell: step.id, port: compact ? "bottom" : "right" },
+      target: { cell: next.id, port: compact ? "top" : "left" },
+      connector: { name: "normal" },
       attrs: getWorkflowEdgeAttrs(edgeStatus),
     };
   });
-  const rows = compact ? workflowSteps.length : Math.ceil(workflowSteps.length / 4);
-  const height = startY * 2 + rows * nodeHeight + Math.max(0, rows - 1) * rowGap;
+  const height = compact
+    ? startY * 2 + workflowSteps.length * nodeHeight + Math.max(0, workflowSteps.length - 1) * gapY
+    : startY * 2 + nodeHeight;
   return { nodes, edges, meta: { height } };
 }
 
-function getWorkflowPosition(index, compact, startX, startY, nodeWidth, nodeHeight, columnGap, rowGap) {
-  if (compact) return { x: startX, y: startY + index * (nodeHeight + rowGap) };
-  const row = Math.floor(index / 4);
-  const column = index % 4;
-  return { x: startX + column * columnGap, y: startY + row * (nodeHeight + rowGap) };
+function workflowNodePorts(compact) {
+  return {
+    groups: {
+      left: { position: "left", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+      right: { position: "right", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+      top: { position: "top", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+      bottom: { position: "bottom", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+    },
+    items: compact
+      ? [{ id: "top", group: "top" }, { id: "bottom", group: "bottom" }]
+      : [{ id: "left", group: "left" }, { id: "right", group: "right" }],
+  };
+}
+
+function graphNodePorts() {
+  return {
+    groups: {
+      top: { position: "top", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+      bottom: { position: "bottom", attrs: { circle: { r: 0, magnet: false, stroke: "transparent", fill: "transparent" } } },
+    },
+    items: [{ id: "top", group: "top" }, { id: "bottom", group: "bottom" }],
+  };
+}
+
+function fitGraphToContainer(graph, container, padding = 24, maxScale = 1) {
+  if (!graph || !container) return;
+  const width = container.clientWidth || 1;
+  const height = container.clientHeight || 1;
+  let bbox;
+  try {
+    bbox = graph.getContentBBox();
+  } catch {
+    graph.centerContent({ padding });
+    return;
+  }
+  if (!bbox || !bbox.width || !bbox.height) {
+    graph.centerContent({ padding });
+    return;
+  }
+  const scale = Math.min(maxScale, (width - padding * 2) / bbox.width, (height - padding * 2) / bbox.height);
+  graph.zoomTo(Math.max(0.18, scale));
+  graph.centerContent({ padding });
 }
 
 function getWorkflowStepStatus(stepId, byStep, current) {
@@ -512,10 +551,11 @@ function renderNeo4jGraphSnapshot(payload, previousPayload) {
   const previousEdgeIds = new Set(previousGraph.edges.map((edge) => edge.id));
   const data = buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds);
   const width = neo4jGraphContainer.clientWidth || 960;
-  neo4jGraphContainer.style.height = `${data.meta.height}px`;
-  x6Graph.resize(width, data.meta.height);
+  const viewportHeight = Math.max(520, Math.min(760, Math.round(window.innerHeight * 0.72)));
+  neo4jGraphContainer.style.height = `${viewportHeight}px`;
+  x6Graph.resize(width, Math.max(viewportHeight, Math.min(data.meta.height, 1800)));
   x6Graph.fromJSON(data);
-  if (data.nodes.length) x6Graph.centerContent({ padding: 18 });
+  if (data.nodes.length) fitGraphToContainer(x6Graph, neo4jGraphContainer, 28, 0.96);
 }
 
 function ensureNeo4jGraph() {
@@ -556,9 +596,9 @@ function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph.edges) ? graph.edges : [];
   const width = neo4jGraphContainer?.clientWidth || 960;
-  const compact = width < 760;
-  const nodeWidth = compact ? Math.max(220, width - 56) : 196;
-  const nodeHeight = 78;
+  const compact = width < 700;
+  const nodeWidth = compact ? Math.max(220, width - 56) : 210;
+  const nodeHeight = 74;
   const useStructureLayout = nodes.some((node) => isNeo4jStructureNode(node));
   const layout = useStructureLayout
     ? layoutNeo4jStructureNodes(nodes, compact, width, nodeWidth, nodeHeight)
@@ -570,6 +610,7 @@ function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
     y: item.y,
     width: nodeWidth,
     height: nodeHeight,
+    ports: graphNodePorts(),
     markup: [
       { tagName: "rect", selector: "body" },
       { tagName: "text", selector: "kind" },
@@ -585,77 +626,87 @@ function buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds) {
     .map((edge) => ({
       id: edge.id,
       shape: "edge",
-      source: edge.source,
-      target: edge.target,
+      source: { cell: edge.source, port: "bottom" },
+      target: { cell: edge.target, port: "top" },
       connector: { name: "rounded" },
-      router: { name: compact ? "manhattan" : "orth" },
+      router: { name: "manhattan", args: { padding: 14 } },
       attrs: getNeo4jEdgeAttrs(!previousEdgeIds.has(edge.id), edge.type),
     }));
-  return { nodes: positioned, edges: x6Edges, meta: { height: layout.height } };
+  return { nodes: positioned, edges: x6Edges, meta: { height: layout.height, width: layout.width } };
 }
 
 function layoutNeo4jStructureNodes(nodes, compact, width, nodeWidth, nodeHeight) {
-  const startX = 24;
-  const startY = 24;
-  const gapY = 18;
+  const startX = 28;
+  const startY = 28;
+  const gapY = 30;
+  const gapX = compact ? 18 : 32;
   const domainNodes = nodes.filter((node) => node.type === "Domain");
   const structureNodes = nodes.filter((node) => isNeo4jStructureNode(node));
   const otherNodes = nodes.filter((node) => node.type !== "Domain" && !isNeo4jStructureNode(node));
   const depthByLogicalId = buildStructureDepthMap(structureNodes);
-  const rowsByDepth = new Map();
-  structureNodes.forEach((node) => {
-    const depth = depthByLogicalId.get(getNeo4jLogicalId(node)) ?? 1;
-    if (!rowsByDepth.has(depth)) rowsByDepth.set(depth, []);
-    rowsByDepth.get(depth).push(node);
-  });
+  const nodesByLogicalId = new Map(structureNodes.map((node) => [getNeo4jLogicalId(node), node]));
   const positioned = [];
-  const allGroups = [];
-  if (domainNodes.length) allGroups.push({ depth: 0, nodes: domainNodes });
-  [...rowsByDepth.entries()]
-    .sort(([a], [b]) => a - b)
-    .forEach(([depth, groupNodes]) => allGroups.push({ depth: domainNodes.length ? depth + 1 : depth, nodes: groupNodes }));
-  if (otherNodes.length) allGroups.push({ depth: allGroups.length, nodes: otherNodes });
-  const groupCount = Math.max(1, allGroups.length);
-  const gapX = compact ? 0 : Math.max(28, Math.floor((width - startX * 2 - nodeWidth * groupCount) / Math.max(1, groupCount - 1)));
-  allGroups.forEach((group, groupIndex) => {
-    const sorted = group.nodes.sort(compareNeo4jNodesForLayout);
-    sorted.forEach((node, nodeIndex) => {
-      positioned.push({
-        node,
-        x: compact ? startX : startX + groupIndex * (nodeWidth + gapX),
-        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
-      });
+  let cursorY = startY;
+  const placeRow = (rowNodes, depth) => {
+    const sorted = [...rowNodes].sort(compareNeo4jNodesForLayout);
+    const rowWidth = sorted.length * nodeWidth + Math.max(0, sorted.length - 1) * gapX;
+    const availableWidth = Math.max(width - startX * 2, rowWidth);
+    const rowStartX = Math.max(startX, startX + Math.floor((availableWidth - rowWidth) / 2));
+    sorted.forEach((node, index) => {
+      positioned.push({ node, x: rowStartX + index * (nodeWidth + gapX), y: cursorY, depth });
     });
+    cursorY += nodeHeight + gapY;
+  };
+
+  if (domainNodes.length) placeRow(domainNodes, 0);
+  const rootStructureNodes = structureNodes.filter((node) => {
+    const parentId = String(node.properties?.parent_node_id || "");
+    return !parentId || !nodesByLogicalId.has(parentId);
   });
-  const maxRows = compact ? positioned.length : Math.max(1, ...allGroups.map((group) => group.nodes.length));
+  const maxDepth = Math.max(0, ...structureNodes.map((node) => depthByLogicalId.get(getNeo4jLogicalId(node)) || 0));
+  for (let depth = 0; depth <= maxDepth; depth += 1) {
+    const row = structureNodes.filter((node) => {
+      if ((depthByLogicalId.get(getNeo4jLogicalId(node)) || 0) !== depth) return false;
+      if (depth === 0) return rootStructureNodes.includes(node);
+      return true;
+    });
+    if (row.length) placeRow(row, domainNodes.length ? depth + 1 : depth);
+  }
+  if (otherNodes.length) placeRow(otherNodes, maxDepth + 2);
+  const maxRight = positioned.length ? Math.max(...positioned.map((item) => item.x + nodeWidth)) : width;
   return {
     nodes: positioned,
-    height: Math.max(460, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY),
+    width: Math.max(width, maxRight + startX),
+    height: Math.max(460, cursorY + startY),
   };
 }
 
 function layoutNeo4jNodesByType(nodes, compact, width, nodeWidth, nodeHeight) {
   const groupOrder = ["Domain", "SubTopic", "Article", "Entity", "KnowledgeStructureNode"];
   const grouped = groupNeo4jNodes(nodes, groupOrder);
-  const gapX = compact ? 0 : 32;
-  const gapY = 18;
-  const startX = 24;
-  const startY = 24;
-  const columns = compact ? 1 : Math.min(grouped.length || 1, 5);
+  const gapX = compact ? 18 : 32;
+  const gapY = 30;
+  const startX = 28;
+  const startY = 28;
   const positioned = [];
+  let cursorY = startY;
   grouped.forEach((group, groupIndex) => {
+    const rowWidth = group.nodes.length * nodeWidth + Math.max(0, group.nodes.length - 1) * gapX;
+    const rowStartX = Math.max(startX, startX + Math.floor((Math.max(width - startX * 2, rowWidth) - rowWidth) / 2));
     group.nodes.forEach((node, nodeIndex) => {
       positioned.push({
         node,
-        x: compact ? startX : startX + (groupIndex % columns) * (nodeWidth + gapX),
-        y: compact ? startY + positioned.length * (nodeHeight + gapY) : startY + nodeIndex * (nodeHeight + gapY),
+        x: rowStartX + nodeIndex * (nodeWidth + gapX),
+        y: cursorY,
       });
     });
+    cursorY += nodeHeight + gapY;
   });
-  const maxRows = compact ? positioned.length : Math.max(1, ...grouped.map((group) => group.nodes.length));
+  const maxRight = positioned.length ? Math.max(...positioned.map((item) => item.x + nodeWidth)) : width;
   return {
     nodes: positioned,
-    height: Math.max(460, startY * 2 + maxRows * nodeHeight + Math.max(0, maxRows - 1) * gapY),
+    width: Math.max(width, maxRight + startX),
+    height: Math.max(460, cursorY + startY),
   };
 }
 

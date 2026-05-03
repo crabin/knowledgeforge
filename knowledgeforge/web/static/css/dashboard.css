@@ -268,8 +268,8 @@ h3 {
 
 .workflow-x6 {
   width: 100%;
-  min-height: 320px;
-  overflow: hidden;
+  min-height: 180px;
+  overflow: auto;
   border: 1px solid rgba(23, 33, 31, 0.14);
   border-radius: 8px;
   background: #fffdf8;
@@ -350,7 +350,7 @@ h3 {
 .neo4j-graph {
   width: 100%;
   min-height: 420px;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid rgba(23, 33, 31, 0.14);
   border-radius: 8px;
   background: #fffdf8;

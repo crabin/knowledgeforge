@@ -89,6 +89,25 @@
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`154 passed in 34.46s`
 
+## 2026-05-03 X6 流程图与 Neo4j 图谱布局优化
+
+- 流程图从两行折返改为桌面端单行自适应布局，小屏再切换纵向布局，减少箭头折返和重叠。
+- 流程图边改为基于端口的直线连接，避免箭头穿过节点内容。
+- Neo4j 图谱默认改为自上而下的分层垂直排列，节点按层居中铺开，箭头从节点底部连到下一层顶部。
+- Neo4j 图谱渲染后会自动缩放并居中到可视容器；超大图保留可滚动画布高度作为兜底。
+- 图谱容器允许滚动查看，避免大型结构图只能看到局部。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py tests/test_workflow.py`
+- 结果：`40 passed in 7.65s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 27.26s`
+- 使用 in-app browser 刷新 `http://localhost:5001/`
+- 结果：页面没有新增前端 error。
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.
