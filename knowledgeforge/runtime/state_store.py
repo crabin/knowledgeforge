@@ -64,6 +64,8 @@ class TaskStateStore:
             "normalized_domain": request_context.get("normalized_domain", ""),
             "subdomains": request_context.get("subdomains", []),
             "round_number": payload.get("round_number", 1),
+            "started_at": payload.get("started_at", ""),
+            "finished_at": payload.get("finished_at", ""),
             "document_path": document_artifact.get("path", ""),
             "version": version_record.get("version", ""),
             "report_eligible": version_record.get("report_eligible", False),

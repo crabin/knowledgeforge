@@ -35,6 +35,9 @@ class WorkflowState(TypedDict, total=False):
     file_update: dict
     current_step: str
     current_action: str
+    started_at: str
+    finished_at: str
+    updated_at: str
     plan_approved_at: str
     agent_outputs: dict[str, EngineRunResult]
     pending_query_supplement_plan: EnginePlan

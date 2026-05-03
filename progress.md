@@ -71,6 +71,24 @@
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`154 passed in 24.44s`
 
+## 2026-05-03 当前任务执行耗时展示
+
+- 任务状态新增 `started_at`、`finished_at` 和 `task_timing`，后端统一计算当前任务已执行秒数。
+- `/tasks`、`/tasks/{task_id}`、`/tasks/{task_id}/logs` 和 SSE payload 均可携带任务耗时信息。
+- 前端“响应与关键字段”摘要区新增“执行耗时”，运行中任务会按本地时间每秒刷新展示。
+- 任务列表摘要补充 `started_at` / `finished_at`，方便后续扩展任务历史耗时显示。
+
+## Verification
+
+- 运行 `python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/orchestrator/state.py knowledgeforge/runtime/state_store.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`40 passed in 6.05s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 34.46s`
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.

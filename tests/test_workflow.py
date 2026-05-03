@@ -43,6 +43,10 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert payload["task_queue_snapshot"]["tasks"]
     assert payload["structure_graph"]["nodes"]
     assert payload["graph_snapshot"]["nodes"]
+    assert payload["started_at"]
+    assert payload["finished_at"]
+    assert payload["task_timing"]["elapsed_seconds"] >= 0
+    assert payload["task_timing"]["is_running"] is False
     assert any(
         node["properties"].get("generation_state") == "completed"
         for node in payload["graph_snapshot"]["nodes"]

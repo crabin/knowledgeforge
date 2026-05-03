@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import suppress
+from datetime import datetime
 import json
 import shutil
 from threading import Lock, Thread
@@ -650,6 +651,7 @@ class TaskService:
             "task_status": "running" if audit_source == "api_async" else "created",
             "current_step": "intent_recognition",
             "current_action": "真实意图与领域名称已确认，等待生成目录结构图谱。",
+            "started_at": now_iso(),
             "updated_at": now_iso(),
         }
         self._audit_logger.log(
@@ -676,6 +678,8 @@ class TaskService:
                 return
             failed_state = dict(initial_state)
             failed_state["task_status"] = "failed"
+            failed_state["finished_at"] = now_iso()
+            failed_state["updated_at"] = failed_state["finished_at"]
             with self._task_lock:
                 self._tasks[task_id] = failed_state
             payload = self._serialize_state(failed_state)
@@ -730,12 +734,15 @@ class TaskService:
         self._backfill_audit_logs_from_task(task_id, task, audit_logs)
         refreshed_logs = self._audit_logger.read(task_id)
         queue_snapshot = task.get("task_queue_snapshot", {}) or {}
-        return {
+        payload = {
             "task_id": task_id,
             "task_status": task.get("task_status"),
             "current_step": task.get("current_step"),
             "current_action": task.get("current_action"),
             "round_number": task.get("round_number"),
+            "started_at": task.get("started_at", ""),
+            "finished_at": task.get("finished_at", ""),
+            "updated_at": task.get("updated_at", ""),
             "agent_plans": task.get("agent_plans", {}),
             "workflow_events": task.get("workflow_events", []),
             "structure_graph": task.get("structure_graph", (task.get("request_context") or {}).get("structure_graph", {})),
@@ -755,6 +762,8 @@ class TaskService:
             "logs": refreshed_logs,
             "token_usage": summarize_token_usage(refreshed_logs),
         }
+        self._attach_task_timing(payload)
+        return payload
 
     def get_task_graph_snapshot(self, task_id: str) -> dict[str, Any] | None:
         task = self.get_task(task_id)
@@ -856,6 +865,7 @@ class TaskService:
             "round_number": round_number + 1,
             "max_rounds": self._config.max_rounds,
             "task_status": "resumed",
+            "started_at": stored.get("started_at") or now_iso(),
         }
         self._audit_logger.log(
             task_id,
@@ -871,6 +881,11 @@ class TaskService:
         if self._is_cancelled(task_id):
             raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
         self._finalize_successful_plan_statuses(state)
+        if not state.get("started_at"):
+            state["started_at"] = now_iso()
+        if self._is_terminal_status(state.get("task_status")) and not state.get("finished_at"):
+            state["finished_at"] = now_iso()
+        state["updated_at"] = now_iso()
         with self._task_lock:
             self._tasks[task_id] = state
         payload = self._serialize_state(state)
@@ -930,10 +945,25 @@ class TaskService:
     def _attach_runtime_observability(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._refresh_task_queue_snapshot_from_path(payload)
         self._attach_execution_log(payload)
+        self._attach_task_timing(payload)
         task_id = str(payload.get("task_id") or payload.get("session_id") or "")
         if task_id:
             payload["token_usage"] = summarize_token_usage(self._audit_logger.read(task_id))
         return payload
+
+    def _attach_task_timing(self, payload: dict[str, Any]) -> None:
+        if not payload.get("task_id"):
+            return
+        started_at = str(payload.get("started_at") or payload.get("created_at") or payload.get("updated_at") or "")
+        finished_at = str(payload.get("finished_at") or "")
+        reference_at = finished_at or now_iso()
+        elapsed_seconds = self._elapsed_seconds(started_at, reference_at)
+        payload["task_timing"] = {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "elapsed_seconds": elapsed_seconds,
+            "is_running": self._is_running_status(payload.get("task_status", "")),
+        }
 
     @staticmethod
     def _build_queue_summary(queue: dict[str, Any]) -> dict[str, Any]:
@@ -1372,6 +1402,8 @@ class TaskService:
             "normalized_domain": request_context.get("normalized_domain", ""),
             "subdomains": request_context.get("subdomains", []),
             "round_number": payload.get("round_number", 1),
+            "started_at": payload.get("started_at", ""),
+            "finished_at": payload.get("finished_at", ""),
             "document_path": document_artifact.get("path", ""),
             "version": version_record.get("version", ""),
             "report_eligible": version_record.get("report_eligible", False),
@@ -1408,6 +1440,29 @@ class TaskService:
     @staticmethod
     def _is_running_status(status: object) -> bool:
         return str(status) in {"running", "resumed", "supplementing", "filled"}
+
+    @staticmethod
+    def _is_terminal_status(status: object) -> bool:
+        return str(status) in {
+            "verified",
+            "research_required",
+            "repair_required",
+            "supplement_required",
+            "max_rounds_reached",
+            "failed",
+            "plan_failed",
+        }
+
+    @staticmethod
+    def _elapsed_seconds(started_at: str, reference_at: str) -> int:
+        if not started_at or not reference_at:
+            return 0
+        try:
+            started = datetime.fromisoformat(started_at)
+            reference = datetime.fromisoformat(reference_at)
+        except ValueError:
+            return 0
+        return max(0, int((reference - started).total_seconds()))
 
 
 class _NoopQueryCrawler:

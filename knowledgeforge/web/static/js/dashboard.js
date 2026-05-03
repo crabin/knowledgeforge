@@ -139,6 +139,7 @@ function renderSummary(payload) {
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
+    ["执行耗时", summarizeTaskTiming(payload)],
     ["当前步骤", payload.current_step || payload.task?.current_step],
     ["当前动作", payload.current_action || payload.task?.current_action],
     ["生成进度", summarizeGenerationProgress(payload)],
@@ -1012,6 +1013,37 @@ function summarizeTokenUsageLabel(payload) {
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
 }
 
+function summarizeTaskTiming(payload) {
+  const timing = payload.task_timing || payload.task?.task_timing || {};
+  const startedAt = timing.started_at || payload.started_at || payload.task?.started_at;
+  const dynamicSeconds = timing.is_running && startedAt ? secondsSince(startedAt) : null;
+  const seconds = dynamicSeconds ?? Number(timing.elapsed_seconds);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    const suffix = timing.is_running ? "运行中" : "已完成";
+    return `${formatDuration(seconds)} · ${suffix}`;
+  }
+  if (startedAt) return "0 秒 · 运行中";
+  return "";
+}
+
+function secondsSince(isoTimestamp) {
+  const started = Date.parse(isoTimestamp);
+  if (!Number.isFinite(started)) return null;
+  return Math.max(0, Math.floor((Date.now() - started) / 1000));
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const restSeconds = seconds % 60;
+  const parts = [];
+  if (hours) parts.push(`${hours} 小时`);
+  if (minutes) parts.push(`${minutes} 分钟`);
+  if (restSeconds || !parts.length) parts.push(`${restSeconds} 秒`);
+  return parts.join(" ");
+}
+
 function summarizeQueueCountSummary(counts = {}) {
   const total = Number(counts.total || 0);
   if (!total) return "";
@@ -1413,6 +1445,12 @@ document.querySelector("#delete-task").addEventListener("click", async (event) =
 
 refreshStatus();
 initializeWorkflowMap();
+
+window.setInterval(() => {
+  if (state.lastPayload?.task_timing?.is_running || state.lastPayload?.task?.task_timing?.is_running) {
+    renderSummary(state.lastPayload);
+  }
+}, 1000);
 
 window.addEventListener("resize", () => {
   if (state.workflowGraphReady) renderWorkflowMap(state.lastPayload || {});
