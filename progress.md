@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-05-03
+
+- 按当前真实代码流程同步核心设计与执行文档：`README.md`、`docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md`、`docs/知识库文件架构设计.md`、`task_plan.md`、`findings.md`。
+- 文档主流程统一为：真实意图识别 → 结构图谱规划 → Neo4j 任务图初始化 → 串行知识点文件生成 → 文件级证据队列 → 单条证据即时回写 → 父级状态聚合 → 治理质检 → 版本研报。
+- 明确 `/tasks`、`/tasks/async` 与 intake confirm 均会先归一化领域和意图；非 `knowledge_collection` 直接任务会被拦截。
+- 明确 Neo4j 节点状态字段、父级完成聚合规则、Markdown contract 与 `knowledge_task_queue.json` 的即时同步职责。
+- 明确 SSE 是实时图谱与文件回写状态的主同步通道，`/tasks/{task_id}/graph` 与手动刷新保留为 fallback。
+- 保留历史阶段记录，但将“最后统一回填”“前端 SSE 后自动拉 `/graph`”“默认三路计划确认”等旧描述标记为历史或兼容兜底。
+- 未改动 `docs/流程图.excalidraw`，避免直接编辑 Excalidraw JSON 破坏画布；当前权威流程以 Markdown 文档和前端 Flow Map 为准。
+
+## Verification
+
+- 运行关键词扫描，确认主文档不再把“最后统一回填 / 前端自动拉 `/graph` / 默认三路计划确认”描述为当前主流程；旧词只保留在历史记录或兼容兜底说明中。
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`152 passed in 30.05s`
+
 ## 2026-05-02
 
 - Implemented graph-driven directory planning: workflow now generates an LLM-backed directory structure graph, derives dynamic blueprints, and uses the graph context during file generation.

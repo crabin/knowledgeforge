@@ -4,7 +4,16 @@
 在不偏离项目需求、知识文档格式规范和流程执行文档的前提下，分阶段落地 KnowledgeForge 的主链路闭环，并为 Neo4j、质量检测、版本更新和后续研报分支建立稳定接口与治理骨架。
 
 ## 当前阶段
-阶段 8：版本冻结与研报分支已完成
+阶段 9：实时知识生成主链路已完成，当前正在同步文档与执行说明
+
+## 当前真实代码主链路（2026-05-03）
+- 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
+- 结构先行：工作流先生成 `structure_graph`，再同步 Neo4j 任务图，结构节点初始为 `planned`。
+- 文件串行生成：按结构图谱推导 `knowledge_blueprint`，严格一次生成一个知识点 Markdown 文件；文件开始生成时图谱节点进入 `generating`，写入成功后进入 `generated` 或 `evidence_pending`。
+- 证据即时回写：`run_query_queue` 每完成一条证据任务，就立即更新目标 Markdown contract、`knowledge_task_queue.json`、Neo4j 节点状态和任务 SSE payload；`fill_evidence` 只保留为最终一致性校验与兼容兜底。
+- 父级自动聚合：KnowledgePoint / Article 状态变化后会向上聚合 SubTopic / Domain；所有 required 子节点完成后父级进入 `completed`。
+- 前端实时同步：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot`、`graph_event`、`file_update`；前端优先使用 SSE 图谱快照渲染，`/tasks/{task_id}/graph` 与手动刷新只作为 fallback。
+- 后置治理不变：文件与图谱闭环完成后继续执行质量治理、版本冻结和研报资格判断；ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
 - 项目结构重组
@@ -16,8 +25,9 @@
   - 已完成：将知识文件结构和必写要求固化到独立 prompt 注册表，运行时直接按文件规范生成。
   - 已完成：工作流入口切换为直接执行，不再默认经过“查看/确认三路计划”阶段。
   - 已完成：文件骨架生成改为严格串行，一次只处理一个文件，并把待补依据立即写入 `knowledge_task_queue.json`。
-  - 已完成：Query / Media 改为按单 task 串行执行，结果先写队列，再由统一 fill pass 回填 Markdown。
-  - 已完成：前端 Flow Map 与状态面板切到“蓝图准备 → LLM 生成 → 查询队列 → 轮次验证 → 统一回填”视角。
+  - 已完成：Query / Media 改为按单 task 串行执行，结果完成后立即回写 Markdown contract、队列 JSON、Neo4j 图谱与 SSE 任务快照。
+  - 已完成：前端 Flow Map 与状态面板切到“意图识别 → 图谱规划 → 文件生成 → 证据查询 → 即时回写 → 父级聚合 → 治理质检 → 版本研报”视角。
+  - 已完成：`fill_evidence` 从主回填责任降级为最终一致性校验与兼容兜底。
   - 待继续：把轮次验证从当前 fallback + LLM 兼容模式继续收紧为更细的文件级 completeness 策略，并补足更多自动化回归。
 - 文件级知识库架构落地
   - 已完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode=file_level`，把知识树从纯路径工具升级为可执行蓝图。
@@ -32,7 +42,8 @@
   - 已完成：`/tasks/{task_id}/logs` 读取时从任务快照补写缺失 execution_log，确保新日志保存到 audit jsonl。
   - 已完成：workflow 关键节点结束后即时持久化运行中快照，避免任务详情长期停留在旧的 `running / evaluating` 状态。
   - 已完成：`/tasks/{task_id}/logs` 直接附带最新任务快照字段，降低前端只轮询日志接口时的状态滞后。
-- 三路 Agent 计划确认与流程可视化
+  - 已完成：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot` / `graph_event` / `file_update`，前端不再依赖 SSE 后自动请求 `/graph` 才能看到实时图谱。
+- 三路 Agent 计划确认与流程可视化（历史阶段记录，当前主入口不再默认等待计划确认）
   - 已完成：Insight / Query / Media 三路 Engine 均支持先生成 `EnginePlan`，再按确认后的计划执行。
   - 已完成：`/tasks/async` 与 intake confirm 默认进入 `awaiting_plan_confirmation`，新增计划查看与确认接口。
   - 已完成：前端展示三路 Agent 执行计划，用户确认后再启动并行采集。
@@ -103,7 +114,7 @@
 - 先打通主链路，再补深治理能力。
 - 先稳定 Markdown 本地存储与状态模型，再接 Neo4j 和质量闭环。
 - 先做接口和契约，再逐步替换为更完整的实现。
-- 严格保持三路并行采集、状态持久化与恢复、路径稳定、来源追溯。
+- 保留 Insight / Query / Media 三路 Engine 能力、状态持久化与恢复、路径稳定、来源追溯；当前任务主链路以结构图谱和文件级证据队列驱动，三路采集能力作为 Engine 层能力继续服务证据、分析与治理。
 - 当前阶段不把 ChromaDB 纳入主链路。
 
 ## 阶段计划

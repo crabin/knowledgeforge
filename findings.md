@@ -23,6 +23,14 @@
 | 整体架构以 Orchestrator + 三大 Engine 为核心 | 符合项目架构约束，且便于后续按能力域分阶段落地 |
 | 知识文档 Markdown 规范视为关键数据合同 | 它同时支撑本地存储、抽取、Neo4j 映射、质量检测与版本管理 |
 
+## 2026-05-03 真实代码流程对齐结论
+- 当前真实主流程已经从旧的“三路计划确认后并行采集，再统一写文档”演进为“意图识别 → 结构图谱 → Neo4j 任务图 → 串行知识点文件生成 → 文件级证据队列 → 单条证据即时回写 → 父级状态聚合 → 治理质检 → 版本研报”。
+- `/tasks`、`/tasks/async` 与 intake confirm 已统一经过 `IntakeClarifier` 风格的归一化逻辑，`request_context` 会保留 `original_input`、`normalized_domain` 和 `confirmed=true`；概念解释类输入不能绕过 intake 直接创建知识库任务。
+- Neo4j 结构节点现在承担任务状态职责：`planned`、`generating`、`generated`、`evidence_pending`、`evidence_running`、`completed`、`failed` 是主状态流转；`is_generated`、`is_completed`、`generated_path`、证据计数与父节点 ID 是前端和治理层共享字段。
+- 证据回填不再等待所有队列完成。每个 query task 完成后会立即更新目标 Markdown contract、队列 JSON、图谱节点和 SSE payload；最终 `fill_evidence` 只做收尾校验和兼容兜底。
+- 前端实时同步的主通道是 SSE。`/tasks/{task_id}/stream` 直接带 `graph_snapshot`、`graph_event`、`file_update`，`/tasks/{task_id}/graph` 只保留给手动刷新、Neo4j 重连和兜底展示。
+- 历史文档中“前端轮询后再拉图谱”“最后统一回填”“默认等待三路计划确认”的描述均视为旧阶段记录，不再代表当前主流程。
+
 ## 遇到的问题
 | 问题 | 解决方案 |
 |------|---------|
@@ -48,7 +56,7 @@
 - 第一批实施按“前半段主链路做实、后半段关键骨架接上”的方式推进。
 - 完整性评估为独立评估节点；Neo4j 失败采用 `graph_sync_pending` 异步补偿；版本冻结点在质量通过且文件图谱一致之后。
 - 核心模块边界固定为 Web Interface、Orchestrator、Context Builder、三大 Engine、Completeness Evaluator、Knowledge Document Writer、Post-Storage Pipeline、Report Branch。
-- 数据流固定为“输入 → 上下文构建 → 三路并行采集 → 完整性评估 → 文档落盘 → 后置流水线 → 版本化 → 可选研报”，并以本地 Markdown 作为源事实存储。
+- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 串行文件生成 → 证据队列执行 → 即时回写 → 父级完成聚合 → 后置治理 → 版本化 → 可选研报”，并以本地 Markdown 作为源事实存储。
 - 回流规则固定为 repair_flow 与 research_flow 两类，禁止仅返回模糊失败。
 - 质量状态固定为 `passed` / `repair_required` / `research_required`；达到最大轮次、补偿或最小新增阈值时转入 `needs_human_review`。
 
