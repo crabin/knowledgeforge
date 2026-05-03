@@ -416,13 +416,14 @@ h3 {
 
 .neo4j-map-edge path {
   fill: none;
-  stroke: rgba(93, 106, 102, 0.54);
-  stroke-width: 1.5;
+  stroke: rgba(93, 106, 102, 0.34);
+  stroke-width: 1.25;
   marker-end: url("#neo4j-arrow");
 }
 
 .neo4j-map-edge text {
-  fill: rgba(93, 106, 102, 0.88);
+  opacity: 0;
+  fill: var(--blue);
   paint-order: stroke;
   stroke: #fffdf8;
   stroke-width: 4px;
@@ -434,6 +435,15 @@ h3 {
 .neo4j-map-edge.is-new path {
   stroke: var(--blue);
   stroke-width: 2.4;
+}
+
+.neo4j-map-edge.is-connected path {
+  stroke: var(--blue);
+  stroke-width: 2.6;
+}
+
+.neo4j-map-edge.is-connected text {
+  opacity: 1;
 }
 
 .neo4j-map-node {
@@ -459,6 +469,19 @@ h3 {
   box-shadow:
     0 0 0 4px rgba(47, 95, 145, 0.12),
     0 13px 26px rgba(47, 95, 145, 0.14);
+}
+
+.neo4j-map-node.is-dimmed {
+  opacity: 0.68;
+}
+
+.neo4j-map-node.is-connected,
+.neo4j-map-node.is-selected {
+  opacity: 1;
+}
+
+.neo4j-map-node.is-connected {
+  border-color: rgba(47, 95, 145, 0.38);
 }
 
 .neo4j-map-node span,

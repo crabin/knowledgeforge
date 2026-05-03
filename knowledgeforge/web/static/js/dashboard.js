@@ -671,11 +671,12 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const completedCount = counts.completed + counts.approved + counts.documented + counts.link_verified;
   const visibleNodes = selectNeo4jMapNodes(nodes);
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
-  const visibleEdges = edges.filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
+  const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
+  const visibleEdges = buildNeo4jReadableEdges(visibleNodes, edges).filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
+  const connectedNodeIds = selectedNode ? getNeo4jConnectedNodeIds(selectedNode.id, visibleEdges) : new Set();
   const hiddenNodeCount = Math.max(0, nodes.length - visibleNodes.length);
   const hiddenEdgeCount = Math.max(0, edges.length - visibleEdges.length);
   const map = buildNeo4jReadableMap(visibleNodes, visibleEdges);
-  const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
   neo4jGraphContainer.innerHTML = `
     <div class="neo4j-html-graph" data-node-count="${escapeHtml(String(nodes.length))}">
       <div class="neo4j-state-strip" aria-label="图谱状态统计">
@@ -694,14 +695,14 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
                   <path d="M 0 0 L 8 4 L 0 8 z"></path>
                 </marker>
               </defs>
-              ${map.edges.map((edge) => renderNeo4jMapEdge(edge, !previousEdgeIds.has(edge.id))).join("")}
+              ${map.edges.map((edge) => renderNeo4jMapEdge(edge, !previousEdgeIds.has(edge.id), selectedNode && isNeo4jEdgeConnectedToNode(edge, selectedNode.id))).join("")}
             </svg>
-            ${map.nodes.map((item) => renderNeo4jMapNode(item, !previousNodeIds.has(item.node.id), item.node.id === selectedNode?.id)).join("")}
+            ${map.nodes.map((item) => renderNeo4jMapNode(item, !previousNodeIds.has(item.node.id), item.node.id === selectedNode?.id, connectedNodeIds.has(item.node.id))).join("")}
           </div>
           <div class="neo4j-map-foot">
             <span>显示 ${escapeHtml(String(visibleNodes.length))}/${escapeHtml(String(nodes.length))} 个节点</span>
             ${hiddenNodeCount ? `<span>隐藏 ${escapeHtml(String(hiddenNodeCount))} 个低优先级节点</span>` : ""}
-            ${hiddenEdgeCount ? `<span>隐藏 ${escapeHtml(String(hiddenEdgeCount))} 条跨层关系</span>` : ""}
+            ${hiddenEdgeCount ? `<span>已收起 ${escapeHtml(String(hiddenEdgeCount))} 条重复或跨层关系，点选节点看直接相邻关系</span>` : ""}
           </div>
         </section>
         ${renderNeo4jNodeInspector(selectedNode, nodes, edges)}
@@ -841,26 +842,66 @@ function buildNeo4jReadableMap(nodes, edges) {
   return { nodes: layoutNodes, edges: layoutEdges, width: layout.width, height: layout.height };
 }
 
-function renderNeo4jMapEdge(edge, isNew) {
+function buildNeo4jReadableEdges(nodes, edges) {
+  const structureNodes = nodes.filter((node) => isNeo4jStructureNode(node));
+  if (!structureNodes.length) return filterNeo4jDisplayEdges(edges, nodes);
+
+  const domainNode = nodes.find((node) => node.type === "Domain");
+  const byLogicalId = new Map(structureNodes.map((node) => [getNeo4jLogicalId(node), node]));
+  const readableEdges = [];
+  const seen = new Set();
+  structureNodes.forEach((node) => {
+    const parentId = String(node.properties?.parent_node_id || "");
+    const parent = byLogicalId.get(parentId);
+    const source = parent || (domainNode && node.id !== domainNode.id ? domainNode : null);
+    if (!source || source.id === node.id) return;
+    const edgeId = `readable:${source.id}:${node.id}`;
+    if (seen.has(edgeId)) return;
+    seen.add(edgeId);
+    readableEdges.push({
+      id: edgeId,
+      source: source.id,
+      target: node.id,
+      type: "PARENT_CHILD",
+      properties: { readable: true },
+    });
+  });
+  return readableEdges;
+}
+
+function getNeo4jConnectedNodeIds(nodeId, edges) {
+  const connected = new Set([nodeId]);
+  edges.forEach((edge) => {
+    if (edge.source === nodeId) connected.add(edge.target);
+    if (edge.target === nodeId) connected.add(edge.source);
+  });
+  return connected;
+}
+
+function isNeo4jEdgeConnectedToNode(edge, nodeId) {
+  return edge.source === nodeId || edge.target === nodeId;
+}
+
+function renderNeo4jMapEdge(edge, isNew, isConnected) {
   const midY = Math.max(edge.sourceY + 24, Math.floor((edge.sourceY + edge.targetY) / 2));
   const path = `M ${edge.sourceX} ${edge.sourceY} C ${edge.sourceX} ${midY}, ${edge.targetX} ${midY}, ${edge.targetX} ${edge.targetY}`;
   const labelX = Math.floor((edge.sourceX + edge.targetX) / 2);
   const labelY = Math.floor(midY - 5);
   return `
-    <g class="neo4j-map-edge${isNew ? " is-new" : ""}">
+    <g class="neo4j-map-edge${isNew ? " is-new" : ""}${isConnected ? " is-connected" : ""}">
       <path d="${escapeHtml(path)}"></path>
       <text x="${escapeHtml(String(labelX))}" y="${escapeHtml(String(labelY))}">${escapeHtml(formatNeo4jEdgeType(edge.type))}</text>
     </g>`;
 }
 
-function renderNeo4jMapNode(item, isNew, isSelected) {
+function renderNeo4jMapNode(item, isNew, isSelected, isConnected) {
   const node = item.node;
   const stateName = getNeo4jGenerationState(node);
   const statusLabel = formatNeo4jGenerationState(stateName);
   const kind = formatNeo4jNodeKind(node);
   const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
   return `
-    <button class="neo4j-map-node state-${escapeHtml(sanitizeClassName(stateName))}${isNew ? " is-new" : ""}${isSelected ? " is-selected" : ""}"
+    <button class="neo4j-map-node state-${escapeHtml(sanitizeClassName(stateName))}${isNew ? " is-new" : ""}${isSelected ? " is-selected" : ""}${isConnected ? " is-connected" : " is-dimmed"}"
       type="button"
       data-neo4j-node-id="${escapeHtml(node.id)}"
       style="left:${escapeHtml(String(item.x))}px; top:${escapeHtml(String(item.y))}px; width:${escapeHtml(String(item.width))}px; height:${escapeHtml(String(item.height))}px;"
@@ -913,6 +954,7 @@ function renderNeo4jInspectorEdge(edge, selectedNode, nodes) {
 
 function formatNeo4jEdgeType(type) {
   return {
+    PARENT_CHILD: "包含",
     STRUCTURE_EDGE: "结构",
     HAS_STRUCTURE_NODE: "包含",
     HAS_SUBTOPIC: "子领域",
