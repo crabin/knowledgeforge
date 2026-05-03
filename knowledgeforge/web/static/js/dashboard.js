@@ -1498,11 +1498,25 @@ function summarizeTaskTiming(payload) {
   const dynamicSeconds = timing.is_running && startedAt ? secondsSince(startedAt) : null;
   const seconds = dynamicSeconds ?? Number(timing.elapsed_seconds);
   if (Number.isFinite(seconds) && seconds > 0) {
-    const suffix = timing.is_running ? "运行中" : "已完成";
+    const suffix = formatTaskTimingStatus(payload, timing);
     return `${formatDuration(seconds)} · ${suffix}`;
   }
-  if (startedAt) return "0 秒 · 运行中";
+  if (startedAt) return `0 秒 · ${formatTaskTimingStatus(payload, timing)}`;
   return "";
+}
+
+function formatTaskTimingStatus(payload, timing = {}) {
+  if (timing.is_running) return "运行中";
+  const status = payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status || "";
+  return {
+    verified: "已完成",
+    repair_required: "待修复，可恢复",
+    research_required: "待补检索",
+    supplement_required: "待补充",
+    max_rounds_reached: "已停止",
+    failed: "失败",
+    plan_failed: "计划失败",
+  }[status] || "已停止";
 }
 
 function secondsSince(isoTimestamp) {

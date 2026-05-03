@@ -564,3 +564,16 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
 - 结果：`48 passed in 17.92s`
+
+## 2026-05-03 repair_required 耗时状态展示
+
+- 修复前端摘要区执行耗时后缀：不再把所有非运行任务都显示为“已完成”。
+- `repair_required` 现在显示为“待修复，可恢复”，`research_required` 显示“待补检索”，失败和最大轮次状态也分别显示对应状态。
+- 补充 dashboard 静态回归断言，防止耗时展示回退到 `is_running ? 运行中 : 已完成` 的二分逻辑。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.70s`

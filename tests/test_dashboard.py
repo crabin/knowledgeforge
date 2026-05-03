@@ -42,6 +42,9 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "补全文档" in body
     assert "data-task-action=\"complete-documents\"" in body
     assert "产出模式" not in body
+    dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
+    assert "repair_required: \"待修复，可恢复\"" in dashboard_js
+    assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body
