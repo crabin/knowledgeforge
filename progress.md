@@ -593,3 +593,21 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py`
 - 结果：通过。
+
+## 2026-05-03 防止恢复任务卡回架构 Review
+
+- 修复 `/tasks/{task_id}/resume` 对运行中任务缺少保护的问题：运行中的任务再次点击恢复会直接返回当前状态并记录 `task_resume_skipped`，不再启动第二条 workflow。
+- `repair_required` 的结构修补检查点现在同时接受 `current_step=structure_review` 和 `current_step=structure_repair`，避免旧任务停在修补步骤时恢复分支未命中，重新进入结构 review / repair。
+- Flask app 将当前 `TaskService` 暴露到 `app.config["TASK_SERVICE"]`，方便测试验证服务内存状态与持久化状态。
+- 补充回归测试覆盖：从 `structure_repair` 检查点恢复会继续进入文档生成；运行中任务重复恢复不会启动新 workflow。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py::test_resume_repair_required_continues_from_repaired_structure tests/test_workflow.py::test_resume_repair_required_from_structure_repair_step_continues tests/test_workflow.py::test_resume_running_task_does_not_start_second_workflow tests/test_workflow.py::test_structure_review_rounds_are_replaced_not_appended tests/test_dashboard.py`
+- 结果：`11 passed in 4.07s`
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`51 passed in 18.58s`
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。

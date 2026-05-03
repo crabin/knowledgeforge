@@ -323,6 +323,76 @@ def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path
     assert (tmp_path / "save" / "知识工程").exists()
 
 
+def test_resume_repair_required_from_structure_repair_step_continues(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "知识架构审查器" in system_prompt:
+            return {
+                "is_complete": False,
+                "status": "needs_repair",
+                "missing_topics": ["恢复执行入口"],
+                "suggested_repairs": [{"type": "add_nodes", "title": "恢复执行入口"}],
+                "reasoning": "第二轮后仍需系统修补。",
+            }
+        if "知识架构修补器" in system_prompt:
+            return {}
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
+    task_id = created["task_id"]
+    created["current_step"] = "structure_repair"
+    app.config["TASK_SERVICE"]._state_store.save(task_id, created)
+    app.config["TASK_SERVICE"]._tasks.pop(task_id, None)
+
+    resumed = client.post(f"/tasks/{task_id}/resume")
+
+    assert resumed.status_code == 200
+    payload = resumed.get_json()
+    assert payload["current_step"] != "structure_review"
+    assert payload["current_step"] != "structure_repair"
+    assert payload["generation_progress"]["completed_files"] == payload["generation_progress"]["total_files"]
+
+
+def test_resume_running_task_does_not_start_second_workflow(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    service = app.config["TASK_SERVICE"]
+    initial_state = service._create_initial_state(
+        service._context_builder.build({"domain": "知识工程", "subdomains": ["工作流编排"], "confirmed": True}),
+        audit_source="api_async",
+    )
+    task_id = initial_state["task_id"]
+    initial_state["current_step"] = "structure_repair"
+    initial_state["current_action"] = "正在修补结构图谱。"
+    service._tasks[task_id] = initial_state
+    service._state_store.save(task_id, service._serialize_state(initial_state))
+
+    response = app.test_client().post(f"/tasks/{task_id}/resume")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["task_status"] == "running"
+    assert payload["current_step"] == "structure_repair"
+    assert "task_resume_skipped" in [json.loads(line)["event"] for line in (service._config.audit_root / f"{task_id}.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
 def test_structure_review_rounds_are_replaced_not_appended() -> None:
     rounds = KnowledgeGraphWorkflow._merge_structure_review_round(
         [

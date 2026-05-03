@@ -908,6 +908,13 @@ class TaskService:
         stored = self.get_task(task_id)
         if stored is None:
             return None
+        if self._is_running_status(stored.get("task_status", "")):
+            self._audit_logger.log(
+                task_id,
+                "task_resume_skipped",
+                {"reason": "task_already_running", "status": stored.get("task_status", ""), "current_step": stored.get("current_step", "")},
+            )
+            return stored
 
         if self._can_continue_after_structure_repair(stored):
             return self._continue_after_structure_repair(task_id, stored)
@@ -961,7 +968,7 @@ class TaskService:
     def _can_continue_after_structure_repair(stored: dict[str, Any]) -> bool:
         if stored.get("task_status") != "repair_required":
             return False
-        if stored.get("current_step") != "structure_review":
+        if stored.get("current_step") not in {"structure_review", "structure_repair"}:
             return False
         request_context = stored.get("request_context") or {}
         if not request_context.get("knowledge_blueprint"):

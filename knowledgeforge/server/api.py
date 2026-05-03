@@ -24,6 +24,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
     )
     _configure_application_logger(app, active_config)
     service = TaskService(active_config)
+    app.config["TASK_SERVICE"] = service
 
     @app.before_request
     def _start_request_timer() -> None:
