@@ -549,6 +549,7 @@ async function refreshNeo4jGraph(taskId = getTaskIdFromPayload(state.lastPayload
   if (!taskId) {
     setNeo4jGraphStatus("idle", "等待任务");
     renderNeo4jGraphMetrics({ domain: "暂无", graph: { nodes: [], edges: [] } });
+    renderNeo4jGraphFallback("选择或启动任务后显示当前领域的 Neo4j 图谱");
     return;
   }
   if (!options.silent) setNeo4jGraphStatus("loading", "读取 Neo4j");
@@ -571,21 +572,150 @@ function renderNeo4jGraphSnapshot(payload, previousPayload) {
   } else {
     setNeo4jGraphStatus("unavailable", payload.error || "Neo4j 不可用");
   }
-  const x6Graph = ensureNeo4jGraph();
-  if (!x6Graph) {
-    renderNeo4jGraphFallback(payload.error || "X6 图谱组件未加载。");
-    return;
-  }
+  renderNeo4jGraphHtml(graph, payload, previousPayload);
+}
+
+function renderNeo4jGraphHtml(graph, payload, previousPayload) {
+  if (!neo4jGraphContainer) return;
   const previousGraph = normalizeGraphPayload(previousPayload?.graph || previousPayload?.graph_snapshot);
   const previousNodeIds = new Set(previousGraph.nodes.map((node) => node.id));
   const previousEdgeIds = new Set(previousGraph.edges.map((edge) => edge.id));
-  const data = buildNeo4jGraphData(graph, previousNodeIds, previousEdgeIds);
-  const width = neo4jGraphContainer.clientWidth || 960;
-  const viewportHeight = Math.max(520, Math.min(760, Math.round(window.innerHeight * 0.72)));
-  neo4jGraphContainer.style.height = `${viewportHeight}px`;
-  x6Graph.resize(width, Math.max(viewportHeight, Math.min(data.meta.height, 1800)));
-  x6Graph.fromJSON(data);
-  if (data.nodes.length) fitGraphToContainer(x6Graph, neo4jGraphContainer, 28, 0.96);
+  const nodes = graph.nodes;
+  const edges = filterNeo4jDisplayEdges(graph.edges, nodes);
+  neo4jGraphContainer.style.height = "";
+  if (!nodes.length) {
+    renderNeo4jGraphFallback(payload.error || "选择或启动任务后显示当前领域的 Neo4j 图谱");
+    return;
+  }
+  const counts = summarizeNeo4jNodeStates(nodes);
+  const visibleNodes = selectNeo4jHtmlNodes(nodes);
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleEdges = edges.filter((edge) => visibleNodeIds.has(edge.source) || visibleNodeIds.has(edge.target)).slice(0, 12);
+  const hiddenNodeCount = Math.max(0, nodes.length - visibleNodes.length);
+  const hiddenEdgeCount = Math.max(0, edges.length - visibleEdges.length);
+  neo4jGraphContainer.innerHTML = `
+    <div class="neo4j-html-graph" data-node-count="${escapeHtml(String(nodes.length))}">
+      <div class="neo4j-state-strip" aria-label="图谱状态统计">
+        ${renderNeo4jStateBadge("规划", counts.planned)}
+        ${renderNeo4jStateBadge("生成中", counts.generating + counts.generated)}
+        ${renderNeo4jStateBadge("证据中", counts.evidence_pending + counts.evidence_running)}
+        ${renderNeo4jStateBadge("完成", counts.completed)}
+        ${renderNeo4jStateBadge("失败", counts.failed)}
+      </div>
+      <div class="neo4j-html-layout">
+        <section class="neo4j-node-grid" aria-label="Neo4j 节点">
+          ${visibleNodes.map((node) => renderNeo4jHtmlNode(node, !previousNodeIds.has(node.id))).join("")}
+          ${hiddenNodeCount ? `<article class="neo4j-node-card muted"><span>更多节点</span><strong>+${escapeHtml(String(hiddenNodeCount))}</strong><small>通过刷新或任务推进继续更新</small></article>` : ""}
+        </section>
+        <section class="neo4j-edge-list" aria-label="Neo4j 关系">
+          <h3>关系摘要</h3>
+          ${visibleEdges.length ? visibleEdges.map((edge) => renderNeo4jHtmlEdge(edge, nodes, !previousEdgeIds.has(edge.id))).join("") : '<div class="neo4j-edge-empty">暂无关系</div>'}
+          ${hiddenEdgeCount ? `<div class="neo4j-edge-more">还有 ${escapeHtml(String(hiddenEdgeCount))} 条关系未展开</div>` : ""}
+        </section>
+      </div>
+    </div>`;
+}
+
+function summarizeNeo4jNodeStates(nodes) {
+  const counts = {
+    planned: 0,
+    generating: 0,
+    generated: 0,
+    evidence_pending: 0,
+    evidence_running: 0,
+    completed: 0,
+    failed: 0,
+  };
+  nodes.forEach((node) => {
+    const stateName = getNeo4jGenerationState(node);
+    counts[stateName] = (counts[stateName] || 0) + 1;
+  });
+  return counts;
+}
+
+function renderNeo4jStateBadge(label, count) {
+  return `<span class="neo4j-state-badge"><strong>${escapeHtml(String(count))}</strong>${escapeHtml(label)}</span>`;
+}
+
+function selectNeo4jHtmlNodes(nodes) {
+  return [...nodes]
+    .sort((a, b) => {
+      const priorityA = getNeo4jHtmlNodePriority(a);
+      const priorityB = getNeo4jHtmlNodePriority(b);
+      return priorityA - priorityB || compareNeo4jNodesForLayout(a, b);
+    })
+    .slice(0, 14);
+}
+
+function getNeo4jHtmlNodePriority(node) {
+  const stateName = getNeo4jGenerationState(node);
+  const stateOrder = {
+    evidence_running: 0,
+    generating: 1,
+    evidence_pending: 2,
+    generated: 3,
+    failed: 4,
+    completed: 5,
+    planned: 6,
+  }[stateName] ?? 7;
+  const typeOrder = {
+    Domain: 0,
+    SubTopic: 1,
+    KnowledgeStructureNode: 2,
+    Article: 3,
+    Entity: 4,
+  }[node.type] ?? 8;
+  return stateOrder * 10 + typeOrder;
+}
+
+function renderNeo4jHtmlNode(node, isNew) {
+  const stateName = getNeo4jGenerationState(node);
+  const statusLabel = formatNeo4jGenerationState(stateName);
+  const kind = formatNeo4jNodeKind(node);
+  const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  return `
+    <article class="neo4j-node-card state-${escapeHtml(sanitizeClassName(stateName))}${isNew ? " is-new" : ""}" title="${escapeHtml(path)}">
+      <span>${escapeHtml(statusLabel)} · ${escapeHtml(kind)}</span>
+      <strong>${escapeHtml(node.title || node.id)}</strong>
+      <small>${escapeHtml(path)}</small>
+    </article>`;
+}
+
+function renderNeo4jHtmlEdge(edge, nodes, isNew) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const source = byId.get(edge.source);
+  const target = byId.get(edge.target);
+  return `
+    <div class="neo4j-edge-row${isNew ? " is-new" : ""}">
+      <span>${escapeHtml(edge.type || "RELATED")}</span>
+      <strong>${escapeHtml(source?.title || edge.source)}</strong>
+      <em aria-hidden="true">&rarr;</em>
+      <strong>${escapeHtml(target?.title || edge.target)}</strong>
+    </div>`;
+}
+
+function getNeo4jGenerationState(node) {
+  if (node.properties?.generation_state) return String(node.properties.generation_state);
+  if (node.generation_state) return String(node.generation_state);
+  if (node.properties?.is_completed === true) return "completed";
+  if (node.properties?.is_generated === true) return "generated";
+  return "planned";
+}
+
+function formatNeo4jGenerationState(stateName) {
+  return {
+    planned: "TODO",
+    generating: "生成中",
+    generated: "已生成",
+    evidence_pending: "待证据",
+    evidence_running: "证据中",
+    completed: "DONE",
+    failed: "失败",
+  }[stateName] || stateName;
+}
+
+function sanitizeClassName(value) {
+  return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
 
 function ensureNeo4jGraph() {
@@ -899,10 +1029,6 @@ function renderNeo4jGraphMetrics(payload) {
 
 function renderNeo4jGraphFallback(message) {
   if (!neo4jGraphContainer) return;
-  if (state.neo4jGraph) {
-    state.neo4jGraph.fromJSON({ nodes: [], edges: [] });
-    return;
-  }
   neo4jGraphContainer.innerHTML = `<div class="neo4j-graph-empty">${escapeHtml(message)}</div>`;
 }
 
@@ -1526,6 +1652,7 @@ document.querySelector("#delete-task").addEventListener("click", async (event) =
 
 refreshStatus();
 initializeWorkflowMap();
+renderNeo4jGraphSnapshot({ status: "local", domain: "暂无", graph: { nodes: [], edges: [] } }, null);
 
 window.setInterval(() => {
   if (state.lastPayload?.task_timing?.is_running || state.lastPayload?.task?.task_timing?.is_running) {

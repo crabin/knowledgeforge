@@ -329,24 +329,182 @@ h3 {
 
 .neo4j-graph {
   width: 100%;
-  min-height: 420px;
+  max-height: 360px;
   overflow: auto;
   border: 1px solid rgba(23, 33, 31, 0.14);
   border-radius: 8px;
   background: #fffdf8;
-  touch-action: none;
-  user-select: none;
 }
 
-.neo4j-graph:empty::before,
 .neo4j-graph-empty {
-  content: "选择或启动任务后显示当前领域的 Neo4j 图谱";
   display: grid;
   place-items: center;
-  min-height: 420px;
+  min-height: 168px;
+  padding: 24px;
   color: var(--muted);
   font-weight: 800;
   text-align: center;
+}
+
+.neo4j-html-graph {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  background:
+    linear-gradient(90deg, rgba(30, 123, 100, 0.025) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(30, 123, 100, 0.025) 1px, transparent 1px),
+    #fffdf8;
+  background-size: 18px 18px;
+}
+
+.neo4j-state-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 8px;
+}
+
+.neo4j-state-badge {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid rgba(23, 33, 31, 0.1);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 253, 248, 0.88);
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+.neo4j-state-badge strong {
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.neo4j-html-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.42fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.neo4j-node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 8px;
+}
+
+.neo4j-node-card {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  min-height: 88px;
+  padding: 10px 11px;
+  border: 1px solid rgba(23, 33, 31, 0.12);
+  border-left: 4px solid #8f9a95;
+  border-radius: 6px;
+  background: rgba(255, 253, 248, 0.92);
+  box-shadow: 0 8px 18px rgba(23, 33, 31, 0.04);
+}
+
+.neo4j-node-card span,
+.neo4j-node-card small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.neo4j-node-card strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.neo4j-node-card.is-new {
+  box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.12), 0 10px 20px rgba(47, 95, 145, 0.11);
+}
+
+.neo4j-node-card.state-completed {
+  border-left-color: var(--green);
+  background: #f1f8f2;
+}
+
+.neo4j-node-card.state-generating,
+.neo4j-node-card.state-generated,
+.neo4j-node-card.state-evidence_pending,
+.neo4j-node-card.state-evidence_running {
+  border-left-color: var(--blue);
+  background: #f2f6fb;
+}
+
+.neo4j-node-card.state-failed {
+  border-left-color: var(--red);
+  background: #fff3ef;
+}
+
+.neo4j-node-card.muted {
+  border-left-color: rgba(23, 33, 31, 0.22);
+  background: rgba(255, 253, 248, 0.7);
+}
+
+.neo4j-edge-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px dashed rgba(23, 33, 31, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 253, 248, 0.82);
+}
+
+.neo4j-edge-list h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.neo4j-edge-row {
+  display: grid;
+  grid-template-columns: minmax(58px, 0.65fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  background: #fbf8ee;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.neo4j-edge-row span,
+.neo4j-edge-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.neo4j-edge-row strong {
+  color: var(--ink);
+}
+
+.neo4j-edge-row.is-new {
+  background: #edf3fa;
+}
+
+.neo4j-edge-empty,
+.neo4j-edge-more {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .flow-grid {
@@ -1225,6 +1383,10 @@ button:disabled {
     grid-template-columns: 1fr 1fr;
   }
 
+  .neo4j-html-layout {
+    grid-template-columns: 1fr;
+  }
+
   .plan-full-list {
     grid-template-columns: 1fr;
   }
@@ -1259,15 +1421,16 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .workflow-x6 {
-    min-height: 320px;
-  }
-
   .neo4j-graph-toolbar {
     grid-template-columns: 1fr;
   }
 
   .neo4j-graph {
-    min-height: 360px;
+    max-height: 320px;
+  }
+
+  .neo4j-state-strip,
+  .neo4j-node-grid {
+    grid-template-columns: 1fr;
   }
 }

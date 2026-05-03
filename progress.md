@@ -403,3 +403,20 @@
 - 使用 in-app browser 刷新 `http://localhost:5001/` 验证：`#workflow-map` 存在、`#workflow-x6` 不存在、8 个流程步骤完整渲染，当前步骤显示 `执行中`。
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`154 passed in 32.80s`
+
+## 2026-05-03 Neo4j 图谱 HTML 紧凑展示
+
+- 将前端 Neo4j 实时知识图谱主体从 X6 大画布改为 HTML 快照展示，保留连接状态、领域指标、自动跟随和手动刷新控制。
+- HTML 图谱包含状态统计条、重点节点卡片和关系摘要；节点按运行中、待证据、失败、完成、规划等优先级排序，新增节点和新增关系保留轻量高亮。
+- 空状态从大画布压缩为 168px 高提示；有数据时容器最大高度限制为 360px，内部滚动展示，避免占用大量页面空间。
+- 初始化页面时会立即渲染紧凑空状态，不再留下空白图谱容器。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py tests/test_workflow.py`
+- 结果：`40 passed in 9.02s`
+- 使用 in-app browser 刷新 `http://localhost:5001/` 验证：`#neo4j-graph` 下无 `svg.x6-graph-svg`，紧凑空状态正常显示。
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 37.89s`
