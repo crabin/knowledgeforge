@@ -1,5 +1,10 @@
 # Progress
 
+## 2026-05-03 流程详情浮窗可读性增强
+
+- 根据浏览器反馈降低详情浮窗的透底感：改为更实的不透明背景、更清晰边框、更重阴影和更高对比文字颜色。
+- 验证：`uv run ruff check tests/test_dashboard.py`、`PYTHONPATH=. pytest -q tests/test_dashboard.py` 均通过，相关测试结果 `7 passed`。
+
 ## 2026-05-03 流程步骤详情浮窗层级修复
 
 - 修复流程步骤详情 popover 被后续步骤卡片遮挡的问题：为普通卡片设置基础层级，hover / focus / focus-within 时抬高当前卡片层级，并提高详情浮窗 z-index。
