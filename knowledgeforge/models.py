@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 Role = Literal["user", "assistant", "system"]
 TaskIntent = Literal["knowledge_collection", "concept_explanation", "qa"]
+CompletionMode = Literal["framework", "full_document"]
 CompletenessStatus = Literal["pass", "supplement_required"]
 GovernanceStatus = Literal["passed", "failed"]
 RemediationFlow = Literal["repair_flow", "research_flow"]
@@ -68,12 +69,22 @@ class RequestContext:
     structure_graph: dict[str, Any] = field(default_factory=dict)
     knowledge_blueprint: list[dict[str, Any]] = field(default_factory=list)
     required_files: list[str] = field(default_factory=list)
-    completion_mode: str = "file_level"
+    completion_mode: CompletionMode = "framework"
     generation_queue_path: str = ""
     prompt_profile_version: str = ""
 
+    def __post_init__(self) -> None:
+        self.completion_mode = normalize_completion_mode(self.completion_mode)
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def normalize_completion_mode(value: object) -> CompletionMode:
+    mode = str(value or "").strip().lower().replace("-", "_")
+    if mode in {"full_document", "full", "complete", "complete_document", "file_level"}:
+        return "full_document"
+    return "framework"
 
 
 @dataclass(slots=True)

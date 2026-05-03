@@ -67,6 +67,8 @@ class TaskStateStore:
             "started_at": payload.get("started_at", ""),
             "finished_at": payload.get("finished_at", ""),
             "document_path": document_artifact.get("path", ""),
+            "completion_mode": request_context.get("completion_mode", "framework"),
+            "full_document_status": payload.get("full_document_status", ""),
             "version": version_record.get("version", ""),
             "report_eligible": version_record.get("report_eligible", False),
             "updated_at": updated_at,

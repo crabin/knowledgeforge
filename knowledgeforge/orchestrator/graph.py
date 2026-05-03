@@ -234,12 +234,13 @@ class KnowledgeGraphWorkflow:
         file_states = self._writer.materialize_knowledge_base(context=context, round_number=state.get("round_number", 1))
         total_files = len(context.knowledge_blueprint)
         generated_count = 0
+        file_label = "框架证据文件" if context.completion_mode == "framework" else "文件骨架"
         for blueprint in context.knowledge_blueprint:
             relative_path = str(blueprint.get("relative_path", "")).strip()
             if not relative_path:
                 continue
             file_path = domain_dir / relative_path
-            spec = build_prompt_spec(blueprint)
+            spec = build_prompt_spec(blueprint, completion_mode=context.completion_mode)
             self._emit_workflow_event(
                 state,
                 "llm_generating",
@@ -264,7 +265,7 @@ class KnowledgeGraphWorkflow:
             self._emit_workflow_event(
                 state,
                 "llm_generating",
-                f"生成文件骨架：{relative_path}",
+                f"生成{file_label}：{relative_path}",
                 "active",
                 {"file_path": file_path.as_posix()},
             )
@@ -280,7 +281,7 @@ class KnowledgeGraphWorkflow:
                 domain_dir,
                 queue,
                 current_step="llm_generating",
-                current_action=f"正在生成文件骨架：{relative_path}",
+                current_action=f"正在生成{file_label}：{relative_path}",
             )
             generated = self._generate_single_file(context, blueprint, spec, file_path)
             file_path.write_text(generated["markdown"], encoding="utf-8")
@@ -308,13 +309,13 @@ class KnowledgeGraphWorkflow:
                 domain_dir,
                 queue,
                 current_step="llm_generating",
-                current_action=f"文件骨架已保存：{relative_path}",
+                current_action=f"{file_label}已保存：{relative_path}",
                 extra_updates={"latest_structure_node_sync": graph_generation_sync} if graph_generation_sync else None,
             )
             self._emit_workflow_event(
                 state,
                 "llm_generating",
-                f"文件骨架已保存：{relative_path}",
+                f"{file_label}已保存：{relative_path}",
                 "completed",
                 {
                     "event": "file_generation_completed",
@@ -335,10 +336,10 @@ class KnowledgeGraphWorkflow:
             "task_queue_snapshot": queue,
             "task_status": "running",
             "current_step": "llm_generating",
-            "current_action": "文件骨架串行生成完成，准备进入查询队列。",
+            "current_action": f"{file_label}串行生成完成，准备进入查询队列。",
             "messages": [
                 *state.get("messages", []),
-                AgentMessage(role="assistant", content="文件骨架已串行生成，开始处理依据查询队列。"),
+                AgentMessage(role="assistant", content=f"{file_label}已串行生成，开始处理依据查询队列。"),
             ],
         }
         self._commit_state(state, updates)
@@ -654,11 +655,18 @@ class KnowledgeGraphWorkflow:
     def _fill_evidence(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
         queue = state.get("task_queue_snapshot", {})
-        self._emit_workflow_event(state, "evidence_filling", "开始统一回填证据到知识文件", "active")
+        full_document_mode = context.completion_mode == "full_document"
+        self._emit_workflow_event(
+            state,
+            "evidence_filling",
+            "开始生成完整知识文档" if full_document_mode else "开始收尾知识框架证据文件",
+            "active",
+            {"completion_mode": context.completion_mode},
+        )
         outputs = dict(state.get("agent_outputs", {}))
         outputs["QueueFillPass"] = EngineRunResult(
             agent_name="QueueFillPass",
-            summary="统一回填队列中的来源与结论。",
+            summary="统一回填队列中的来源与结论。" if full_document_mode else "知识框架证据队列已完成收尾。",
             key_points=[],
             raw_material=[],
             coverage_topics=context.subdomains,
@@ -668,26 +676,41 @@ class KnowledgeGraphWorkflow:
             artifacts=self._build_fill_artifacts(queue.get("tasks", [])),
         )
         self._writer.apply_output_artifacts(context, outputs)
-        artifact = self._writer.write(
-            context=context,
-            outputs=outputs,
-            completeness=state.get("completeness")
-            or CompletenessResult(status="pass", reasons=["文件级回填完成。"], missing_topics=[], supplement_queries=[]),
-            round_number=state.get("round_number", 1),
-        )
+        if full_document_mode:
+            artifact = self._writer.write(
+                context=context,
+                outputs=outputs,
+                completeness=state.get("completeness")
+                or CompletenessResult(status="pass", reasons=["文件级回填完成。"], missing_topics=[], supplement_queries=[]),
+                round_number=state.get("round_number", 1),
+            )
+            full_document_status = "generated"
+            current_action = "所有已验证依据已统一回填，并生成完整知识库文档。"
+        else:
+            artifact = self._writer.build_domain_artifact(context)
+            full_document_status = "skipped"
+            current_action = "知识框架图谱与证据文件已完成，完整知识文档按需后置生成。"
         updates = {
             "agent_outputs": outputs,
             "document_artifact": artifact,
+            "completion_mode": context.completion_mode,
+            "full_document_status": full_document_status,
             "fill_progress": {
                 "completed_tasks": len([task for task in queue.get("tasks", []) if str(task.get("status", "")) == "completed"]),
                 "total_tasks": len(queue.get("tasks", [])),
             },
             "task_status": "running",
             "current_step": "evidence_filling",
-            "current_action": "所有已验证依据已统一回填到知识文件。",
+            "current_action": current_action,
         }
         self._commit_state(state, updates)
-        self._emit_workflow_event(state, "evidence_filling", "证据回填完成", "completed")
+        self._emit_workflow_event(
+            state,
+            "evidence_filling",
+            "完整知识文档已生成" if full_document_mode else "知识框架证据文件已收尾",
+            "completed",
+            {"completion_mode": context.completion_mode, "full_document_status": full_document_status},
+        )
         return updates
 
     def _run_post_storage(self, state: WorkflowState) -> dict[str, Any]:
@@ -724,7 +747,7 @@ class KnowledgeGraphWorkflow:
         if chat_client is not None:
             try:
                 payload = chat_client.complete_json(
-                    system_prompt=build_generation_system_prompt(),
+                    system_prompt=build_generation_system_prompt(context.completion_mode),
                     user_prompt=json.dumps(
                         {
                             "domain": context.domain,
@@ -737,6 +760,7 @@ class KnowledgeGraphWorkflow:
                             "must_cover": spec.must_cover,
                             "query_hint_rules": spec.query_hint_rules,
                             "allowed_agent_tasks": spec.allowed_agent_tasks,
+                            "completion_mode": context.completion_mode,
                             "structure_graph_context": self._structure_graph_context(context, blueprint),
                         },
                         ensure_ascii=False,
@@ -819,8 +843,8 @@ class KnowledgeGraphWorkflow:
             "title": str(blueprint.get("title", file_path.stem)),
             "domain": context.domain,
             "subdomain": str(blueprint.get("subdomain", "")),
-            "doc_type": str(blueprint.get("doc_type", "article")),
-            "source_type": "mixed",
+            "doc_type": "note" if context.completion_mode == "framework" else str(blueprint.get("doc_type", "article")),
+            "source_type": "query" if context.completion_mode == "framework" else "mixed",
             "agent": "KnowledgeForge",
             "round": 1,
             "status": "draft",
@@ -850,6 +874,32 @@ class KnowledgeGraphWorkflow:
             body.extend([f"## {section}", ""])
             if section == "摘要":
                 body.append("该文件按固定模板生成，后续将结合队列中的依据任务补全。")
+            elif section == "知识定位":
+                body.extend(
+                    [
+                        f"- 节点：{blueprint.get('title', file_path.stem)}",
+                        f"- 领域：{context.domain}",
+                        f"- 子领域：{blueprint.get('subdomain', '') or '领域总览'}",
+                        "- 作用：记录该知识点在整体框架中的位置、证据入口和后续补全依据。",
+                    ]
+                )
+            elif section == "学习角色与路径":
+                body.extend(
+                    [
+                        f"- 学习角色：{self._framework_learning_role(blueprint)}",
+                        f"- 建议顺序：{self._framework_learning_order(context, blueprint)}",
+                        "- 后续完整文档应基于本文件证据和结构图谱补全。",
+                    ]
+                )
+            elif section == "知识关系":
+                graph_context = self._structure_graph_context(context, blueprint)
+                parent = graph_context.get("parent_node", {}) or {}
+                siblings = graph_context.get("siblings", []) or []
+                body.append(f"- 上级节点：{parent.get('title') or '无'}")
+                if siblings:
+                    body.extend([f"- 相关节点：{item.get('title')}（{item.get('relative_path')}）" for item in siblings[:5]])
+                else:
+                    body.append("- 相关节点：暂无。")
             elif section == "关键结论":
                 body.extend([f"- {_render_contract_item(item)}" for item in contract["claims"]])
             elif section == "背景与上下文":
@@ -857,12 +907,43 @@ class KnowledgeGraphWorkflow:
             elif section == "证据与来源":
                 body.extend(["| 编号 | 来源 | 关键信息 | 可信度 | 备注 |", "|---|---|---|---|---|", "| S0 | scaffold | 初始骨架 | unknown | 待补真实来源 |"])
             elif section == "后续动作":
-                body.extend(["- 根据 JSON 合同中的 query_tasks 串行补充依据。"])
+                body.extend(["- 根据 JSON 合同中的 query_tasks 串行补充官方或权威依据。"])
+                if context.completion_mode == "full_document":
+                    body.append("- 证据完成后生成完整知识库文档。")
             else:
                 body.append("待补充。")
             body.append("")
         body.extend([render_contract_block(contract), "", "## 变更记录", "", "| 版本 | 时间 | 变更说明 |", "|---|---|---|", f"| v1 | {now_iso()[:10]} | 初始生成 |", ""])
         return "\n".join(body)
+
+    @staticmethod
+    def _framework_learning_role(blueprint: dict[str, Any]) -> str:
+        requirements = blueprint.get("completion_requirements", {})
+        node_type = str(requirements.get("structure_node_type", "")) if isinstance(requirements, dict) else ""
+        return {
+            "domain": "领域总览与学习地图",
+            "section": "阶段模块",
+            "subtopic": "主题单元",
+            "index": "导航索引",
+            "article": "具体知识点",
+        }.get(node_type, "知识节点")
+
+    @staticmethod
+    def _framework_learning_order(context: RequestContext, blueprint: dict[str, Any]) -> str:
+        graph = context.structure_graph or {}
+        node_id = ""
+        requirements = blueprint.get("completion_requirements", {})
+        if isinstance(requirements, dict):
+            node_id = str(requirements.get("structure_node_id", ""))
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        for index, node in enumerate(nodes, start=1):
+            if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+                order = metadata.get("learning_order")
+                if order:
+                    return str(order)
+                return f"图谱顺序第 {index} 个节点"
+        return "按结构图谱父子关系学习"
 
     def _default_query_tasks(self, blueprint: dict[str, Any], file_path: Path, spec) -> list[dict[str, Any]]:
         requirements = blueprint.get("completion_requirements", {})

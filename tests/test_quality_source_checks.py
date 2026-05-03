@@ -56,6 +56,7 @@ _VALID_CONTEXT = RequestContext(
     focus_points=["applications"],
     constraints=[],
     initial_strategy=[],
+    completion_mode="full_document",
 )
 
 

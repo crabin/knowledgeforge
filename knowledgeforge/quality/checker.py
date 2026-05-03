@@ -48,6 +48,15 @@ class QualityChecker:
             "evidence_support_check": bool(all_sources),
         }
         checks.update(source_checks)
+        if context.completion_mode == "framework":
+            checks.update(
+                {
+                    "framework_graph_check": bool(context.structure_graph.get("nodes")) if isinstance(context.structure_graph, dict) else False,
+                    "framework_blueprint_check": bool(context.knowledge_blueprint),
+                    "framework_generated_files_check": bool(artifact.generated_files),
+                    "framework_official_evidence_check": bool(authoritative_sources),
+                }
+            )
         issues: list[QualityIssue] = []
         if not checks["has_front_matter"]:
             issues.append(
@@ -105,6 +114,23 @@ class QualityChecker:
                     flow="research_flow",
                 )
             )
+        if context.completion_mode == "framework":
+            if not checks["framework_graph_check"] or not checks["framework_blueprint_check"]:
+                issues.append(
+                    QualityIssue(
+                        category="quality_check_failed",
+                        detail="知识框架图谱或蓝图缺失，需修复结构化规划结果。",
+                        flow="repair_flow",
+                    )
+                )
+            if not checks["framework_generated_files_check"]:
+                issues.append(
+                    QualityIssue(
+                        category="file_write_failed",
+                        detail="知识框架证据文件缺失，需重新生成本地文件。",
+                        flow="repair_flow",
+                    )
+                )
 
         status = "failed" if issues else "passed"
         return QualityCheckResult(

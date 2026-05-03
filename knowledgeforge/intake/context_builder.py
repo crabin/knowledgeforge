@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knowledgeforge.models import RequestContext
+from knowledgeforge.models import RequestContext, normalize_completion_mode
 from knowledgeforge.utils.query_normalization import FALLBACK_ABBREVIATIONS, FALLBACK_DISPLAY_NAMES
 from knowledgeforge.utils.knowledge_tree import normalize_core_topics
 
@@ -27,6 +27,7 @@ class ContextBuilder:
         search_terms = self._normalize_list(payload.get("search_terms")) or [normalized_domain, domain]
         clarification_summary = str(payload.get("clarification_summary", "")).strip()
         confirmed = bool(payload.get("confirmed", False))
+        completion_mode = normalize_completion_mode(payload.get("completion_mode"))
         core_topics = normalize_core_topics(subdomains, domain)
 
         initial_strategy = [
@@ -55,6 +56,7 @@ class ContextBuilder:
             navigation_targets=[],
             knowledge_blueprint=[],
             required_files=[],
+            completion_mode=completion_mode,
         )
 
     @staticmethod

@@ -420,3 +420,25 @@
 - 使用 in-app browser 刷新 `http://localhost:5001/` 验证：`#neo4j-graph` 下无 `svg.x6-graph-svg`，紧凑空状态正常显示。
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`154 passed in 37.89s`
+
+## 2026-05-03 知识框架优先流程改造
+
+- 将 `RequestContext.completion_mode` 默认值从旧的 `file_level` 调整为 `framework`，并将旧输入 `file_level` 规范化为 `full_document`。
+- 默认主链路现在先生成知识框架图谱与框架证据 Markdown：文件包含知识定位、学习角色与路径、知识关系、证据与来源、后续动作和 contract，不再默认生成完整正文。
+- `full_document` 模式保留完整知识库文档能力，但执行顺序改为“框架图谱与证据完成后，最后补全 mixed 完整文档”。
+- 治理链路根据模式切换质量检查：`framework` 检查图谱、蓝图、框架证据文件、官方/权威证据和路径关联；`full_document` 继续检查完整文档。
+- API / intake / 前端支持传入 `completion_mode`，前端摘要区展示产出模式与完整文档状态。
+- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md`，明确“知识框架图谱 + 证据”为必须产物，完整文档为后置可选产物。
+
+## Verification
+
+- 运行 `PYTHONPATH=. pytest -q tests/test_knowledge_blueprint.py tests/test_workflow.py`
+- 结果：`41 passed in 7.52s`
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/models.py knowledgeforge/intake/context_builder.py knowledgeforge/prompts/knowledge_file_generation.py knowledgeforge/orchestrator/graph.py knowledgeforge/storage/markdown_writer.py knowledgeforge/quality/checker.py knowledgeforge/evaluation/completeness.py knowledgeforge/services/task_service.py knowledgeforge/runtime/state_store.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_knowledge_blueprint.py tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`48 passed in 7.54s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`157 passed in 33.57s`

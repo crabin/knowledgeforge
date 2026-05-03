@@ -139,6 +139,8 @@ function renderSummary(payload) {
     ["Task ID", payload.task_id || payload.task?.task_id || payload.intake_session?.task_id],
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
+    ["产出模式", formatCompletionMode(getNested(payload, "request_context.completion_mode") || getNested(payload, "task.request_context.completion_mode") || payload.completion_mode || payload.intake_session?.completion_mode)],
+    ["完整文档", formatFullDocumentStatus(payload.full_document_status || payload.task?.full_document_status)],
     ["执行耗时", summarizeTaskTiming(payload)],
     ["当前步骤", payload.current_step || payload.task?.current_step],
     ["当前动作", payload.current_action || payload.task?.current_action],
@@ -171,6 +173,24 @@ function renderSummary(payload) {
   summaryStrip.innerHTML = items
     .map(([label, value]) => `<div class="summary-item"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value))}</span></div>`)
     .join("");
+}
+
+function formatCompletionMode(mode) {
+  if (!mode) return "";
+  return {
+    framework: "知识框架与证据",
+    full_document: "完整知识文档",
+    file_level: "完整知识文档",
+  }[mode] || mode;
+}
+
+function formatFullDocumentStatus(status) {
+  if (!status) return "";
+  return {
+    pending: "待生成",
+    generated: "已生成",
+    skipped: "按需后置",
+  }[status] || status;
 }
 
 function renderConfig(payload) {
@@ -1493,9 +1513,10 @@ document.querySelector("#create-intake-form").addEventListener("submit", async (
   event.preventDefault();
   const form = event.currentTarget;
   const message = form.elements.message.value.trim();
+  const completionMode = form.elements.completion_mode.value;
   setBusy(form, true);
   try {
-    showPayload(await requestJson("/intake/sessions", { method: "POST", body: JSON.stringify({ message }) }));
+    showPayload(await requestJson("/intake/sessions", { method: "POST", body: JSON.stringify({ message, completion_mode: completionMode }) }));
   } catch (error) {
     showError(error);
   } finally {

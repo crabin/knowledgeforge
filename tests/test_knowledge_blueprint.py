@@ -23,6 +23,7 @@ def test_context_builder_defers_blueprint_until_structure_graph() -> None:
     )
 
     assert context.structure_mode == "pending_structure_graph"
+    assert context.completion_mode == "framework"
     assert context.knowledge_blueprint == []
     assert context.navigation_targets == []
     assert context.required_files == []
@@ -83,6 +84,17 @@ def test_structure_graph_derives_dynamic_blueprint_without_fixed_modules() -> No
     assert "02_core_topics/workflow orchestration/README.md" not in relative_paths
     assert derived["required_files"]
     assert all(path.startswith("save/") for path in derived["required_files"])
+
+
+def test_context_builder_normalizes_full_document_completion_mode() -> None:
+    context = ContextBuilder().build(
+        {
+            "domain": "Knowledge Engineering",
+            "completion_mode": "file_level",
+        }
+    )
+
+    assert context.completion_mode == "full_document"
 
 
 def test_structure_graph_sanitizes_paths_and_dedupes() -> None:

@@ -11,7 +11,7 @@ from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.services.task_service import TaskService
 
 
-def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
+def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(
             save_root=tmp_path / "save",
@@ -34,9 +34,13 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["task_status"] == "verified"
+    assert payload["request_context"]["completion_mode"] == "framework"
+    assert payload["full_document_status"] == "skipped"
     assert payload["document_artifact"]["path"].endswith(".md")
+    assert not payload["document_artifact"]["path"].endswith("-mixed.md")
     assert payload["post_storage_result"]["status"] == "passed"
     assert payload["post_storage_result"]["quality_check"]["status"] == "passed"
+    assert payload["post_storage_result"]["quality_check"]["checks"]["framework_graph_check"] is True
     assert payload["post_storage_result"]["version_record"]["status"] == "verified"
     assert payload["post_storage_result"]["version_record"]["frozen"] is True
     assert payload["post_storage_result"]["version_record"]["report_eligible"] is True
@@ -61,13 +65,49 @@ def test_task_workflow_writes_markdown(tmp_path: Path) -> None:
 
     content = document_path.read_text(encoding="utf-8")
     assert "## 证据与来源" in content
-    assert "source_type: mixed" in content
+    assert "## 知识定位" in content
+    assert "source_type: query" in content
+    assert "## 正文" not in content
 
     graph_response = client.get(f"/tasks/{payload['task_id']}/graph")
     assert graph_response.status_code == 200
     graph_payload = graph_response.get_json()
     assert graph_payload["status"] in {"ok", "local"}
     assert graph_payload["graph"]["nodes"]
+
+
+def test_task_workflow_full_document_mode_writes_final_document(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post(
+        "/tasks",
+        json={
+            "domain": "知识工程",
+            "completion_mode": "full_document",
+            "subdomains": ["工作流编排", "知识沉淀"],
+            "focus_points": ["状态恢复", "来源追溯"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["task_status"] == "verified"
+    assert payload["request_context"]["completion_mode"] == "full_document"
+    assert payload["full_document_status"] == "generated"
+    assert payload["document_artifact"]["path"].endswith("-mixed.md")
+
+    document_path = Path(payload["document_artifact"]["path"])
+    content = document_path.read_text(encoding="utf-8")
+    assert "## 正文" in content
+    assert "source_type: mixed" in content
 
 
 def test_intake_session_clarifies_ml_without_starting_task(tmp_path: Path) -> None:
@@ -129,6 +169,7 @@ def test_intake_confirm_starts_task_with_normalized_domain(tmp_path: Path, monke
     assert context["original_input"] == "ML"
     assert context["output_language"] == "zh-CN"
     assert context["confirmed"] is True
+    assert context["completion_mode"] == "framework"
 
 
 def test_direct_async_task_normalizes_domain_before_starting(tmp_path: Path) -> None:
@@ -151,6 +192,26 @@ def test_direct_async_task_normalizes_domain_before_starting(tmp_path: Path) -> 
     assert context["normalized_domain"] == "Deep Learning"
     assert context["original_input"] == "DL"
     assert context["confirmed"] is True
+    assert context["completion_mode"] == "framework"
+
+
+def test_direct_async_task_normalizes_legacy_file_level_completion_mode(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks/async", json={"domain": "DL", "completion_mode": "file_level"})
+
+    assert response.status_code == 202
+    context = response.get_json()["request_context"]
+    assert context["completion_mode"] == "full_document"
 
 
 def test_direct_task_rejects_unconfirmed_concept_explanation(tmp_path: Path) -> None:

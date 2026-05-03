@@ -217,22 +217,34 @@ class MarkdownKnowledgeWriter:
 
     def build_domain_artifact(self, context: RequestContext) -> DocumentArtifact:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
-        readme_path = domain_dir / "README.md"
+        generated_files = [
+            str(self._config.save_root / sanitize_path_segment(context.domain, "domain") / str(item.get("relative_path", "")))
+            for item in context.knowledge_blueprint
+        ]
+        representative_path = domain_dir / "README.md"
+        for path in generated_files:
+            candidate = Path(path)
+            if not candidate.exists():
+                continue
+            try:
+                content = candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if "## 知识定位" in content and "## 证据与来源" in content:
+                representative_path = candidate
+                break
         return DocumentArtifact(
-            document_id=f"{sanitize_path_segment(context.domain, 'domain')}-domain-readme",
-            title=f"{context.domain} Overview",
+            document_id=f"{sanitize_path_segment(context.domain, 'domain')}-framework",
+            title=f"{context.domain} Knowledge Framework",
             domain=context.domain,
             subdomain=context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用"),
-            path=readme_path.as_posix(),
+            path=representative_path.as_posix(),
             status="draft",
             version="v1",
             module_id="overview",
             module_label="Overview",
             doc_role="domain_overview",
-            generated_files=[
-                str(self._config.save_root / sanitize_path_segment(context.domain, "domain") / str(item.get("relative_path", "")))
-                for item in context.knowledge_blueprint
-            ],
+            generated_files=generated_files,
         )
 
     @staticmethod
@@ -263,13 +275,14 @@ class MarkdownKnowledgeWriter:
     ) -> str:
         title = str(blueprint.get("title", file_path.stem))
         subdomain = str(blueprint.get("subdomain", ""))
-        source_type = "mixed" if "QueryEngine" in blueprint.get("owner_engine_candidates", []) else "insight"
+        framework_mode = context.completion_mode == "framework"
+        source_type = "query" if framework_mode else ("mixed" if "QueryEngine" in blueprint.get("owner_engine_candidates", []) else "insight")
         front_matter = {
             "id": str(blueprint.get("file_id", file_path.stem)),
             "title": title,
             "domain": context.domain,
             "subdomain": subdomain,
-            "doc_type": str(blueprint.get("doc_type", "article")),
+            "doc_type": "note" if framework_mode else str(blueprint.get("doc_type", "article")),
             "source_type": source_type,
             "agent": "KnowledgeForge",
             "round": round_number,
@@ -292,6 +305,57 @@ class MarkdownKnowledgeWriter:
         contract = self._initial_contract(context, blueprint, file_path)
         front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
         body_title = f"# {title}"
+        if framework_mode:
+            return "\n".join(
+                [
+                    "---",
+                    front_matter_text,
+                    "---",
+                    "",
+                    body_title,
+                    "",
+                    "## 知识定位",
+                    "",
+                    f"- 领域：{context.domain}",
+                    f"- 子领域：{subdomain or '领域总览'}",
+                    f"- 模块：{blueprint.get('module_label', blueprint.get('module_id', ''))}",
+                    "- 作用：保存该知识节点的学习定位、官方证据入口和后续补全文档依据。",
+                    "",
+                    "## 学习角色与路径",
+                    "",
+                    "- 学习角色：知识框架节点。",
+                    "- 学习路径：按 Neo4j 结构图谱中的父子关系和相邻节点顺序推进。",
+                    "",
+                    "## 知识关系",
+                    "",
+                    f"- 上级节点：{(blueprint.get('completion_requirements') or {}).get('parent_node_id', '') if isinstance(blueprint.get('completion_requirements'), dict) else ''}",
+                    f"- 负责 Engine：{', '.join(str(item) for item in blueprint.get('owner_engine_candidates', [])) or '未指定'}",
+                    "",
+                    "## 证据与来源",
+                    "",
+                    "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                    "|---|---|---|---|---|",
+                    "| S0 | Blueprint scaffold | 初始框架证据文件 | unknown | 待补充官方来源 |",
+                    "",
+                    "## 冲突与不确定性",
+                    "",
+                    "- 待补充。",
+                    "",
+                    "## 后续动作",
+                    "",
+                    "- 根据 JSON 合同中的 query_tasks 补充官方或权威证据。",
+                    "- 完整知识库文档在 full_document 模式中后置生成。",
+                    "",
+                    render_contract_block(contract),
+                    "",
+                    "## 变更记录",
+                    "",
+                    "| 版本 | 时间 | 变更说明 |",
+                    "|---|---|---|",
+                    f"| v1 | {timestamp[:10]} | 初始框架证据文件创建 |",
+                    "",
+                ]
+            )
         return "\n".join(
             [
                 "---",
@@ -366,7 +430,10 @@ class MarkdownKnowledgeWriter:
         blueprint: dict[str, object],
         file_path: Path,
     ) -> dict[str, object]:
-        section_plan = ["摘要", "关键结论", "背景与上下文", "正文", "证据与来源", "冲突与不确定性", "后续动作"]
+        if context.completion_mode == "framework":
+            section_plan = ["知识定位", "学习角色与路径", "知识关系", "证据与来源", "冲突与不确定性", "后续动作"]
+        else:
+            section_plan = ["摘要", "关键结论", "背景与上下文", "正文", "证据与来源", "冲突与不确定性", "后续动作"]
         query_tasks: list[dict[str, object]] = []
         requirements = blueprint.get("completion_requirements", {})
         query_task_count = 0
@@ -390,8 +457,8 @@ class MarkdownKnowledgeWriter:
             "file_id": str(blueprint.get("file_id", file_path.stem)),
             "file_path": file_path.as_posix(),
             "section_plan": section_plan,
-            "claims": [f"{blueprint.get('title', file_path.stem)} 需要形成清晰、可追溯的知识说明。"],
-            "evidence_needed": ["权威定义", "关键结论对应来源", "必要时补充案例或趋势背景"],
+            "claims": [f"{blueprint.get('title', file_path.stem)} 需要形成清晰、可追溯的知识框架节点。"],
+            "evidence_needed": ["官方定义", "官方文档或标准来源", "关键关系与学习路径依据"],
             "query_tasks": query_tasks,
             "engine_contributions": {
                 "InsightEngine": "负责背景、结构骨架和本地知识线索",

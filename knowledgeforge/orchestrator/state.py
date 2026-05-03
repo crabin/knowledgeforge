@@ -28,6 +28,8 @@ class WorkflowState(TypedDict, total=False):
     task_queue_snapshot: dict
     validation_round: int
     fill_progress: dict
+    completion_mode: str
+    full_document_status: str
     workflow_events: list[WorkflowStepEvent]
     structure_graph: dict
     graph_snapshot: dict

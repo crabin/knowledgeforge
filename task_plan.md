@@ -4,16 +4,16 @@
 在不偏离项目需求、知识文档格式规范和流程执行文档的前提下，分阶段落地 KnowledgeForge 的主链路闭环，并为 Neo4j、质量检测、版本更新和后续研报分支建立稳定接口与治理骨架。
 
 ## 当前阶段
-阶段 9：实时知识生成主链路已完成，当前正在同步文档与执行说明
+阶段 10：知识框架优先主链路已完成，当前默认产物为知识框架图谱与框架证据文件，完整知识文档改为后置可选分支
 
 ## 当前真实代码主链路（2026-05-03）
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
-- 结构先行：工作流先生成 `structure_graph`，再同步 Neo4j 任务图，结构节点初始为 `planned`。
-- 文件串行生成：按结构图谱推导 `knowledge_blueprint`，严格一次生成一个知识点 Markdown 文件；文件开始生成时图谱节点进入 `generating`，写入成功后进入 `generated` 或 `evidence_pending`。
+- 结构先行：工作流先生成知识框架型 `structure_graph`，再同步 Neo4j 任务图，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
+- 框架证据文件串行生成：按结构图谱推导 `knowledge_blueprint`，默认一次生成一个框架证据 Markdown 文件；文件开始生成时图谱节点进入 `generating`，写入成功后进入 `generated` 或 `evidence_pending`。
 - 证据即时回写：`run_query_queue` 每完成一条证据任务，就立即更新目标 Markdown contract、`knowledge_task_queue.json`、Neo4j 节点状态和任务 SSE payload；`fill_evidence` 只保留为最终一致性校验与兼容兜底。
 - 父级自动聚合：KnowledgePoint / Article 状态变化后会向上聚合 SubTopic / Domain；所有 required 子节点完成后父级进入 `completed`。
 - 前端实时同步：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot`、`graph_event`、`file_update`；前端优先使用 SSE 图谱快照渲染，`/tasks/{task_id}/graph` 与手动刷新只作为 fallback。
-- 后置治理不变：文件与图谱闭环完成后继续执行质量治理、版本冻结和研报资格判断；ChromaDB 仍不进入当前主链路。
+- 后置治理分支：`completion_mode=framework` 时治理框架图谱与证据文件并跳过完整文档；`completion_mode=full_document` 时在证据完成后补全最终 mixed 完整文档；旧值 `file_level` 兼容为 `full_document`。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
 - 项目结构重组
@@ -30,7 +30,9 @@
   - 已完成：`fill_evidence` 从主回填责任降级为最终一致性校验与兼容兜底。
   - 待继续：把轮次验证从当前 fallback + LLM 兼容模式继续收紧为更细的文件级 completeness 策略，并补足更多自动化回归。
 - 文件级知识库架构落地
-  - 已完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode=file_level`，把知识树从纯路径工具升级为可执行蓝图。
+  - 已完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode`，把知识树从纯路径工具升级为可执行蓝图；当前默认 `framework`，旧 `file_level` 兼容为 `full_document`。
+  - 已完成：`framework` 模式只生成知识定位、学习角色与路径、知识关系、证据与来源、后续动作和 contract，不生成完整正文。
+  - 已完成：`full_document` 模式在框架证据验证后才生成最终完整知识库文档。
   - 已完成：Writer 在计划阶段前先全量物化知识库骨架文件，并为每个文件写入 front matter + 固定 JSON 合同。
   - 已完成：QueryEngine 优先从知识文件 JSON 合同提取 `query_tasks`，按文件级证据槽位执行检索。
   - 已完成：三路 Engine 输出统一携带 `target_file_path` / `target_section` / `artifacts`，可回写到同一文件树。

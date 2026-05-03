@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Knowledge Engineering Console</p>
         <h1>KnowledgeForge 功能工作台</h1>
-        <p class="lead">从领域输入、串行文件骨架生成、域级查询队列到质量回流、版本冻结和研报生成的一站式演示面板。</p>
+        <p class="lead">从领域输入、知识框架图谱、框架证据文件、域级查询队列到质量回流、版本冻结和可选完整文档的一站式演示面板。</p>
       </div>
       <div class="status-stack" aria-label="系统状态">
         <div class="status-pill">
@@ -134,6 +134,11 @@
           <form class="action-form" id="create-intake-form">
             <label for="intake-message">初始描述</label>
             <textarea id="intake-message" name="message" rows="4" placeholder="例如：用中文整理 ML 的最新论文方向"></textarea>
+            <label for="intake-completion-mode">产出模式</label>
+            <select id="intake-completion-mode" name="completion_mode">
+              <option value="framework" selected>知识框架与证据</option>
+              <option value="full_document">完整知识文档</option>
+            </select>
             <button type="submit">创建澄清会话</button>
           </form>
           <form class="action-form split-form" id="append-intake-form">
@@ -157,6 +162,7 @@
             <label for="task-payload">直接创建任务 JSON</label>
             <textarea id="task-payload" name="payload" rows="8">{
   "domain": "知识工程",
+  "completion_mode": "framework",
   "subdomains": ["工作流编排", "知识沉淀"],
   "focus_points": ["状态恢复", "来源追溯"]
 }</textarea>

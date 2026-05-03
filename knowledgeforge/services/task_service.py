@@ -35,6 +35,7 @@ from knowledgeforge.models import (
     IntakeSession,
     RequestContext,
     WorkflowStepEvent,
+    normalize_completion_mode,
 )
 from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.orchestrator.state import WorkflowState
@@ -226,6 +227,7 @@ class TaskService:
         normalized_payload["search_terms"] = clarification.search_terms
         normalized_payload["clarification_summary"] = clarification.clarification_summary
         normalized_payload["confirmed"] = True
+        normalized_payload["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
         if not normalized_payload.get("subdomains"):
             normalized_payload["subdomains"] = clarification.subdomains
         if not normalized_payload.get("focus_points"):
@@ -390,6 +392,7 @@ class TaskService:
             "search_terms",
             "clarification_summary",
             "confirmed",
+            "completion_mode",
         }
         for field in allowed_context_fields:
             if field not in request_updates:
@@ -401,6 +404,8 @@ class TaskService:
                 value = [str(item).strip() for item in value if str(item).strip()]
             elif field == "confirmed":
                 value = bool(value)
+            elif field == "completion_mode":
+                value = normalize_completion_mode(value)
             else:
                 value = str(value).strip()
             if request_context.get(field) != value:
@@ -525,6 +530,7 @@ class TaskService:
             updated_at=now,
         )
         payload_dict = session.to_dict()
+        payload_dict["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
         self._intake_store.save(session_id, payload_dict)
         self._audit_logger.log(
             session_id,
@@ -554,6 +560,8 @@ class TaskService:
             clarification = self._intake_clarifier.clarify([item.content for item in messages])
         stored["messages"] = [item.to_dict() for item in messages]
         stored["candidate_context"] = clarification.to_dict()
+        if "completion_mode" in payload:
+            stored["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
         stored["updated_at"] = now_iso()
         self._intake_store.save(session_id, stored)
         self._audit_logger.log(
@@ -587,6 +595,7 @@ class TaskService:
                 "focus_points": clarification.focus_points,
                 "clarification_summary": clarification.clarification_summary,
                 "confirmed": True,
+                "completion_mode": normalize_completion_mode(stored.get("completion_mode")),
             }
         )
         self._audit_logger.log(
@@ -648,6 +657,8 @@ class TaskService:
             ],
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "full_document_status": "pending" if request_context.completion_mode == "full_document" else "skipped",
             "task_status": "running" if audit_source == "api_async" else "created",
             "current_step": "intent_recognition",
             "current_action": "真实意图与领域名称已确认，等待生成目录结构图谱。",
@@ -864,6 +875,8 @@ class TaskService:
             "messages": messages,
             "round_number": round_number + 1,
             "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "full_document_status": stored.get("full_document_status", "pending" if request_context.completion_mode == "full_document" else "skipped"),
             "task_status": "resumed",
             "started_at": stored.get("started_at") or now_iso(),
         }
@@ -1405,6 +1418,8 @@ class TaskService:
             "started_at": payload.get("started_at", ""),
             "finished_at": payload.get("finished_at", ""),
             "document_path": document_artifact.get("path", ""),
+            "completion_mode": request_context.get("completion_mode", "framework"),
+            "full_document_status": payload.get("full_document_status", ""),
             "version": version_record.get("version", ""),
             "report_eligible": version_record.get("report_eligible", False),
             "updated_at": version_record.get("updated_at") or version_record.get("frozen_at") or now_iso(),

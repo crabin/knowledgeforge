@@ -24,6 +24,7 @@ ML_CONTEXT = RequestContext(
     focus_points=["applications", "algorithms"],
     constraints=[],
     initial_strategy=[],
+    completion_mode="full_document",
 )
 
 DOMAIN_PHRASES = ["machine learning", "ml"]
