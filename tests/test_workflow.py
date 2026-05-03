@@ -245,7 +245,7 @@ def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path
     assert sync_states.count("approved") >= 2
 
 
-def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeypatch) -> None:
+def test_second_round_structure_repair_continues_without_manual_resume(tmp_path: Path, monkeypatch) -> None:
     original_complete_json = OpenAICompatibleChatClient.complete_json
 
     def complete_json(self, *, system_prompt: str, user_prompt: str):
@@ -276,14 +276,17 @@ def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeyp
 
     assert response.status_code == 201
     payload = response.get_json()
-    assert payload["task_status"] == "repair_required"
+    assert payload["task_status"] in {"verified", "research_required", "repair_required"}
     assert len(payload["structure_review_rounds"]) == 2
     assert payload["structure_review_rounds"][-1]["suggested_repairs"] == []
     assert "人工" not in payload["current_action"]
-    assert "系统后续修复流" in payload["current_action"]
-    assert "document_artifact" not in payload
-    domain_dir = tmp_path / "save" / "知识工程"
-    assert not domain_dir.exists()
+    assert payload["current_step"] != "structure_review"
+    assert payload["current_step"] != "structure_repair"
+    assert payload["structure_review_status"] == "auto_repaired"
+    assert payload["generation_progress"]["completed_files"] == payload["generation_progress"]["total_files"]
+    assert any(event["step_id"] == "graph_completion" for event in payload["workflow_events"])
+    assert payload["document_completion_status"] == "not_requested"
+    assert not list((tmp_path / "save" / "知识工程").rglob("README.md"))
 
 
 def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path, monkeypatch) -> None:
@@ -314,7 +317,10 @@ def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path
     client = app.test_client()
     created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
 
-    assert created["task_status"] == "repair_required"
+    created["task_status"] = "repair_required"
+    created["current_step"] = "structure_review"
+    app.config["TASK_SERVICE"]._state_store.save(created["task_id"], created)
+    app.config["TASK_SERVICE"]._tasks.pop(created["task_id"], None)
 
     resumed = client.post(f"/tasks/{created['task_id']}/resume")
 
@@ -359,6 +365,7 @@ def test_resume_repair_required_from_structure_repair_step_continues(tmp_path: P
     client = app.test_client()
     created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
     task_id = created["task_id"]
+    created["task_status"] = "repair_required"
     created["current_step"] = "structure_repair"
     app.config["TASK_SERVICE"]._state_store.save(task_id, created)
     app.config["TASK_SERVICE"]._tasks.pop(task_id, None)

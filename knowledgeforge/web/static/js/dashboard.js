@@ -1728,7 +1728,7 @@ function formatTaskTimingStatus(payload, timing = {}) {
   const status = payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status || "";
   return {
     verified: "已完成",
-    repair_required: "待修复，可恢复",
+    repair_required: "待系统修复",
     research_required: "待补检索",
     supplement_required: "待补充",
     max_rounds_reached: "已停止",

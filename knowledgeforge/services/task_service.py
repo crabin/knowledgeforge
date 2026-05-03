@@ -1408,7 +1408,7 @@ class TaskService:
     ) -> RealtimeReviewResult:
         task_snapshot = self.get_task(task_id) or {}
         if (task_snapshot.get("request_context") or {}).get("completion_mode", "framework") == "framework":
-            result = RealtimeReviewResult(status="skipped", reason="默认主链路不生成本地知识 Markdown；证据只写入 Neo4j 图谱上下文。")
+            result = RealtimeReviewResult(status="skipped", reason="默认主链路不生成本地知识 Markdown；证据先保留在运行态队列，补全文档前再写入 Neo4j。")
             self._audit_logger.log(
                 task_id,
                 "realtime_file_review_skipped",

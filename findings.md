@@ -303,7 +303,8 @@
 - `knowledge_task_queue.json` 从内容回写队列收敛为链接队列，核心结果字段为 `selected_link`、`source_kind`、`reachable`、`relevance_reason` 和 `checked_at`。
 
 ## repair_required 接续执行结论
-- `repair_required` 不应只能表达“彻底停止”；当状态来自结构 review 且本地已经有修补后的 `structure_graph` 与 `knowledge_blueprint`，它应作为 repair flow 的可恢复检查点。
+- `repair_required` 不应作为新任务第二轮结构修补后的默认停靠点；结构 review 发现缺口后应自动修补并同步 Neo4j，再继续图谱补全。
+- 旧任务如果已经停在 `repair_required` 且本地已有修补后的 `structure_graph` 与 `knowledge_blueprint`，它仍作为兼容性恢复检查点，由 `/tasks/{task_id}/resume` 继续执行。
 - 恢复这类任务时不宜重新进入 `generate_structure_graph`，否则会丢失用户看到的当前图谱上下文，也可能再次停在同一 review 失败点。
 - 接续入口应从架构文档生成开始，并继续复用现有队列、验证、收尾和治理逻辑；这样前端“恢复任务”能把图生成后的任务推进到文件与证据阶段。
 

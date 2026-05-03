@@ -46,7 +46,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "data-task-action=\"complete-documents\"" in body
     assert "产出模式" not in body
     dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
-    assert "repair_required: \"待修复，可恢复\"" in dashboard_js
+    assert "repair_required: \"待系统修复\"" in dashboard_js
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
     assert "function normalizeStructureReviewRounds" in dashboard_js
     assert "`${rounds.length}/2" in dashboard_js

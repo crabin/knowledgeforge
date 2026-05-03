@@ -9,8 +9,8 @@
 ## 当前真实代码主链路（2026-05-03）
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
 - 结构先行：工作流先生成知识架构型 `structure_graph`，立即同步 Neo4j 首屏呈现，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
-- 架构 review：图谱补全前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时进入 `repair_required`，不生成本地知识 Markdown。
-- repair flow 接续：`repair_required` 的架构审查终态保留为可恢复状态；当任务已有修补后的 `structure_graph` 和 `knowledge_blueprint` 时，`/tasks/{task_id}/resume` 会复用当前图谱继续图谱补全、证据链接与治理链路，不再从头生成图谱。
+- 架构 review：图谱补全前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时也直接自动修补并同步 Neo4j，然后继续图谱补全，不再等待用户恢复。
+- repair flow 接续：`repair_required` 的架构审查旧任务检查点仍可由 `/tasks/{task_id}/resume` 兼容恢复；新任务的第二轮结构修补不再停在该检查点。
 - 图谱补全文档上下文：按 review 通过后的结构图谱推导 `knowledge_blueprint`，把知识定位、学习路径、证据需求、建议路径和 `document_completion_status` 写入 Neo4j；默认不生成 README、基础知识 Markdown 或完整知识 Markdown。
 - 证据链接记录：`query_evidence_links` 每完成一条链接任务，只更新运行态队列和任务 SSE payload；`selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap` 等证据字段在用户点击“补全文档”后、生成 Markdown 前再写入 Neo4j。
 - 父级不再自动聚合：架构阶段完整性只看两轮 review 结果，文档补全阶段如需进度聚合另行实现。
@@ -23,6 +23,7 @@
   - [complete] 新增 workflow 接续入口，复用已修补图谱继续图谱补全、查询证据链接、验证、收尾与治理。
   - [complete] 调整 `/tasks/{task_id}/resume`，对结构 review 的 `repair_required` 任务走 repair flow 接续，不再重跑图谱生成或直接触发最大轮次拦截。
   - [complete] 增加回归测试覆盖 `repair_required -> resume -> 文档/队列继续生成`。
+  - [complete] 将第二轮结构修补后的新任务路由改为自动继续主链路；`resume` 仅保留给历史检查点和外部中断恢复。
 - 架构 review 去人工化与 Neo4j 上下文增强（2026-05-03）
   - [complete] 定位现有 review / repair / Neo4j 同步实现与测试覆盖。
   - [complete] 新增按当前知识 ID 读取 Neo4j 相关图谱上下文，并拼接进 LLM review 输入。

@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-03 第二轮结构修补后自动继续主链路
+
+- 根据浏览器批注调整架构 review 后的修复流：第二轮 review 仍发现缺口时，不再停到 `repair_required / 可恢复`，而是执行第二轮自动修补、同步 Neo4j，并直接进入图谱补全和后续证据 / 治理链路。
+- 第二轮结构修补后将 `structure_review_status` 标记为 `auto_repaired`，本地图谱节点状态置为 `approved`，并在 `current_action` 中明确“已自动修补并同步 Neo4j”。
+- 前端耗时状态中 `repair_required` 文案从“待修复，可恢复”改为“待系统修复”，避免暗示需要人工处理。
+- 旧任务的 `/tasks/{task_id}/resume` 兼容入口仍保留，但新任务不再需要用户点击恢复才能继续。
+- 验证：`uv run ruff check knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py tests/test_workflow.py tests/test_dashboard.py`、`python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py`、`node --check knowledgeforge/web/static/js/dashboard.js`、`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 均通过，相关测试结果 `51 passed`。
+
 ## 2026-05-03 图谱证据写入改为补全文档前置可选步骤
 
 - 根据浏览器批注调整流程：默认主链路保留 `evidence_link_query` 可信链接查询，但不再触发 `evidence_link_recorded`，也不再把 `selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap` 等证据字段写入 Neo4j。
@@ -510,7 +518,7 @@
 ## 2026-05-03 知识架构 Review 与链接证据主链路重排
 
 - 将 LangGraph 主链路重排为：`generate_structure_graph -> sync_structure_graph_to_neo4j -> review_structure_round_1 -> repair_structure_graph_round_1 -> review_structure_round_2 -> generate_architecture_documents -> query_evidence_links -> validate_round -> fill_evidence -> run_post_storage`。
-- 新增 `structure_review_rounds`、`structure_review_status`、`structure_repair_log`，两轮架构 review 通过后才生成本地架构 Markdown；第二轮仍不完整时进入 `repair_required` 并停止落盘。
+- 新增 `structure_review_rounds`、`structure_review_status`、`structure_repair_log`；当时第二轮仍不完整会进入 `repair_required`，该行为后续已调整为自动修补并继续主链路。
 - 证据阶段收敛为 QueryEngine 链接查询：队列记录 `selected_link`、`source_kind`、`reachable`、`relevance_reason`、`checked_at`，不再即时把网页内容或摘要写回 Markdown。
 - Neo4j 结构节点状态改为架构语义：`reviewing`、`repairing`、`documenting`、`documented`、`link_querying`、`link_verified`、`link_failed`；`update_structure_node_status` 不再做祖先或 Domain 父级聚合。
 - 前端流程图更新为“意图识别 → 图谱生成 → Neo4j呈现 → 架构Review → 架构文档 → 证据链接 → 治理质检 → 补全文档/版本研报”。
@@ -550,7 +558,7 @@
 ## 2026-05-03 修正文案中的人工干预表述
 
 - 修正 `repair_required` 的 `current_action` 文案，不再声明“需要人工修复或重新生成图谱”。
-- 当前表述改为：两轮知识架构审查与自动修补后仍存在结构缺口，任务进入 `repair_required`，等待系统后续修复流处理。
+- 当时表述改为系统后续修复流；后续已调整为第二轮自动修补并同步 Neo4j 后直接继续主链路。
 - 为工作流测试补充断言，防止失败态文案再次回退到人工介入口径。
 
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
@@ -593,7 +601,7 @@
 
 ## 2026-05-03 repair_required 恢复继续执行
 
-- 修复第二轮知识架构修补后任务只能停在 `repair_required`、点击“恢复任务”也不能沿当前图谱继续的问题。
+- 修复旧任务停在 `repair_required` 后点击“恢复任务”也不能沿当前图谱继续的问题；新任务后续已调整为不再停靠该检查点。
 - 新增 `KnowledgeGraphWorkflow.continue_after_structure_repair(...)`，用于复用已修补的 `structure_graph` / `knowledge_blueprint`，直接接续架构文档生成、证据链接查询、轮次验证、证据收尾与治理质检。
 - 调整 `TaskService.resume_task(...)`：当任务是 `repair_required` 且停在 `structure_review`，并且已有图谱与蓝图时，走 repair flow 接续；其他终态仍保留原有轮次恢复 / 最大轮次保护逻辑。
 - 增加回归测试 `test_resume_repair_required_continues_from_repaired_structure`，确认恢复后会生成文件与领域级 `knowledge_task_queue.json`，并记录 `resume_mode=continue_after_structure_repair` 事件。
@@ -610,7 +618,7 @@
 ## 2026-05-03 repair_required 耗时状态展示
 
 - 修复前端摘要区执行耗时后缀：不再把所有非运行任务都显示为“已完成”。
-- `repair_required` 现在显示为“待修复，可恢复”，`research_required` 显示“待补检索”，失败和最大轮次状态也分别显示对应状态。
+- 当时 `repair_required` 显示为“待修复，可恢复”；后续已调整为“待系统修复”，避免暗示人工处理。
 - 补充 dashboard 静态回归断言，防止耗时展示回退到 `is_running ? 运行中 : 已完成` 的二分逻辑。
 
 ## Verification

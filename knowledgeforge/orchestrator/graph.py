@@ -417,6 +417,9 @@ class KnowledgeGraphWorkflow:
         )
         context.structure_graph = normalized.to_dict()
         self._initialize_structure_graph_status(context)
+        review_status = "auto_repaired" if round_number >= 2 else state.get("structure_review_status", "needs_repair")
+        if round_number >= 2:
+            self._set_all_structure_nodes_status(context, "approved")
         context.structure_mode = str(derived_context["structure_mode"])
         context.knowledge_modules = derived_context["knowledge_modules"]
         context.core_topics = derived_context["core_topics"] or context.core_topics
@@ -434,6 +437,7 @@ class KnowledgeGraphWorkflow:
             "request_context": context,
             "structure_graph": context.structure_graph,
             "structure_graph_sync": sync_result,
+            "structure_review_status": review_status,
             "structure_repair_log": [*state.get("structure_repair_log", []), repair_entry],
             "graph_snapshot": self._local_graph_snapshot(context),
             "graph_event": {
@@ -445,7 +449,7 @@ class KnowledgeGraphWorkflow:
             },
             "task_status": "running",
             "current_step": "structure_repair",
-            "current_action": f"第 {round_number} 轮知识架构已自动修补，应用 {len(applied_changes)} 项变更。",
+            "current_action": f"第 {round_number} 轮知识架构已自动修补并同步 Neo4j，应用 {len(applied_changes)} 项变更。",
         }
         self._commit_state(state, updates)
         self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构已自动修补", "completed", repair_entry)
@@ -1773,14 +1777,14 @@ class KnowledgeGraphWorkflow:
 
     @staticmethod
     def _route_after_final_structure_repair(state: WorkflowState) -> str:
-        return "finalize_structure_review_failure"
+        return "enrich_graph_for_completion"
 
     def _finalize_structure_review_failure(self, state: WorkflowState) -> dict[str, Any]:
         review = (state.get("structure_review_rounds") or [{}])[-1]
         updates = {
             "task_status": "repair_required",
             "current_step": "structure_review",
-            "current_action": "两轮知识架构审查与自动修补后仍存在结构缺口，任务已进入 repair_required，等待系统后续修复流继续处理。",
+            "current_action": "知识架构已执行自动修补并同步 Neo4j；治理仍需系统修复流继续处理。",
             "completeness": CompletenessResult(
                 status="supplement_required",
                 reasons=[str(review.get("reasoning", "知识架构审查未通过。"))],
