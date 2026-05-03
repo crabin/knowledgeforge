@@ -205,11 +205,21 @@ function formatFullDocumentStatus(status) {
 }
 
 function summarizeStructureReview(payload) {
-  const rounds = payload.structure_review_rounds || payload.task?.structure_review_rounds || [];
-  if (!Array.isArray(rounds) || !rounds.length) return "";
+  const rounds = normalizeStructureReviewRounds(payload.structure_review_rounds || payload.task?.structure_review_rounds || []);
+  if (!rounds.length) return "";
   const latest = rounds.at(-1) || {};
   const status = latest.status || (latest.is_complete ? "passed" : "needs_repair");
   return `${rounds.length}/2 · ${status === "passed" ? "通过" : "需修补"}`;
+}
+
+function normalizeStructureReviewRounds(rounds) {
+  if (!Array.isArray(rounds)) return [];
+  const byRound = new Map();
+  rounds.forEach((round, index) => {
+    const roundNumber = Number(round?.round || index + 1);
+    if ([1, 2].includes(roundNumber)) byRound.set(roundNumber, round);
+  });
+  return [...byRound.entries()].sort(([left], [right]) => left - right).map(([, round]) => round);
 }
 
 function renderConfig(payload) {

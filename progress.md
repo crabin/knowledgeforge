@@ -577,3 +577,19 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
 - 结果：`7 passed in 0.70s`
+
+## 2026-05-03 架构 Review 轮次去重
+
+- 修复恢复或重跑结构审查时 `structure_review_rounds` 追加历史轮次，导致前端显示 `3/2 · 需修补` 并可能反复超过两轮的问题。
+- 后端 `_merge_structure_review_round(...)` 现在按 `round=1/2` 覆盖对应轮次，只保留最多两轮有效 review 记录。
+- 前端 `summarizeStructureReview(...)` 增加同样的去重兜底，旧任务状态里即使已经存在重复 review 记录，也不会再显示超过 `2/2`。
+- 补充 workflow 与 dashboard 回归断言，防止恢复任务后结构 Review 计数再次累加。
+
+## Verification
+
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py::test_structure_review_failure_stops_before_documents tests/test_workflow.py::test_resume_repair_required_continues_from_repaired_structure tests/test_workflow.py::test_structure_review_rounds_are_replaced_not_appended tests/test_dashboard.py`
+- 结果：`10 passed in 1.06s`
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py`
+- 结果：通过。

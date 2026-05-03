@@ -45,6 +45,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
     assert "repair_required: \"待修复，可恢复\"" in dashboard_js
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
+    assert "function normalizeStructureReviewRounds" in dashboard_js
+    assert "`${rounds.length}/2" in dashboard_js
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body

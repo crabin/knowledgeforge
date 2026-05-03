@@ -323,6 +323,21 @@ def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path
     assert (tmp_path / "save" / "知识工程").exists()
 
 
+def test_structure_review_rounds_are_replaced_not_appended() -> None:
+    rounds = KnowledgeGraphWorkflow._merge_structure_review_round(
+        [
+            {"round": 1, "status": "needs_repair", "reasoning": "old round 1"},
+            {"round": 2, "status": "needs_repair", "reasoning": "old round 2"},
+            {"round": 1, "status": "needs_repair", "reasoning": "duplicate round 1"},
+        ],
+        {"round": 1, "status": "passed", "reasoning": "new round 1"},
+    )
+
+    assert len(rounds) == 2
+    assert [round_item["round"] for round_item in rounds] == [1, 2]
+    assert rounds[0]["reasoning"] == "new round 1"
+
+
 def test_complete_documents_requires_finished_framework_then_expands_files(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(

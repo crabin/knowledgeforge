@@ -337,7 +337,7 @@ class KnowledgeGraphWorkflow:
         review = self._run_structure_review(state, context, round_number)
         review["round"] = round_number
         review["reviewed_at"] = now_iso()
-        rounds = [*state.get("structure_review_rounds", []), review]
+        rounds = self._merge_structure_review_round(state.get("structure_review_rounds", []), review)
         status = "passed" if review.get("is_complete") else "needs_repair"
         if status == "passed":
             self._set_all_structure_nodes_status(context, "approved")
@@ -370,6 +370,23 @@ class KnowledgeGraphWorkflow:
             review,
         )
         return updates
+
+    @staticmethod
+    def _merge_structure_review_round(rounds: list[dict[str, Any]], review: dict[str, Any]) -> list[dict[str, Any]]:
+        current_round = int(review.get("round", 0) or 0)
+        merged: dict[int, dict[str, Any]] = {}
+        for item in rounds:
+            if not isinstance(item, dict):
+                continue
+            try:
+                round_number = int(item.get("round", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if round_number in {1, 2}:
+                merged[round_number] = item
+        if current_round in {1, 2}:
+            merged[current_round] = review
+        return [merged[round_number] for round_number in sorted(merged)]
 
     def _repair_structure_graph_round_1(self, state: WorkflowState) -> dict[str, Any]:
         return self._repair_structure_graph(state, 1)
