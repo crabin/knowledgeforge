@@ -37,13 +37,14 @@ const refreshNeo4jGraphButton = document.querySelector("#refresh-neo4j-graph");
 
 const workflowSteps = [
   { id: "intent_recognition", order: "01", title: "意图识别", description: "识别真实领域意图并归一化缩写。" },
-  { id: "structure_graph_planning", order: "02", title: "图谱规划", description: "根据用户意图生成目录结构图谱。" },
-  { id: "llm_generating", order: "03", title: "文件生成", description: "串行生成知识点 Markdown 并同步图谱状态。" },
-  { id: "query_queue_running", order: "04", title: "证据查询", description: "按队列执行 Query / Media 证据任务。" },
-  { id: "evidence_realtime_write", order: "05", title: "即时回写", description: "每条证据完成后立即更新文件和图谱。" },
-  { id: "round_validation", order: "06", title: "父级聚合", description: "验证轮次并聚合子领域与领域完成状态。" },
+  { id: "structure_graph_planning", order: "02", title: "图谱生成", description: "根据用户意图生成知识架构图谱。" },
+  { id: "neo4j_structure_sync", order: "03", title: "Neo4j呈现", description: "先将知识架构图谱同步到 Neo4j。" },
+  { id: "structure_review", order: "04", title: "架构Review", description: "执行两轮自动审查与修补。" },
+  { id: "architecture_documents", order: "05", title: "架构文档", description: "审查通过后生成本地架构文档。" },
+  { id: "evidence_link_query", order: "06", title: "证据链接", description: "只记录官方或高公信力链接。" },
   { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "versioning", order: "08", title: "版本研报", description: "冻结通过质量检测的版本，并基于冻结知识生成研报。" },
+  { id: "document_completion", order: "08", title: "补全文档", description: "可选：框架完成后逐个补全知识文档。", optional: true },
+  { id: "versioning", order: "09", title: "版本研报", description: "可选：冻结版本并生成研报。", optional: true },
 ];
 
 async function requestJson(path, options = {}) {
@@ -141,16 +142,17 @@ function renderSummary(payload) {
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
     ["产出模式", formatCompletionMode(getNested(payload, "request_context.completion_mode") || getNested(payload, "task.request_context.completion_mode") || payload.completion_mode || payload.intake_session?.completion_mode)],
     ["完整文档", formatFullDocumentStatus(payload.full_document_status || payload.task?.full_document_status)],
+    ["补全文档数", summarizeDocumentCompletion(payload)],
     ["执行耗时", summarizeTaskTiming(payload)],
     ["当前步骤", payload.current_step || payload.task?.current_step],
     ["当前动作", payload.current_action || payload.task?.current_action],
+    ["架构Review", summarizeStructureReview(payload)],
     ["生成进度", summarizeGenerationProgress(payload)],
     ["队列进度", summarizeQueueProgress(payload)],
     ["当前文件", summarizeCurrentFile(payload)],
-    ["当前证据任务", summarizeCurrentEvidenceTask(payload)],
+    ["当前链接任务", summarizeCurrentEvidenceTask(payload)],
     ["图谱完成", summarizeGraphCompletion(payload)],
-    ["父级状态", summarizeParentGraphStatus(payload)],
-    ["最近回写", payload.file_update?.path],
+    ["最近链接", payload.file_update?.selected_link || payload.file_update?.path],
     ["轮次验证", summarizeValidationRounds(payload)],
     ["队列状态", queueSummary.final_status],
     ["队列统计", summarizeQueueCountSummary(queueSummary.counts)],
@@ -175,6 +177,14 @@ function renderSummary(payload) {
     .join("");
 }
 
+function summarizeDocumentCompletion(payload) {
+  const result = payload.document_completion_result || payload.task?.document_completion_result;
+  if (!result) return "";
+  const completed = Array.isArray(result.completed_files) ? result.completed_files.length : 0;
+  const total = result.total_files ?? completed;
+  return `${completed}/${total}`;
+}
+
 function formatCompletionMode(mode) {
   if (!mode) return "";
   return {
@@ -191,6 +201,14 @@ function formatFullDocumentStatus(status) {
     generated: "已生成",
     skipped: "按需后置",
   }[status] || status;
+}
+
+function summarizeStructureReview(payload) {
+  const rounds = payload.structure_review_rounds || payload.task?.structure_review_rounds || [];
+  if (!Array.isArray(rounds) || !rounds.length) return "";
+  const latest = rounds.at(-1) || {};
+  const status = latest.status || (latest.is_complete ? "passed" : "needs_repair");
+  return `${rounds.length}/2 · ${status === "passed" ? "通过" : "需修补"}`;
 }
 
 function renderConfig(payload) {
@@ -271,12 +289,17 @@ function normalizeWorkflowStepId(stepId) {
   const aliases = {
     structure_graph_ready: "structure_graph_planning",
     blueprint_ready: "structure_graph_planning",
-    evidence_filling: "evidence_realtime_write",
+    llm_generating: "architecture_documents",
+    query_queue_running: "evidence_link_query",
+    evidence_realtime_write: "evidence_link_query",
+    evidence_link_recorded: "evidence_link_query",
+    evidence_filling: "evidence_link_query",
+    documents_completed: "document_completion",
     planning: "intent_recognition",
     awaiting_confirmation: "intent_recognition",
-    collecting: "query_queue_running",
-    evaluating: "round_validation",
-    writing: "evidence_realtime_write",
+    collecting: "evidence_link_query",
+    evaluating: "governing",
+    writing: "architecture_documents",
   };
   return aliases[stepId] || stepId;
 }
@@ -284,22 +307,25 @@ function normalizeWorkflowStepId(stepId) {
 function renderWorkflowMap(payload) {
   const events = normalizeWorkflowEvents(payload);
   const byStep = new Map(events.map((event) => [normalizeWorkflowStepId(event.step_id), { ...event, step_id: normalizeWorkflowStepId(event.step_id) }]));
+  if ((payload.full_document_status || payload.task?.full_document_status) === "generated") {
+    byStep.set("document_completion", { step_id: "document_completion", status: "completed", label: "完整知识文档已补全" });
+  }
   const current = getCurrentWorkflowStep(payload, events);
-  renderWorkflowFallback(byStep, current);
+  renderWorkflowFallback(byStep, current, payload);
 }
 
 function initializeWorkflowMap() {
   renderWorkflowMap(state.lastPayload || {});
 }
 
-function renderWorkflowFallback(byStep, current) {
+function renderWorkflowFallback(byStep, current, payload = {}) {
   if (!workflowMap) return;
   workflowMap.querySelectorAll("[data-step-id]").forEach((step) => {
     const stepId = step.dataset.stepId;
     const event = byStep.get(stepId);
-    const status = getWorkflowStepStatus(stepId, byStep, current);
+    const status = getWorkflowStepStatus(stepId, byStep, current, payload);
     step.dataset.status = status;
-    step.dataset.statusLabel = getWorkflowStatusLabel(status);
+    step.dataset.statusLabel = getWorkflowStatusLabel(status, stepId);
     step.setAttribute("aria-current", status === "active" ? "step" : "false");
     if (event?.label) step.setAttribute("title", event.label);
     step.classList.toggle("active", status === "active");
@@ -355,7 +381,7 @@ function ensureWorkflowGraph() {
 function buildWorkflowGraphData(byStep, current) {
   const width = workflowX6Container?.clientWidth || 960;
   const compact = width < 760;
-  const nodeWidth = compact ? Math.max(220, width - 48) : Math.max(178, Math.floor((width - 48 - 7 * 22) / 8));
+  const nodeWidth = compact ? Math.max(220, width - 48) : Math.max(160, Math.floor((width - 48 - Math.max(0, workflowSteps.length - 1) * 22) / workflowSteps.length));
   const nodeHeight = compact ? 96 : 116;
   const startX = 24;
   const startY = 24;
@@ -448,18 +474,28 @@ function fitGraphToContainer(graph, container, padding = 24, maxScale = 1) {
   graph.centerContent({ padding });
 }
 
-function getWorkflowStepStatus(stepId, byStep, current) {
+function getWorkflowStepStatus(stepId, byStep, current, payload = {}) {
   const event = byStep.get(stepId);
   if (event?.status === "blocked") return "blocked";
   if (event?.status === "completed") return "completed";
   if (stepId === current) return "active";
+  if (stepId === "document_completion") {
+    return (payload.full_document_status || payload.task?.full_document_status) === "generated" ? "completed" : "pending";
+  }
+  if (stepId === "versioning") {
+    const versionRecord = getNested(payload, "post_storage_result.version_record") || getNested(payload, "task.post_storage_result.version_record");
+    if (versionRecord?.frozen || versionRecord?.report_eligible) return "completed";
+    return "pending";
+  }
   const stepIndex = workflowSteps.findIndex((step) => step.id === stepId);
   const currentIndex = workflowSteps.findIndex((step) => step.id === current);
   if (stepIndex >= 0 && currentIndex >= 0 && stepIndex < currentIndex) return "completed";
   return "pending";
 }
 
-function getWorkflowStatusLabel(status) {
+function getWorkflowStatusLabel(status, stepId = "") {
+  const step = workflowSteps.find((item) => item.id === stepId);
+  if (status === "pending" && step?.optional) return "可选";
   return {
     completed: "已完成",
     active: "执行中",
@@ -639,11 +675,11 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
 function summarizeNeo4jNodeStates(nodes) {
   const counts = {
     planned: 0,
-    generating: 0,
-    generated: 0,
-    evidence_pending: 0,
-    evidence_running: 0,
-    completed: 0,
+    reviewing: 0,
+    repairing: 0,
+    documented: 0,
+    link_querying: 0,
+    link_verified: 0,
     failed: 0,
   };
   nodes.forEach((node) => {
@@ -670,12 +706,13 @@ function selectNeo4jHtmlNodes(nodes) {
 function getNeo4jHtmlNodePriority(node) {
   const stateName = getNeo4jGenerationState(node);
   const stateOrder = {
-    evidence_running: 0,
-    generating: 1,
-    evidence_pending: 2,
-    generated: 3,
-    failed: 4,
-    completed: 5,
+    link_querying: 0,
+    reviewing: 1,
+    repairing: 2,
+    documenting: 3,
+    link_failed: 4,
+    documented: 5,
+    link_verified: 6,
     planned: 6,
   }[stateName] ?? 7;
   const typeOrder = {
@@ -725,11 +762,14 @@ function getNeo4jGenerationState(node) {
 function formatNeo4jGenerationState(stateName) {
   return {
     planned: "TODO",
-    generating: "生成中",
-    generated: "已生成",
-    evidence_pending: "待证据",
-    evidence_running: "证据中",
-    completed: "DONE",
+    reviewing: "审查中",
+    repairing: "修补中",
+    approved: "已通过",
+    documenting: "写文档",
+    documented: "已落盘",
+    link_querying: "查链接",
+    link_verified: "链接OK",
+    link_failed: "链接失败",
     failed: "失败",
   }[stateName] || stateName;
 }
@@ -1513,10 +1553,9 @@ document.querySelector("#create-intake-form").addEventListener("submit", async (
   event.preventDefault();
   const form = event.currentTarget;
   const message = form.elements.message.value.trim();
-  const completionMode = form.elements.completion_mode.value;
   setBusy(form, true);
   try {
-    showPayload(await requestJson("/intake/sessions", { method: "POST", body: JSON.stringify({ message, completion_mode: completionMode }) }));
+    showPayload(await requestJson("/intake/sessions", { method: "POST", body: JSON.stringify({ message }) }));
   } catch (error) {
     showError(error);
   } finally {
@@ -1590,6 +1629,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       queue: [`/tasks/${encodeURIComponent(taskId)}/plan`, "GET"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
+      "complete-documents": [`/tasks/${encodeURIComponent(taskId)}/documents/complete`, "POST"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
       logs: [`/tasks/${encodeURIComponent(taskId)}/logs`, "GET"],
     }[action];
@@ -1599,7 +1639,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if (activeTaskId && ["get", "queue", "logs", "resume"].includes(action)) {
+      if (activeTaskId && ["get", "queue", "logs", "resume", "complete-documents"].includes(action)) {
         scheduleNeo4jGraphRefresh(activeTaskId, { force: true });
       }
       if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {

@@ -442,3 +442,30 @@
 - 结果：`48 passed in 7.54s`
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`157 passed in 33.57s`
+
+## 2026-05-03 知识架构 Review 与链接证据主链路重排
+
+- 将 LangGraph 主链路重排为：`generate_structure_graph -> sync_structure_graph_to_neo4j -> review_structure_round_1 -> repair_structure_graph_round_1 -> review_structure_round_2 -> generate_architecture_documents -> query_evidence_links -> validate_round -> fill_evidence -> run_post_storage`。
+- 新增 `structure_review_rounds`、`structure_review_status`、`structure_repair_log`，两轮架构 review 通过后才生成本地架构 Markdown；第二轮仍不完整时进入 `repair_required` 并停止落盘。
+- 证据阶段收敛为 QueryEngine 链接查询：队列记录 `selected_link`、`source_kind`、`reachable`、`relevance_reason`、`checked_at`，不再即时把网页内容或摘要写回 Markdown。
+- Neo4j 结构节点状态改为架构语义：`reviewing`、`repairing`、`documenting`、`documented`、`link_querying`、`link_verified`、`link_failed`；`update_structure_node_status` 不再做祖先或 Domain 父级聚合。
+- 前端流程图更新为“意图识别 → 图谱生成 → Neo4j呈现 → 架构Review → 架构文档 → 证据链接 → 治理质检 → 补全文档/版本研报”。
+- 同步更新项目需求、流程执行文档、知识文档格式规范、计划与发现记录。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/models.py knowledgeforge/orchestrator/state.py knowledgeforge/prompts/knowledge_file_generation.py knowledgeforge/graph/client.py knowledgeforge/graph/neo4j_adapter.py knowledgeforge/services/task_service.py knowledgeforge/agent/QueryEngine/agent.py knowledgeforge/runtime/domain_task_queue_store.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_knowledge_blueprint.py tests/test_dashboard.py`
+- 结果：`52 passed in 8.17s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`161 passed in 52.33s`
+- 误把 `knowledgeforge/web/static/js/dashboard.js` 传给 `python -m py_compile`，Python 按 `.py` 解析 JS 并报 `SyntaxError: invalid character '·'`；随后改用 Python 文件列表 + `node --check` 分别验证。
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/models.py knowledgeforge/orchestrator/state.py knowledgeforge/prompts/knowledge_file_generation.py knowledgeforge/graph/client.py knowledgeforge/graph/neo4j_adapter.py knowledgeforge/services/task_service.py knowledgeforge/agent/QueryEngine/agent.py knowledgeforge/runtime/domain_task_queue_store.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`161 passed in 30.25s`

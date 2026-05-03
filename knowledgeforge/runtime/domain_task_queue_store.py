@@ -9,7 +9,7 @@ from knowledgeforge.utils.paths import ensure_directory
 
 class DomainTaskQueueStore:
     QUEUE_FILENAME = "knowledge_task_queue.json"
-    QUEUE_VERSION = "v1"
+    QUEUE_VERSION = "v2-link-evidence"
 
     def queue_path(self, domain_dir: Path) -> Path:
         return domain_dir / self.QUEUE_FILENAME

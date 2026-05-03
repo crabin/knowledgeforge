@@ -312,7 +312,7 @@ class Neo4jGraphClient:
             """
             MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(n:KnowledgeStructureNode {id: $node_id})
             SET n.is_generated = true,
-                n.generation_state = 'generated',
+                n.generation_state = 'documented',
                 n.generated_path = $generated_path,
                 n.task_id = $task_id,
                 n.generated_at = datetime()
@@ -338,15 +338,15 @@ class Neo4jGraphClient:
             """
             MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(n:KnowledgeStructureNode {id: $node_id})
             SET n.generation_state = $generation_state,
-                n.is_generated = $generation_state IN ['generated', 'evidence_pending', 'evidence_running', 'completed'],
-                n.is_completed = $generation_state = 'completed',
+                n.is_generated = $generation_state IN ['documented', 'link_querying', 'link_verified', 'approved'],
+                n.is_completed = $generation_state IN ['documented', 'link_verified', 'approved'],
                 n.generated_path = CASE WHEN $generated_path <> '' THEN $generated_path ELSE n.generated_path END,
                 n.pending_task_count = coalesce($pending_task_count, n.pending_task_count, 0),
                 n.completed_task_count = coalesce($completed_task_count, n.completed_task_count, 0),
                 n.task_id = $task_id,
                 n.domain = $domain,
                 n.updated_at = datetime(),
-                n.completed_at = CASE WHEN $generation_state = 'completed' THEN datetime() ELSE n.completed_at END
+                n.completed_at = CASE WHEN $generation_state IN ['documented', 'link_verified', 'approved'] THEN datetime() ELSE n.completed_at END
             """,
             domain=domain,
             task_id=task_id,
@@ -355,63 +355,6 @@ class Neo4jGraphClient:
             generated_path=generated_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
-        )
-        tx.run(
-            """
-            MATCH (ancestor:KnowledgeStructureNode)-[:STRUCTURE_EDGE*1..]->(:KnowledgeStructureNode {id: $node_id})
-            WHERE ancestor.domain = $domain OR ancestor.task_id = $task_id
-            WITH DISTINCT ancestor
-            OPTIONAL MATCH (ancestor)-[:STRUCTURE_EDGE]->(child:KnowledgeStructureNode)
-            WITH ancestor, collect(child) AS children
-            WHERE size(children) > 0
-            WITH ancestor,
-                 size([child IN children WHERE coalesce(child.is_completed, false)]) AS completed_children,
-                 size(children) AS total_children,
-                 any(child IN children WHERE child.generation_state = 'evidence_running') AS has_evidence_running,
-                 any(child IN children WHERE child.generation_state = 'evidence_pending') AS has_evidence_pending,
-                 any(child IN children WHERE child.generation_state = 'generating') AS has_generating,
-                 any(child IN children WHERE child.generation_state = 'generated') AS has_generated
-            SET ancestor.completed_task_count = completed_children,
-                ancestor.pending_task_count = total_children - completed_children,
-                ancestor.is_generated = completed_children > 0 OR has_evidence_running OR has_evidence_pending OR has_generating OR has_generated,
-                ancestor.is_completed = completed_children = total_children,
-                ancestor.generation_state =
-                    CASE
-                        WHEN completed_children = total_children THEN 'completed'
-                        WHEN has_evidence_running THEN 'evidence_running'
-                        WHEN has_evidence_pending THEN 'evidence_pending'
-                        WHEN has_generating THEN 'generating'
-                        WHEN has_generated THEN 'generated'
-                        ELSE coalesce(ancestor.generation_state, 'planned')
-                    END,
-                ancestor.completed_at = CASE WHEN completed_children = total_children THEN datetime() ELSE ancestor.completed_at END,
-                ancestor.updated_at = datetime()
-            """,
-            domain=domain,
-            task_id=task_id,
-            node_id=node_id,
-        )
-        tx.run(
-            """
-            MATCH (d:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(node:KnowledgeStructureNode)
-            WITH d, collect(node) AS nodes
-            WITH d,
-                 [node IN nodes WHERE coalesce(node.parent_node_id, '') <> '' OR node.node_type <> 'domain'] AS children
-            WITH d,
-                 size(children) AS total_children,
-                 size([node IN children WHERE coalesce(node.is_completed, false)]) AS completed_children
-            SET d.completed_task_count = completed_children,
-                d.pending_task_count = total_children - completed_children,
-                d.is_completed = total_children > 0 AND completed_children = total_children,
-                d.generation_state =
-                    CASE
-                        WHEN total_children > 0 AND completed_children = total_children THEN 'completed'
-                        WHEN completed_children > 0 THEN 'evidence_running'
-                        ELSE coalesce(d.generation_state, 'planned')
-                    END,
-                d.updated_at = datetime()
-            """,
-            domain=domain,
         )
 
     @staticmethod

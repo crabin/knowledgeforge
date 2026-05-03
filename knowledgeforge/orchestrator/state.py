@@ -32,6 +32,10 @@ class WorkflowState(TypedDict, total=False):
     full_document_status: str
     workflow_events: list[WorkflowStepEvent]
     structure_graph: dict
+    structure_graph_sync: dict
+    structure_review_rounds: list[dict]
+    structure_review_status: str
+    structure_repair_log: list[dict]
     graph_snapshot: dict
     graph_event: dict
     file_update: dict

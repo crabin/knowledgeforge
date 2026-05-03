@@ -117,8 +117,8 @@ class Neo4jPathMapper:
                     "label": "KnowledgeStructureNode",
                     "id": node_id,
                     "generation_state": generation_state,
-                    "is_generated": generation_state in {"generated", "evidence_pending", "evidence_running", "completed"},
-                    "is_completed": generation_state == "completed",
+                    "is_generated": generation_state in {"documented", "link_querying", "link_verified", "approved"},
+                    "is_completed": generation_state in {"documented", "link_verified", "approved"},
                 }
             ],
             relationships=[],

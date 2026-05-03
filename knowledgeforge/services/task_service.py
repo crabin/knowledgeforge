@@ -659,6 +659,9 @@ class TaskService:
             "max_rounds": self._config.max_rounds,
             "completion_mode": request_context.completion_mode,
             "full_document_status": "pending" if request_context.completion_mode == "full_document" else "skipped",
+            "structure_review_rounds": [],
+            "structure_review_status": "pending",
+            "structure_repair_log": [],
             "task_status": "running" if audit_source == "api_async" else "created",
             "current_step": "intent_recognition",
             "current_action": "真实意图与领域名称已确认，等待生成目录结构图谱。",
@@ -842,6 +845,65 @@ class TaskService:
         )
         return report.to_dict()
 
+    def complete_documents(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be completed into full documents.")
+        self._ensure_framework_ready_for_document_completion(stored)
+        if str(stored.get("full_document_status", "")) == "generated":
+            return stored
+
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        result = self._writer.complete_framework_documents(
+            request_context,
+            round_number=int(stored.get("round_number", 1)),
+        )
+        now = now_iso()
+        event = WorkflowStepEvent(
+            step_id="document_completion",
+            label="补全文档",
+            status="completed",
+            timestamp=now,
+            details=result,
+        )
+        stored["request_context"] = request_context.to_dict()
+        stored["completion_mode"] = "framework"
+        stored["full_document_status"] = "generated"
+        stored["document_completion_result"] = result
+        stored["current_step"] = "document_completion"
+        stored["current_action"] = f"已补全 {len(result.get('completed_files', []))} 个框架文档。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        if isinstance(stored.get("document_artifact"), dict):
+            stored["document_artifact"]["generated_files"] = result.get("completed_files", [])
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "documents_completed", result)
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(stored)
+
+    @staticmethod
+    def _ensure_framework_ready_for_document_completion(stored: dict[str, Any]) -> None:
+        if (stored.get("post_storage_result") or {}).get("status") != "passed":
+            raise ValueError("knowledge framework is not fully governed yet; finish framework generation and quality checks first.")
+        if stored.get("task_status") != "verified":
+            raise ValueError("knowledge framework is not verified yet; finish the framework workflow first.")
+        queue = stored.get("task_queue_snapshot") or {}
+        incomplete = [
+            str(task.get("task_id", ""))
+            for task in queue.get("tasks", [])
+            if str(task.get("status", "")) != "completed"
+        ]
+        if incomplete:
+            raise ValueError(f"knowledge framework still has unfinished evidence tasks: {', '.join(incomplete[:5])}")
+        graph = stored.get("structure_graph") or (stored.get("request_context") or {}).get("structure_graph") or {}
+        if not isinstance(graph, dict) or not graph.get("nodes"):
+            raise ValueError("knowledge framework graph is unavailable; regenerate the framework first.")
+
     def resume_task(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
         if stored is None:
@@ -877,6 +939,9 @@ class TaskService:
             "max_rounds": self._config.max_rounds,
             "completion_mode": request_context.completion_mode,
             "full_document_status": stored.get("full_document_status", "pending" if request_context.completion_mode == "full_document" else "skipped"),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "pending"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
             "task_status": "resumed",
             "started_at": stored.get("started_at") or now_iso(),
         }

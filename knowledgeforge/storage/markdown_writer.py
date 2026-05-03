@@ -247,6 +247,59 @@ class MarkdownKnowledgeWriter:
             generated_files=generated_files,
         )
 
+    def complete_framework_documents(self, context: RequestContext, *, round_number: int) -> dict[str, object]:
+        domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        completed_files: list[str] = []
+        skipped_files: list[str] = []
+        for blueprint in context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            file_path = domain_dir / relative_path
+            if not file_path.exists():
+                skipped_files.append(file_path.as_posix())
+                continue
+            text = file_path.read_text(encoding="utf-8")
+            if "## 正文" in text and "## 知识定位" not in text:
+                skipped_files.append(file_path.as_posix())
+                continue
+            contract = parse_contract_block(text) or self._initial_contract(context, blueprint, file_path)
+            contract["required_sections"] = ["摘要", "关键结论", "背景与上下文", "正文", "证据与来源", "实体与关系候选", "冲突与不确定性", "后续动作"]
+            contract["completion_status"] = {
+                **(contract.get("completion_status", {}) if isinstance(contract.get("completion_status"), dict) else {}),
+                "state": "completed",
+                "completed_task_ids": [
+                    str(item.get("task_id", ""))
+                    for item in contract.get("query_tasks", [])
+                    if isinstance(item, dict) and str(item.get("status", "")) == "completed"
+                ],
+                "pending_task_ids": [
+                    str(item.get("task_id", ""))
+                    for item in contract.get("query_tasks", [])
+                    if isinstance(item, dict) and str(item.get("status", "")) != "completed"
+                ],
+                "updated_by": "DocumentCompletion",
+            }
+            file_path.write_text(
+                self._render_completed_framework_document(
+                    context=context,
+                    blueprint=blueprint,
+                    file_path=file_path,
+                    original_text=text,
+                    contract=contract,
+                    round_number=round_number,
+                ),
+                encoding="utf-8",
+            )
+            completed_files.append(file_path.as_posix())
+        return {
+            "status": "completed",
+            "completed_files": completed_files,
+            "skipped_files": skipped_files,
+            "total_files": len(completed_files) + len(skipped_files),
+            "completed_at": now_iso(),
+        }
+
     @staticmethod
     def _default_article_directory(context: RequestContext, domain_dir: Path, subdomain: str) -> Path:
         for blueprint in context.knowledge_blueprint:
@@ -424,6 +477,129 @@ class MarkdownKnowledgeWriter:
             ]
         )
 
+    def _render_completed_framework_document(
+        self,
+        *,
+        context: RequestContext,
+        blueprint: dict[str, object],
+        file_path: Path,
+        original_text: str,
+        contract: dict[str, object],
+        round_number: int,
+    ) -> str:
+        timestamp = now_iso()
+        title = str(blueprint.get("title", file_path.stem))
+        subdomain = str(blueprint.get("subdomain", "")) or (context.subdomains[0] if context.subdomains else "通用")
+        front_matter = self._extract_front_matter(original_text)
+        front_matter.update(
+            {
+                "id": str(front_matter.get("id") or blueprint.get("file_id", file_path.stem)),
+                "title": title,
+                "domain": context.domain,
+                "subdomain": subdomain,
+                "doc_type": str(blueprint.get("doc_type", "article")),
+                "source_type": "mixed",
+                "agent": "KnowledgeForge",
+                "round": round_number,
+                "status": "draft",
+                "updated_at": timestamp,
+                "version": str(front_matter.get("version") or "v1"),
+                "path": file_path.as_posix(),
+            }
+        )
+        front_matter.setdefault("created_at", timestamp)
+        front_matter.setdefault("tags", [str(blueprint.get("module_id", "")), *(context.focus_points or [])])
+        front_matter.setdefault("sources", [{"title": "Framework evidence file", "url": f"local://{file_path.name}", "publisher": "KnowledgeForge", "retrieved_at": timestamp, "reliability": "unknown"}])
+        evidence = self._extract_markdown_section(original_text, "证据与来源") or "\n".join(
+            [
+                "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                "|---|---|---|---|---|",
+                "| S0 | Framework evidence | 框架证据文件补全 | unknown | 待复核 |",
+            ]
+        )
+        knowledge_position = self._extract_markdown_section(original_text, "知识定位") or f"- 领域：{context.domain}\n- 子领域：{subdomain}"
+        learning_path = self._extract_markdown_section(original_text, "学习角色与路径") or "- 按结构图谱学习。"
+        relations = self._extract_markdown_section(original_text, "知识关系") or "- 关系待从 Neo4j 图谱继续抽取。"
+        uncertainty = self._extract_markdown_section(original_text, "冲突与不确定性") or "暂无。"
+        actions = self._extract_markdown_section(original_text, "后续动作") or "暂无。"
+        claims = contract.get("claims", [])
+        claim_lines = [
+            f"- {self._render_contract_item(item)}"
+            for item in claims
+        ] or [f"- {title} 已基于框架证据文件补全为完整知识文档。"]
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        return "\n".join(
+            [
+                "---",
+                front_matter_text,
+                "---",
+                "",
+                f"# {title}",
+                "",
+                "## 摘要",
+                "",
+                f"{title} 是 {context.domain} 知识框架中的一个知识节点。本文基于已完成的框架证据、学习路径和来源表，将节点补全为可阅读的知识库文档。",
+                "",
+                "## 关键结论",
+                "",
+                *claim_lines,
+                "",
+                "## 背景与上下文",
+                "",
+                knowledge_position,
+                "",
+                "### 学习路径",
+                "",
+                learning_path,
+                "",
+                "## 正文",
+                "",
+                f"### {title}",
+                "",
+                f"该节点在 {context.domain} 中承担“{str(blueprint.get('doc_role', 'topic_article'))}”角色。补全内容以证据表为事实来源，并保留后续可追溯的 contract。",
+                "",
+                "### 知识关系",
+                "",
+                relations,
+                "",
+                "## 证据与来源",
+                "",
+                evidence.strip(),
+                "",
+                "## 实体与关系候选",
+                "",
+                "### 实体候选",
+                "",
+                "| 实体 | 类型 | 描述 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | Domain | 所属领域 | S0 |",
+                f"| {title} | Concept | 知识框架节点 | S0 |",
+                "",
+                "### 关系候选",
+                "",
+                "| 主体 | 关系 | 客体 | 来源 |",
+                "|---|---|---|---|",
+                f"| {context.domain} | contains | {title} | S0 |",
+                "",
+                "## 冲突与不确定性",
+                "",
+                uncertainty.strip(),
+                "",
+                "## 后续动作",
+                "",
+                actions.strip(),
+                "",
+                render_contract_block(contract),
+                "",
+                "## 变更记录",
+                "",
+                "| 版本 | 时间 | 变更说明 |",
+                "|---|---|---|",
+                f"| v1 | {timestamp[:10]} | 基于框架证据补全完整文档 |",
+                "",
+            ]
+        )
+
     def _initial_contract(
         self,
         context: RequestContext,
@@ -526,6 +702,38 @@ class MarkdownKnowledgeWriter:
         if insert_at in text:
             return text.replace(insert_at, f"{block}\n{insert_at}", 1)
         return f"{text}\n{block}\n"
+
+    @staticmethod
+    def _extract_front_matter(text: str) -> dict[str, object]:
+        if not text.startswith("---\n"):
+            return {}
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            return {}
+        try:
+            payload = yaml.safe_load(parts[1]) or {}
+        except yaml.YAMLError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _extract_markdown_section(text: str, heading: str) -> str:
+        marker = f"## {heading}"
+        if marker not in text:
+            return ""
+        after = text.split(marker, 1)[1]
+        next_heading = after.find("\n## ")
+        section = after if next_heading < 0 else after[:next_heading]
+        return section.strip()
+
+    @staticmethod
+    def _render_contract_item(item: object) -> str:
+        if isinstance(item, dict):
+            for key in ("claim", "text", "description", "content", "title"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return str(item).strip()
 
     def _write_query_plan_document(
         self,

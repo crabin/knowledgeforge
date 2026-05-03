@@ -56,9 +56,10 @@ DEFAULT_QUERY_HINT_RULES = [
 
 FRAMEWORK_QUERY_HINT_RULES = [
     "只生成知识框架证据文件，不展开完整正文或长篇解释。",
-    "证据优先使用官方文档、标准、规范、权威论文或项目主页。",
+    "证据阶段只需要可信链接，不抓取网页内容补全文档正文。",
+    "证据优先使用官方文档、标准、规范、权威论文、项目主页或 Wikipedia。",
     "query_tasks 必须为严格 JSON 数组，且每个任务只绑定一个目标文件与证据章节。",
-    "除非明确需要趋势、案例或社区观点，否则 task_type 使用 query。",
+    "task_type 必须使用 query；MediaEngine 不参与默认架构证据链接阶段。",
 ]
 
 
@@ -75,14 +76,14 @@ ROLE_MUST_COVER: dict[str, list[str]] = {
 
 
 ROLE_ALLOWED_AGENT_TASKS: dict[str, list[str]] = {
-    "domain_overview": ["query", "media"],
+    "domain_overview": ["query"],
     "domain_index": ["query"],
-    "module_overview": ["query", "media"],
+    "module_overview": ["query"],
     "module_index": ["query"],
-    "topic_overview": ["query", "media"],
+    "topic_overview": ["query"],
     "topic_index": ["query"],
-    "module_doc": ["query", "media"],
-    "topic_article": ["query", "media"],
+    "module_doc": ["query"],
+    "topic_article": ["query"],
 }
 
 
@@ -115,8 +116,10 @@ def build_generation_system_prompt(completion_mode: str = "framework") -> str:
             "请基于给定文件规范输出严格 JSON，字段必须包含 markdown、query_tasks、claims、evidence_needed、completion_status。"
             "markdown 必须是证据型 Markdown 文本，包含 YAML front matter 与 knowledgeforge:contract 注释块。"
             "只写知识定位、学习角色/路径、知识关系、证据与来源、后续动作；不要生成完整正文、长篇教程或总结型文章。"
-            "query_tasks 必须优先检索官方文档、标准、规范、权威论文或项目主页。"
+            "query_tasks 必须优先检索官方文档、标准、规范、权威论文、项目主页或 Wikipedia。"
+            "证据阶段只保存可访问、贴近知识点的链接，不补全文档内容。"
             "query_tasks 每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。"
+            "task_type 必须为 query。"
         )
     return (
         "你是 KnowledgeForge 文件骨架生成器。"
@@ -136,6 +139,26 @@ def build_structure_graph_system_prompt() -> str:
         "node_type 只能是 domain、section、subtopic、article、index；edge_type 只能是 CONTAINS、INDEXES、RELATED_TO。"
         "relative_path 必须是相对 Markdown 路径，禁止绝对路径和 ..；根 domain 节点必须使用 README.md。"
         "图谱要让读者一眼看出该领域需要学习哪些知识、先后关系、学习角色和证据入口。"
+    )
+
+
+def build_structure_review_system_prompt() -> str:
+    return (
+        "你是 KnowledgeForge 知识架构审查器。"
+        "请审查给定领域知识结构图谱是否完整、层级清晰、知识点覆盖足够、学习顺序合理。"
+        "输出严格 JSON，字段必须包含 is_complete、status、missing_topics、suggested_repairs、reasoning。"
+        "status 只能是 passed 或 needs_repair。missing_topics 是缺失或薄弱知识点标题数组。"
+        "suggested_repairs 可包含 add_nodes、add_edges 或文字建议；不要生成 Markdown 正文。"
+    )
+
+
+def build_structure_repair_system_prompt() -> str:
+    return (
+        "你是 KnowledgeForge 知识架构修补器。"
+        "请根据 review 结果修补结构图谱，输出严格 JSON，字段必须包含 nodes、edges、root_node_id、source_intent。"
+        "必须保留原有有效节点和关系，只补充缺失知识点、修正层级或必要关系。"
+        "每个新增节点必须包含 node_id、title、node_type、relative_path、doc_type、owner_engine_candidates、required_query_tasks。"
+        "relative_path 必须是相对 Markdown 路径，禁止绝对路径和 ..。"
     )
 
 

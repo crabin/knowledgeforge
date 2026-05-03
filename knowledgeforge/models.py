@@ -332,6 +332,11 @@ class DomainTaskQueueItem:
     citations: list[dict[str, str]] = field(default_factory=list)
     attempts: int = 0
     round_number: int = 1
+    selected_link: str = ""
+    source_kind: str = ""
+    reachable: bool = False
+    relevance_reason: str = ""
+    checked_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

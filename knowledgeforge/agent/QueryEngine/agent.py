@@ -314,4 +314,34 @@ class QueryEngine(BaseEngine):
             created_at=now_iso(),
             approved_at=now_iso(),
         )
-        return self.run(context, round_number, plan)
+        result = self.run(context, round_number, plan)
+        selected = next((source for source in result.sources if source.url.startswith(("http://", "https://"))), None)
+        link_summary = (
+            f"已为 {task.get('claim_or_gap', task.get('query_text', '目标知识点'))} 找到可信链接：{selected.url}"
+            if selected
+            else "未找到可用于主链路的可信链接。"
+        )
+        return EngineRunResult(
+            agent_name=result.agent_name,
+            summary=link_summary,
+            key_points=[],
+            raw_material=result.raw_material,
+            coverage_topics=result.coverage_topics,
+            sources=result.sources,
+            collected_at=result.collected_at,
+            round_number=result.round_number,
+            execution_log=[
+                *result.execution_log,
+                {
+                    "event": "evidence_link_selected" if selected else "evidence_link_missing",
+                    "timestamp": now_iso(),
+                    "node": "QueryEngine",
+                    "details": {
+                        "task_id": str(task.get("task_id", "")),
+                        "selected_link": selected.url if selected else "",
+                        "source_kind": selected.source_type if selected else "",
+                    },
+                },
+            ],
+            artifacts=[],
+        )

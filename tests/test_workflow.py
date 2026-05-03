@@ -51,14 +51,19 @@ def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> N
     assert payload["finished_at"]
     assert payload["task_timing"]["elapsed_seconds"] >= 0
     assert payload["task_timing"]["is_running"] is False
+    assert len(payload["structure_review_rounds"]) == 2
+    assert payload["structure_review_status"] == "passed"
     assert any(
-        node["properties"].get("generation_state") == "completed"
+        node["properties"].get("generation_state") in {"documented", "link_verified"}
         for node in payload["graph_snapshot"]["nodes"]
     )
     assert payload["graph_event"]["event_type"] == "structure_node_status_changed"
     assert payload["file_update"]["status"] == "completed"
     assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
-    assert any(event["step_id"] == "evidence_realtime_write" for event in payload["workflow_events"])
+    assert any(event["step_id"] == "structure_review" for event in payload["workflow_events"])
+    assert any(event["step_id"] == "evidence_link_query" for event in payload["workflow_events"])
+    assert all(task["task_type"] == "query" for task in payload["task_queue_snapshot"]["tasks"])
+    assert any(task.get("selected_link") for task in payload["task_queue_snapshot"]["tasks"])
 
     document_path = Path(payload["document_artifact"]["path"])
     assert document_path.exists()
@@ -108,6 +113,146 @@ def test_task_workflow_full_document_mode_writes_final_document(tmp_path: Path) 
     content = document_path.read_text(encoding="utf-8")
     assert "## 正文" in content
     assert "source_type: mixed" in content
+
+
+def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+    review_calls = {"count": 0}
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "知识架构审查器" in system_prompt:
+            review_calls["count"] += 1
+            if review_calls["count"] == 1:
+                return {
+                    "is_complete": False,
+                    "status": "needs_repair",
+                    "missing_topics": ["评估指标"],
+                    "suggested_repairs": [{"type": "add_node", "title": "评估指标"}],
+                    "reasoning": "缺少评估指标知识点。",
+                }
+            return {
+                "is_complete": True,
+                "status": "passed",
+                "missing_topics": [],
+                "suggested_repairs": [],
+                "reasoning": "修补后结构完整。",
+            }
+        if "知识架构修补器" in system_prompt:
+            return {}
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["task_status"] == "verified"
+    assert [item["status"] for item in payload["structure_review_rounds"]] == ["needs_repair", "passed"]
+    assert payload["structure_repair_log"]
+    assert any(node["title"] == "评估指标" for node in payload["structure_graph"]["nodes"])
+    assert payload["document_artifact"]["generated_files"]
+
+
+def test_structure_review_failure_stops_before_documents(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "知识架构审查器" in system_prompt:
+            return {
+                "is_complete": False,
+                "status": "needs_repair",
+                "missing_topics": ["核心边界"],
+                "suggested_repairs": [{"type": "manual_review"}],
+                "reasoning": "两轮后仍缺少核心边界。",
+            }
+        if "知识架构修补器" in system_prompt:
+            return {}
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["task_status"] == "repair_required"
+    assert len(payload["structure_review_rounds"]) == 2
+    assert "document_artifact" not in payload
+    domain_dir = tmp_path / "save" / "知识工程"
+    assert not domain_dir.exists()
+
+
+def test_complete_documents_requires_finished_framework_then_expands_files(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
+
+    response = client.post(f"/tasks/{created['task_id']}/documents/complete")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["full_document_status"] == "generated"
+    result = payload["document_completion_result"]
+    assert result["completed_files"]
+    assert any(event["step_id"] == "document_completion" for event in payload["workflow_events"])
+
+    completed_path = Path(result["completed_files"][0])
+    content = completed_path.read_text(encoding="utf-8")
+    assert "## 正文" in content
+    assert "## 知识定位" not in content
+    assert "source_type: mixed" in content
+
+
+def test_complete_documents_rejects_unverified_framework(tmp_path: Path) -> None:
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    app = create_app(config)
+    config.task_state_root.joinpath("task-incomplete.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-incomplete",
+                "task_status": "running",
+                "request_context": {"domain": "知识工程", "subdomains": ["工作流编排"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks/task-incomplete/documents/complete")
+
+    assert response.status_code == 400
+    assert "running tasks cannot be completed" in response.get_json()["error"]
 
 
 def test_intake_session_clarifies_ml_without_starting_task(tmp_path: Path) -> None:

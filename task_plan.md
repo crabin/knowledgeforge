@@ -4,14 +4,15 @@
 在不偏离项目需求、知识文档格式规范和流程执行文档的前提下，分阶段落地 KnowledgeForge 的主链路闭环，并为 Neo4j、质量检测、版本更新和后续研报分支建立稳定接口与治理骨架。
 
 ## 当前阶段
-阶段 10：知识框架优先主链路已完成，当前默认产物为知识框架图谱与框架证据文件，完整知识文档改为后置可选分支
+阶段 11：知识架构 review 优先主链路已完成，当前默认产物为 Neo4j 知识架构图谱、两轮架构 review、架构 Markdown 与可信证据链接；完整知识文档保留为后置可选分支
 
 ## 当前真实代码主链路（2026-05-03）
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
-- 结构先行：工作流先生成知识框架型 `structure_graph`，再同步 Neo4j 任务图，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
-- 框架证据文件串行生成：按结构图谱推导 `knowledge_blueprint`，默认一次生成一个框架证据 Markdown 文件；文件开始生成时图谱节点进入 `generating`，写入成功后进入 `generated` 或 `evidence_pending`。
-- 证据即时回写：`run_query_queue` 每完成一条证据任务，就立即更新目标 Markdown contract、`knowledge_task_queue.json`、Neo4j 节点状态和任务 SSE payload；`fill_evidence` 只保留为最终一致性校验与兼容兜底。
-- 父级自动聚合：KnowledgePoint / Article 状态变化后会向上聚合 SubTopic / Domain；所有 required 子节点完成后父级进入 `completed`。
+- 结构先行：工作流先生成知识架构型 `structure_graph`，立即同步 Neo4j 首屏呈现，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
+- 架构 review：本地 Markdown 落盘前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时进入 `repair_required`，不生成本地架构文档。
+- 架构文档串行生成：按 review 通过后的结构图谱推导 `knowledge_blueprint`，默认一次生成一个架构 Markdown 文件；文件开始生成时图谱节点进入 `documenting`，写入成功后进入 `documented`。
+- 证据链接记录：`query_evidence_links` 每完成一条链接任务，只更新 `knowledge_task_queue.json` 的 `selected_link/source_kind/reachable/relevance_reason/checked_at`、Neo4j 目标节点和任务 SSE payload；不再把网页内容或摘要即时写回 Markdown。
+- 父级不再自动聚合：架构阶段完整性只看两轮 review 结果，文档补全阶段如需进度聚合另行实现。
 - 前端实时同步：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot`、`graph_event`、`file_update`；前端优先使用 SSE 图谱快照渲染，`/tasks/{task_id}/graph` 与手动刷新只作为 fallback。
 - 后置治理分支：`completion_mode=framework` 时治理框架图谱与证据文件并跳过完整文档；`completion_mode=full_document` 时在证据完成后补全最终 mixed 完整文档；旧值 `file_level` 兼容为 `full_document`。ChromaDB 仍不进入当前主链路。
 

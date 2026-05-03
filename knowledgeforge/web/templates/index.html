@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Knowledge Engineering Console</p>
         <h1>KnowledgeForge 功能工作台</h1>
-        <p class="lead">从领域输入、知识框架图谱、框架证据文件、域级查询队列到质量回流、版本冻结和可选完整文档的一站式演示面板。</p>
+        <p class="lead">从领域输入、Neo4j 知识架构图谱、两轮架构审查、架构文档、证据链接到质量回流和可选完整文档的一站式演示面板。</p>
       </div>
       <div class="status-stack" aria-label="系统状态">
         <div class="status-pill">
@@ -47,38 +47,43 @@
           </article>
           <article class="flow-step" data-step-id="structure_graph_planning">
             <span>02</span>
-            <h3>图谱规划</h3>
-            <p>生成目录结构图谱和知识点文件蓝图。</p>
+            <h3>图谱生成</h3>
+            <p>生成知识架构图谱和知识点文件蓝图。</p>
           </article>
-          <article class="flow-step" data-step-id="llm_generating">
+          <article class="flow-step" data-step-id="neo4j_structure_sync">
             <span>03</span>
-            <h3>文件生成</h3>
-            <p>串行生成知识点 Markdown，并同步图谱节点状态。</p>
+            <h3>Neo4j呈现</h3>
+            <p>先将架构图谱同步到 Neo4j。</p>
           </article>
-          <article class="flow-step" data-step-id="query_queue_running">
+          <article class="flow-step" data-step-id="structure_review">
             <span>04</span>
-            <h3>证据查询</h3>
-            <p>按队列一次执行一个 Query / Media 证据任务。</p>
+            <h3>架构Review</h3>
+            <p>执行两轮自动审查与修补。</p>
           </article>
-          <article class="flow-step" data-step-id="evidence_realtime_write">
+          <article class="flow-step" data-step-id="architecture_documents">
             <span>05</span>
-            <h3>即时回写</h3>
-            <p>每条证据完成后立即更新目标 Markdown 和图谱。</p>
+            <h3>架构文档</h3>
+            <p>审查通过后生成本地架构文档。</p>
           </article>
-          <article class="flow-step" data-step-id="round_validation">
+          <article class="flow-step" data-step-id="evidence_link_query">
             <span>06</span>
-            <h3>父级聚合</h3>
-            <p>验证轮次并聚合子领域与领域完成状态。</p>
+            <h3>证据链接</h3>
+            <p>只记录官方或高公信力链接。</p>
           </article>
           <article class="flow-step" data-step-id="governing">
             <span>07</span>
             <h3>治理质检</h3>
             <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
           </article>
-          <article class="flow-step" data-step-id="versioning">
+          <article class="flow-step" data-step-id="document_completion">
             <span>08</span>
+            <h3>补全文档</h3>
+            <p>可选：框架完成后逐个补全知识文档。</p>
+          </article>
+          <article class="flow-step" data-step-id="versioning">
+            <span>09</span>
             <h3>版本研报</h3>
-            <p>冻结通过质量检测的版本，并基于冻结知识生成研报。</p>
+            <p>可选：冻结版本并生成研报。</p>
           </article>
         </div>
       </details>
@@ -134,11 +139,6 @@
           <form class="action-form" id="create-intake-form">
             <label for="intake-message">初始描述</label>
             <textarea id="intake-message" name="message" rows="4" placeholder="例如：用中文整理 ML 的最新论文方向"></textarea>
-            <label for="intake-completion-mode">产出模式</label>
-            <select id="intake-completion-mode" name="completion_mode">
-              <option value="framework" selected>知识框架与证据</option>
-              <option value="full_document">完整知识文档</option>
-            </select>
             <button type="submit">创建澄清会话</button>
           </form>
           <form class="action-form split-form" id="append-intake-form">
@@ -162,7 +162,6 @@
             <label for="task-payload">直接创建任务 JSON</label>
             <textarea id="task-payload" name="payload" rows="8">{
   "domain": "知识工程",
-  "completion_mode": "framework",
   "subdomains": ["工作流编排", "知识沉淀"],
   "focus_points": ["状态恢复", "来源追溯"]
 }</textarea>
@@ -177,8 +176,9 @@
               <button type="button" data-task-action="queue">查看队列</button>
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
-              <button type="button" data-task-action="report">生成研报</button>
+              <button type="button" data-task-action="complete-documents">补全文档</button>
               <button type="button" data-task-action="logs">查看日志</button>
+              <button type="button" data-task-action="report">生成研报</button>
               <button class="danger-button" type="button" id="initialize-system">初始化系统</button>
             </div>
           </form>

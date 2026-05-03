@@ -37,7 +37,11 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "生成与查询队列状态" in body
     assert "plan-full-panel" in body
     assert "trace-grid" in body
-    assert "文件生成" in body
+    assert "架构文档" in body
+    assert "架构Review" in body
+    assert "补全文档" in body
+    assert "data-task-action=\"complete-documents\"" in body
+    assert "产出模式" not in body
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body

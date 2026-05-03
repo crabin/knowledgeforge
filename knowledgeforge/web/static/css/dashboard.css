@@ -433,20 +433,23 @@ h3 {
   box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.12), 0 10px 20px rgba(47, 95, 145, 0.11);
 }
 
-.neo4j-node-card.state-completed {
+.neo4j-node-card.state-approved,
+.neo4j-node-card.state-documented,
+.neo4j-node-card.state-link_verified {
   border-left-color: var(--green);
   background: #f1f8f2;
 }
 
-.neo4j-node-card.state-generating,
-.neo4j-node-card.state-generated,
-.neo4j-node-card.state-evidence_pending,
-.neo4j-node-card.state-evidence_running {
+.neo4j-node-card.state-reviewing,
+.neo4j-node-card.state-repairing,
+.neo4j-node-card.state-documenting,
+.neo4j-node-card.state-link_querying {
   border-left-color: var(--blue);
   background: #f2f6fb;
 }
 
-.neo4j-node-card.state-failed {
+.neo4j-node-card.state-failed,
+.neo4j-node-card.state-link_failed {
   border-left-color: var(--red);
   background: #fff3ef;
 }

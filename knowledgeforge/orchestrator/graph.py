@@ -30,7 +30,9 @@ from knowledgeforge.prompts.knowledge_file_generation import (
     PROMPT_PROFILE_VERSION,
     build_generation_system_prompt,
     build_prompt_spec,
+    build_structure_repair_system_prompt,
     build_structure_graph_system_prompt,
+    build_structure_review_system_prompt,
     build_validation_system_prompt,
 )
 from knowledgeforge.runtime.domain_task_queue_store import DomainTaskQueueStore
@@ -81,6 +83,19 @@ def _render_contract_item(item: Any) -> str:
     return str(item)
 
 
+def _infer_source_kind(url: str) -> str:
+    lowered = url.lower()
+    if "wikipedia.org" in lowered:
+        return "wikipedia"
+    if "github.com" in lowered:
+        return "project_homepage"
+    if "arxiv.org" in lowered or "doi.org" in lowered:
+        return "paper"
+    if any(marker in lowered for marker in ("docs.", "/docs", "documentation", "developer.")):
+        return "official_documentation"
+    return "authoritative_link"
+
+
 class KnowledgeGraphWorkflow:
     def __init__(
         self,
@@ -117,24 +132,58 @@ class KnowledgeGraphWorkflow:
     def _build_graph(self):
         graph = StateGraph(WorkflowState)
         graph.add_node("generate_structure_graph", self._generate_structure_graph)
-        graph.add_node("generate_files", self._generate_files)
-        graph.add_node("run_query_queue", self._run_query_queue)
+        graph.add_node("sync_structure_graph_to_neo4j", self._sync_structure_graph_to_neo4j)
+        graph.add_node("review_structure_round_1", self._review_structure_round_1)
+        graph.add_node("repair_structure_graph_round_1", self._repair_structure_graph_round_1)
+        graph.add_node("review_structure_round_2", self._review_structure_round_2)
+        graph.add_node("repair_structure_graph_round_2", self._repair_structure_graph_round_2)
+        graph.add_node("finalize_structure_review_failure", self._finalize_structure_review_failure)
+        graph.add_node("generate_architecture_documents", self._generate_files)
+        graph.add_node("query_evidence_links", self._run_query_queue)
         graph.add_node("validate_round", self._validate_round)
         graph.add_node("fill_evidence", self._fill_evidence)
         graph.add_node("run_post_storage", self._run_post_storage)
         graph.set_entry_point("generate_structure_graph")
-        graph.add_edge("generate_structure_graph", "generate_files")
-        graph.add_edge("generate_files", "run_query_queue")
-        graph.add_edge("run_query_queue", "validate_round")
+        graph.add_edge("generate_structure_graph", "sync_structure_graph_to_neo4j")
+        graph.add_edge("sync_structure_graph_to_neo4j", "review_structure_round_1")
+        graph.add_conditional_edges(
+            "review_structure_round_1",
+            self._route_after_structure_review,
+            {
+                "repair_structure_graph_round_1": "repair_structure_graph_round_1",
+                "review_structure_round_2": "review_structure_round_2",
+            },
+        )
+        graph.add_edge("repair_structure_graph_round_1", "review_structure_round_2")
+        graph.add_conditional_edges(
+            "review_structure_round_2",
+            self._route_after_final_structure_review,
+            {
+                "repair_structure_graph_round_2": "repair_structure_graph_round_2",
+                "generate_architecture_documents": "generate_architecture_documents",
+                "finalize_structure_review_failure": "finalize_structure_review_failure",
+            },
+        )
+        graph.add_conditional_edges(
+            "repair_structure_graph_round_2",
+            self._route_after_final_structure_repair,
+            {
+                "generate_architecture_documents": "generate_architecture_documents",
+                "finalize_structure_review_failure": "finalize_structure_review_failure",
+            },
+        )
+        graph.add_edge("generate_architecture_documents", "query_evidence_links")
+        graph.add_edge("query_evidence_links", "validate_round")
         graph.add_conditional_edges(
             "validate_round",
             self._route_after_validation,
             {
-                "run_query_queue": "run_query_queue",
+                "run_query_queue": "query_evidence_links",
                 "fill_evidence": "fill_evidence",
             },
         )
         graph.add_edge("fill_evidence", "run_post_storage")
+        graph.add_edge("finalize_structure_review_failure", END)
         graph.add_edge("run_post_storage", END)
         return graph.compile()
 
@@ -193,7 +242,6 @@ class KnowledgeGraphWorkflow:
         updates = {
             "request_context": context,
             "structure_graph": context.structure_graph,
-            "structure_graph_sync": self._sync_structure_graph_for_generation(state["task_id"], context),
             "graph_snapshot": self._local_graph_snapshot(context),
             "graph_event": {
                 "event_type": "structure_graph_initialized",
@@ -203,11 +251,143 @@ class KnowledgeGraphWorkflow:
                 "timestamp": now_iso(),
             },
             "task_status": "running",
-            "current_step": "structure_graph_ready",
+            "current_step": "structure_graph_planning",
             "current_action": f"目录结构图谱已生成：{summary['node_count']} 个节点，{summary['edge_count']} 条关系。",
         }
         self._commit_state(state, updates)
         self._emit_workflow_event(state, "structure_graph_ready", "目录结构图谱已生成", "completed", summary)
+        return updates
+
+    def _sync_structure_graph_to_neo4j(self, state: WorkflowState) -> dict[str, Any]:
+        context = state["request_context"]
+        self._emit_workflow_event(state, "neo4j_structure_sync", "同步知识架构图谱到 Neo4j", "active")
+        sync_result = self._sync_structure_graph_for_generation(state["task_id"], context)
+        updates = {
+            "structure_graph_sync": sync_result,
+            "graph_snapshot": self._local_graph_snapshot(context),
+            "graph_event": {
+                "event_type": "structure_graph_synced_to_neo4j",
+                "node_id": (context.structure_graph or {}).get("root_node_id", ""),
+                "status": sync_result.get("status", "unknown"),
+                "path": "",
+                "timestamp": now_iso(),
+            },
+            "task_status": "running",
+            "current_step": "neo4j_structure_sync",
+            "current_action": "知识架构图谱已优先同步到 Neo4j，准备进入两轮架构审查。",
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(state, "neo4j_structure_sync", "Neo4j 知识架构图谱已同步", "completed", sync_result)
+        return updates
+
+    def _review_structure_round_1(self, state: WorkflowState) -> dict[str, Any]:
+        return self._review_structure_round(state, 1)
+
+    def _review_structure_round_2(self, state: WorkflowState) -> dict[str, Any]:
+        return self._review_structure_round(state, 2)
+
+    def _review_structure_round(self, state: WorkflowState, round_number: int) -> dict[str, Any]:
+        context = state["request_context"]
+        self._emit_workflow_event(state, "structure_review", f"第 {round_number} 轮知识架构审查", "active", {"round": round_number})
+        self._set_all_structure_nodes_status(context, "reviewing")
+        review = self._run_structure_review(context, round_number)
+        review["round"] = round_number
+        review["reviewed_at"] = now_iso()
+        rounds = [*state.get("structure_review_rounds", []), review]
+        status = "passed" if review.get("is_complete") else "needs_repair"
+        if status == "passed":
+            self._set_all_structure_nodes_status(context, "approved")
+        updates = {
+            "request_context": context,
+            "structure_graph": context.structure_graph,
+            "structure_review_rounds": rounds,
+            "structure_review_status": status,
+            "graph_snapshot": self._local_graph_snapshot(context),
+            "graph_event": {
+                "event_type": "structure_review_completed",
+                "node_id": (context.structure_graph or {}).get("root_node_id", ""),
+                "status": status,
+                "path": "",
+                "timestamp": now_iso(),
+            },
+            "task_status": "running",
+            "current_step": "structure_review",
+            "current_action": review.get("reasoning") or f"第 {round_number} 轮知识架构审查完成。",
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(
+            state,
+            "structure_review",
+            f"第 {round_number} 轮知识架构审查{'通过' if status == 'passed' else '发现缺口'}",
+            "completed" if status == "passed" else "blocked",
+            review,
+        )
+        return updates
+
+    def _repair_structure_graph_round_1(self, state: WorkflowState) -> dict[str, Any]:
+        return self._repair_structure_graph(state, 1)
+
+    def _repair_structure_graph_round_2(self, state: WorkflowState) -> dict[str, Any]:
+        return self._repair_structure_graph(state, 2)
+
+    def _repair_structure_graph(self, state: WorkflowState, round_number: int) -> dict[str, Any]:
+        context = state["request_context"]
+        review = (state.get("structure_review_rounds") or [{}])[-1]
+        self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构自动修补", "active", {"round": round_number})
+        self._set_all_structure_nodes_status(context, "repairing")
+        repaired_graph, applied_changes = self._run_structure_repair(context, review)
+        context.structure_graph = repaired_graph
+        derived_context = derive_context_from_structure_graph(
+            graph=normalize_structure_graph_payload(
+                payload=repaired_graph,
+                domain=context.domain,
+                subdomains=context.subdomains,
+                focus_points=context.focus_points,
+                source_intent=context.original_input or context.domain,
+            ),
+            domain=context.domain,
+        )
+        normalized = normalize_structure_graph_payload(
+            payload=context.structure_graph,
+            domain=context.domain,
+            subdomains=context.subdomains,
+            focus_points=context.focus_points,
+            source_intent=context.original_input or context.domain,
+        )
+        context.structure_graph = normalized.to_dict()
+        self._initialize_structure_graph_status(context)
+        context.structure_mode = str(derived_context["structure_mode"])
+        context.knowledge_modules = derived_context["knowledge_modules"]
+        context.core_topics = derived_context["core_topics"] or context.core_topics
+        context.navigation_targets = derived_context["navigation_targets"]
+        context.knowledge_blueprint = derived_context["knowledge_blueprint"]
+        context.required_files = derived_context["required_files"]
+        sync_result = self._sync_structure_graph_for_generation(state["task_id"], context)
+        repair_entry = {
+            "round": round_number,
+            "applied_changes": applied_changes,
+            "synced_to_neo4j": sync_result,
+            "repaired_at": now_iso(),
+        }
+        updates = {
+            "request_context": context,
+            "structure_graph": context.structure_graph,
+            "structure_graph_sync": sync_result,
+            "structure_repair_log": [*state.get("structure_repair_log", []), repair_entry],
+            "graph_snapshot": self._local_graph_snapshot(context),
+            "graph_event": {
+                "event_type": "structure_graph_repaired",
+                "node_id": context.structure_graph.get("root_node_id", ""),
+                "status": "repairing",
+                "path": "",
+                "timestamp": now_iso(),
+            },
+            "task_status": "running",
+            "current_step": "structure_repair",
+            "current_action": f"第 {round_number} 轮知识架构已自动修补，应用 {len(applied_changes)} 项变更。",
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构已自动修补", "completed", repair_entry)
         return updates
 
     def _generate_files(self, state: WorkflowState) -> dict[str, Any]:
@@ -230,7 +410,7 @@ class KnowledgeGraphWorkflow:
         domain_dir = self._domain_dir(context)
         queue = self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
         context.generation_queue_path = self._queue_store.queue_path(domain_dir).as_posix()
-        self._emit_workflow_event(state, "blueprint_ready", "知识文件蓝图已准备", "active")
+        self._emit_workflow_event(state, "architecture_documents", "知识架构文档蓝图已准备", "active")
         file_states = self._writer.materialize_knowledge_base(context=context, round_number=state.get("round_number", 1))
         total_files = len(context.knowledge_blueprint)
         generated_count = 0
@@ -243,7 +423,7 @@ class KnowledgeGraphWorkflow:
             spec = build_prompt_spec(blueprint, completion_mode=context.completion_mode)
             self._emit_workflow_event(
                 state,
-                "llm_generating",
+                "architecture_documents",
                 f"开始生成文件：{relative_path}",
                 "active",
                 {
@@ -259,12 +439,12 @@ class KnowledgeGraphWorkflow:
                 state,
                 context,
                 blueprint,
-                generation_state="generating",
+                generation_state="documenting",
                 generated_path=file_path.as_posix(),
             )
             self._emit_workflow_event(
                 state,
-                "llm_generating",
+                "architecture_documents",
                 f"生成{file_label}：{relative_path}",
                 "active",
                 {"file_path": file_path.as_posix()},
@@ -280,7 +460,7 @@ class KnowledgeGraphWorkflow:
                 state,
                 domain_dir,
                 queue,
-                current_step="llm_generating",
+                current_step="architecture_documents",
                 current_action=f"正在生成{file_label}：{relative_path}",
             )
             generated = self._generate_single_file(context, blueprint, spec, file_path)
@@ -290,7 +470,7 @@ class KnowledgeGraphWorkflow:
                 state,
                 context,
                 blueprint,
-                generation_state="evidence_pending" if query_tasks else "completed",
+                generation_state="documented",
                 generated_path=file_path.as_posix(),
                 pending_task_count=len(query_tasks),
                 completed_task_count=0,
@@ -308,13 +488,13 @@ class KnowledgeGraphWorkflow:
                 state,
                 domain_dir,
                 queue,
-                current_step="llm_generating",
+                current_step="architecture_documents",
                 current_action=f"{file_label}已保存：{relative_path}",
                 extra_updates={"latest_structure_node_sync": graph_generation_sync} if graph_generation_sync else None,
             )
             self._emit_workflow_event(
                 state,
-                "llm_generating",
+                "architecture_documents",
                 f"{file_label}已保存：{relative_path}",
                 "completed",
                 {
@@ -335,11 +515,11 @@ class KnowledgeGraphWorkflow:
             "task_queue_path": queue_path.as_posix(),
             "task_queue_snapshot": queue,
             "task_status": "running",
-            "current_step": "llm_generating",
-            "current_action": f"{file_label}串行生成完成，准备进入查询队列。",
+            "current_step": "architecture_documents",
+            "current_action": f"{file_label}串行生成完成，准备进入证据链接查询。",
             "messages": [
                 *state.get("messages", []),
-                AgentMessage(role="assistant", content=f"{file_label}已串行生成，开始处理依据查询队列。"),
+                AgentMessage(role="assistant", content=f"{file_label}已串行生成，开始查询可信证据链接。"),
             ],
         }
         self._commit_state(state, updates)
@@ -514,12 +694,16 @@ class KnowledgeGraphWorkflow:
         domain_dir = self._domain_dir(context)
         queue = self._queue_store.load(domain_dir) or {}
         round_number = int(queue.get("current_round", 1))
-        self._emit_workflow_event(state, "query_queue_running", f"第 {round_number} 轮查询队列执行", "active")
+        self._emit_workflow_event(state, "evidence_link_query", f"第 {round_number} 轮可信证据链接查询", "active")
         outputs = dict(state.get("agent_outputs", {}))
         for index, task in enumerate(queue.get("tasks", [])):
             if str(task.get("round_number", 1)) != str(round_number):
                 continue
             if str(task.get("status", "pending")) not in {"pending", "insufficient"}:
+                continue
+            if str(task.get("task_type", "query")) != "query":
+                queue["tasks"][index]["status"] = "skipped"
+                queue["tasks"][index]["result_summary"] = "主链路证据阶段仅执行 QueryEngine 可信链接查询，Media 任务留给后续文档补全或扩展材料。"
                 continue
             queue["tasks"][index]["status"] = "running"
             queue["tasks"][index]["attempts"] = int(task.get("attempts", 0)) + 1
@@ -527,21 +711,21 @@ class KnowledgeGraphWorkflow:
                 state,
                 context,
                 queue["tasks"][index],
-                generation_state="evidence_running",
+                generation_state="link_querying",
             )
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(
                 state,
                 domain_dir,
                 queue,
-                current_step="query_queue_running",
-                current_action=f"正在执行队列任务：{task.get('task_id', '')}",
+                current_step="evidence_link_query",
+                current_action=f"正在查询可信证据链接：{task.get('task_id', '')}",
                 extra_updates={"latest_structure_node_sync": running_node_sync} if running_node_sync else None,
             )
             self._emit_workflow_event(
                 state,
-                "query_queue_running",
-                f"执行队列任务：{task.get('task_id', '')}",
+                "evidence_link_query",
+                f"查询可信证据链接：{task.get('task_id', '')}",
                 "active",
                 {"task_id": task.get("task_id", ""), "task_type": task.get("task_type", "")},
             )
@@ -551,25 +735,28 @@ class KnowledgeGraphWorkflow:
                     "status": result["status"],
                     "result_summary": result["result_summary"],
                     "citations": result["citations"],
+                    "selected_link": result["selected_link"],
+                    "source_kind": result["source_kind"],
+                    "reachable": result["reachable"],
+                    "relevance_reason": result["relevance_reason"],
+                    "checked_at": result["checked_at"],
                 }
             )
             outputs[result["agent_name"]] = self._merge_engine_output(outputs.get(result["agent_name"]), result["engine_output"])
-            self._writer.apply_output_artifacts(context, {result["agent_name"]: result["engine_output"]})
             file_update = self._build_file_update_from_task(queue["tasks"][index])
             self._emit_workflow_event(
                 state,
-                "evidence_realtime_write",
-                f"证据已即时回写：{file_update.get('path', '')}",
+                "evidence_link_recorded",
+                f"可信证据链接已记录：{result['selected_link'] or file_update.get('path', '')}",
                 "completed" if result["status"] == "completed" else "blocked",
                 file_update,
             )
             completed_count, pending_count = self._file_completion_counts(queue["tasks"][index])
-            completed = result["status"] == "completed" and pending_count == 0
             completed_node_sync = self._update_structure_node_status_for_task(
                 state,
                 context,
                 queue["tasks"][index],
-                generation_state="completed" if completed else ("evidence_pending" if result["status"] == "completed" else "failed"),
+                generation_state="link_verified" if result["status"] == "completed" else "link_failed",
                 pending_task_count=pending_count,
                 completed_task_count=completed_count,
             )
@@ -578,8 +765,8 @@ class KnowledgeGraphWorkflow:
                 state,
                 domain_dir,
                 queue,
-                current_step="query_queue_running",
-                current_action=f"队列任务已完成：{task.get('task_id', '')}",
+                current_step="evidence_link_query",
+                current_action=f"证据链接任务已完成：{task.get('task_id', '')}",
                 extra_updates={
                     "agent_outputs": outputs,
                     "file_update": file_update,
@@ -588,8 +775,8 @@ class KnowledgeGraphWorkflow:
             )
             self._emit_workflow_event(
                 state,
-                "query_queue_running",
-                f"队列任务已完成：{task.get('task_id', '')}",
+                "evidence_link_query",
+                f"证据链接任务已完成：{task.get('task_id', '')}",
                 "completed" if result["status"] == "completed" else "blocked",
                 {"task_id": task.get("task_id", ""), "task_type": task.get("task_type", ""), "status": result["status"]},
             )
@@ -597,8 +784,8 @@ class KnowledgeGraphWorkflow:
             "agent_outputs": outputs,
             "task_queue_snapshot": queue,
             "task_status": "running",
-            "current_step": "query_queue_running",
-            "current_action": f"第 {round_number} 轮查询队列执行完成。",
+            "current_step": "evidence_link_query",
+            "current_action": f"第 {round_number} 轮可信证据链接查询完成。",
         }
         self._commit_state(state, updates)
         return updates
@@ -666,7 +853,7 @@ class KnowledgeGraphWorkflow:
         outputs = dict(state.get("agent_outputs", {}))
         outputs["QueueFillPass"] = EngineRunResult(
             agent_name="QueueFillPass",
-            summary="统一回填队列中的来源与结论。" if full_document_mode else "知识框架证据队列已完成收尾。",
+            summary="统一回填队列中的来源与结论。" if full_document_mode else "可信证据链接队列已完成收尾，正文补全留给后置文档补全任务。",
             key_points=[],
             raw_material=[],
             coverage_topics=context.subdomains,
@@ -675,7 +862,8 @@ class KnowledgeGraphWorkflow:
             round_number=state.get("round_number", 1),
             artifacts=self._build_fill_artifacts(queue.get("tasks", [])),
         )
-        self._writer.apply_output_artifacts(context, outputs)
+        if full_document_mode:
+            self._writer.apply_output_artifacts(context, outputs)
         if full_document_mode:
             artifact = self._writer.write(
                 context=context,
@@ -952,18 +1140,16 @@ class KnowledgeGraphWorkflow:
             required_query_tasks = int(requirements.get("required_query_tasks", 0) or 0)
         if required_query_tasks <= 0:
             return []
-        owners = [str(item) for item in blueprint.get("owner_engine_candidates", [])]
-        task_type = "media" if "MediaEngine" in owners and "QueryEngine" not in owners else "query"
         return [
             {
                 "task_id": f"{blueprint.get('file_id', file_path.stem)}-task-1",
-                "task_type": task_type,
-                "section": "证据与来源" if task_type == "query" else "正文",
+                "task_type": "query",
+                "section": "证据与来源",
                 "claim_or_gap": f"补充 {blueprint.get('title', file_path.stem)} 的关键依据",
-                "query_text": f"{blueprint.get('title', file_path.stem)} {'official documentation' if task_type == 'query' else 'community trend discussion'}",
-                "expected_evidence": ["可追溯来源", "与结论对应的支撑信息"],
-                "preferred_source_types": ["official documentation"] if task_type == "query" else ["community", "blog"],
-                "acceptance_criteria": ["至少得到一条可回填的依据", "能写入对应文件章节"],
+                "query_text": f"{blueprint.get('title', file_path.stem)} official documentation wikipedia",
+                "expected_evidence": ["官方或高公信力链接", "与知识点最贴近的说明入口"],
+                "preferred_source_types": ["official documentation", "standard", "paper", "project homepage", "wikipedia"],
+                "acceptance_criteria": ["至少得到一条可访问链接", "链接能解释对应知识点"],
                 "status": "pending",
             }
         ]
@@ -975,7 +1161,7 @@ class KnowledgeGraphWorkflow:
                 continue
             queue_task = DomainTaskQueueItem(
                 task_id=str(task.get("task_id", "")),
-                task_type="media" if str(task.get("task_type", "query")) == "media" else "query",
+                task_type="query",
                 target_file_path=file_path.as_posix(),
                 target_section=str(task.get("section", "正文")),
                 claim_or_gap=str(task.get("claim_or_gap", "")),
@@ -1006,35 +1192,57 @@ class KnowledgeGraphWorkflow:
         return merged
 
     def _execute_queue_task(self, context: RequestContext, round_number: int, task: dict[str, Any]) -> dict[str, Any]:
-        if str(task.get("task_type", "query")) == "media":
-            result = self._media_engine.run_evidence_task(context=context, round_number=round_number, task=task)
-        else:
-            result = self._query_engine.run_evidence_task(context=context, round_number=round_number, task=task)
-        citations = [
-            {
+        result = self._query_engine.run_evidence_task(context=context, round_number=round_number, task=task)
+        selected = self._select_evidence_link(result)
+        citations = [selected["citation"]] if selected["citation"] else []
+        status = "completed" if selected["reachable"] and selected["url"] else "insufficient"
+        return {
+            "status": status,
+            "result_summary": selected["relevance_reason"],
+            "citations": citations,
+            "selected_link": selected["url"],
+            "source_kind": selected["source_kind"],
+            "reachable": selected["reachable"],
+            "relevance_reason": selected["relevance_reason"],
+            "checked_at": selected["checked_at"],
+            "engine_output": result,
+            "agent_name": result.agent_name,
+        }
+
+    @staticmethod
+    def _select_evidence_link(result: EngineRunResult) -> dict[str, Any]:
+        preferred_order = {"high": 0, "medium": 1, "unknown": 2, "low": 3}
+        candidates = sorted(
+            [source for source in result.sources if str(source.url).startswith(("http://", "https://"))],
+            key=lambda source: preferred_order.get(source.reliability, 4),
+        )
+        if not candidates:
+            checked_at = now_iso()
+            return {
+                "url": "",
+                "source_kind": "",
+                "reachable": False,
+                "relevance_reason": "未找到可访问的官方或高公信力链接。",
+                "checked_at": checked_at,
+                "citation": {},
+            }
+        source = candidates[0]
+        checked_at = now_iso()
+        source_kind = source.source_type or _infer_source_kind(source.url)
+        return {
+            "url": source.url,
+            "source_kind": source_kind,
+            "reachable": True,
+            "relevance_reason": f"已选择 {source.publisher or source_kind} 的可信链接，用于解释目标知识点。",
+            "checked_at": checked_at,
+            "citation": {
                 "title": source.title,
                 "url": source.url,
                 "publisher": source.publisher,
                 "reliability": source.reliability,
-            }
-            for source in result.sources[:3]
-        ]
-        if not citations and result.summary:
-            citations = [
-                {
-                    "title": str(task.get("claim_or_gap", "队列任务结果")),
-                    "url": f"local://queue/{task.get('task_id', '')}",
-                    "publisher": result.agent_name,
-                    "reliability": "medium",
-                }
-            ]
-        status = "completed" if citations else "insufficient"
-        return {
-            "status": status,
-            "result_summary": result.summary,
-            "citations": citations,
-            "engine_output": result,
-            "agent_name": result.agent_name,
+                "source_kind": source_kind,
+                "checked_at": checked_at,
+            },
         }
 
     @staticmethod
@@ -1053,6 +1261,145 @@ class KnowledgeGraphWorkflow:
             execution_log=[*existing.execution_log, *new_output.execution_log],
             artifacts=[*existing.artifacts, *new_output.artifacts],
         )
+
+    def _run_structure_review(self, context: RequestContext, round_number: int) -> dict[str, Any]:
+        chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
+        if chat_client is not None:
+            try:
+                payload = chat_client.complete_json(
+                    system_prompt=build_structure_review_system_prompt(),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": context.domain,
+                            "round": round_number,
+                            "structure_graph": context.structure_graph,
+                            "subdomains": context.subdomains,
+                            "focus_points": context.focus_points,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                if payload:
+                    return self._normalize_structure_review(payload)
+            except Exception as exc:
+                logger.warning("Structure review round %s failed for %s: %s", round_number, context.domain, exc)
+        return self._fallback_structure_review(context)
+
+    @staticmethod
+    def _normalize_structure_review(payload: dict[str, Any]) -> dict[str, Any]:
+        is_complete = bool(payload.get("is_complete") or str(payload.get("status", "")).lower() == "passed")
+        missing_topics = [str(item).strip() for item in payload.get("missing_topics", []) if str(item).strip()]
+        suggested_repairs = payload.get("suggested_repairs", [])
+        if isinstance(suggested_repairs, dict):
+            normalized_repairs: list[Any] = [suggested_repairs]
+        elif isinstance(suggested_repairs, list):
+            normalized_repairs = suggested_repairs
+        elif suggested_repairs:
+            normalized_repairs = [str(suggested_repairs)]
+        else:
+            normalized_repairs = []
+        return {
+            "is_complete": is_complete,
+            "status": "passed" if is_complete else "needs_repair",
+            "missing_topics": missing_topics,
+            "suggested_repairs": normalized_repairs,
+            "reasoning": str(payload.get("reasoning", "")).strip() or ("知识架构审查通过。" if is_complete else "知识架构仍存在缺口。"),
+        }
+
+    @staticmethod
+    def _fallback_structure_review(context: RequestContext) -> dict[str, Any]:
+        graph = context.structure_graph if isinstance(context.structure_graph, dict) else {}
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        has_root = any(str(node.get("node_type", "")) == "domain" for node in nodes)
+        has_knowledge_nodes = any(str(node.get("node_type", "")) in {"subtopic", "article", "section"} for node in nodes)
+        missing_topics: list[str] = []
+        if not has_root:
+            missing_topics.append("领域根节点")
+        if not has_knowledge_nodes:
+            missing_topics.append("核心知识节点")
+        if not edges and len(nodes) > 1:
+            missing_topics.append("知识层级关系")
+        is_complete = not missing_topics
+        return {
+            "is_complete": is_complete,
+            "status": "passed" if is_complete else "needs_repair",
+            "missing_topics": missing_topics,
+            "suggested_repairs": [{"missing_topics": missing_topics}] if missing_topics else [],
+            "reasoning": "根据结构节点、知识节点和关系完整性完成 fallback 审查。",
+        }
+
+    def _run_structure_repair(self, context: RequestContext, review: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
+        if chat_client is not None:
+            try:
+                payload = chat_client.complete_json(
+                    system_prompt=build_structure_repair_system_prompt(),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": context.domain,
+                            "structure_graph": context.structure_graph,
+                            "review": review,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                if isinstance(payload, dict) and payload.get("nodes"):
+                    return payload, [{"type": "llm_repaired_graph", "node_count": len(payload.get("nodes", []))}]
+            except Exception as exc:
+                logger.warning("Structure repair failed for %s: %s", context.domain, exc)
+        return self._fallback_repair_structure_graph(context, review)
+
+    @staticmethod
+    def _fallback_repair_structure_graph(context: RequestContext, review: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        graph = json.loads(json.dumps(context.structure_graph or {}, ensure_ascii=False))
+        nodes = graph.setdefault("nodes", [])
+        edges = graph.setdefault("edges", [])
+        root_id = str(graph.get("root_node_id", "")).strip()
+        if not root_id:
+            root_id = f"domain-{sanitize_path_segment(context.domain, 'domain')}"
+            graph["root_node_id"] = root_id
+        if not any(isinstance(node, dict) and str(node.get("node_id", "")) == root_id for node in nodes):
+            nodes.insert(
+                0,
+                {
+                    "node_id": root_id,
+                    "title": f"{context.domain} Overview",
+                    "node_type": "domain",
+                    "relative_path": "README.md",
+                    "doc_type": "summary",
+                    "owner_engine_candidates": ["InsightEngine"],
+                    "required_query_tasks": 0,
+                },
+            )
+        existing_titles = {str(node.get("title", "")).strip().lower() for node in nodes if isinstance(node, dict)}
+        missing = [str(item).strip() for item in review.get("missing_topics", []) if str(item).strip()]
+        if not missing:
+            missing = ["核心知识节点"] if not any(isinstance(node, dict) and str(node.get("node_type", "")) in {"subtopic", "article", "section"} for node in nodes) else []
+        applied: list[dict[str, Any]] = []
+        for index, title in enumerate(missing, start=1):
+            if title.lower() in existing_titles:
+                continue
+            slug = sanitize_path_segment(title, f"topic-{index}")
+            node_id = f"review_added_{slug}"
+            nodes.append(
+                {
+                    "node_id": node_id,
+                    "title": title,
+                    "node_type": "subtopic",
+                    "parent_node_id": root_id,
+                    "relative_path": f"{slug}/README.md",
+                    "description": "架构 review 自动补充的知识节点。",
+                    "doc_type": "summary",
+                    "owner_engine_candidates": ["InsightEngine", "QueryEngine"],
+                    "required_query_tasks": 1,
+                    "metadata": {"review_added": True, "subdomain": title},
+                }
+            )
+            edges.append({"from_node_id": root_id, "edge_type": "CONTAINS", "to_node_id": node_id})
+            applied.append({"type": "add_node", "node_id": node_id, "title": title})
+        graph.setdefault("source_intent", context.original_input or context.domain)
+        return graph, applied or [{"type": "noop", "reason": "review had no concrete missing topics"}]
 
     def _validate_queue_round(self, context: RequestContext, queue: dict[str, Any], max_rounds: int) -> RoundValidationResult:
         chat_client = getattr(self._insight_engine, "_chat_client", None)
@@ -1210,11 +1557,16 @@ class KnowledgeGraphWorkflow:
             "task_id": str(task.get("task_id", "")),
             "status": str(task.get("status", "")),
             "citations_count": len(citations) if isinstance(citations, list) else 0,
+            "selected_link": str(task.get("selected_link", "")),
+            "source_kind": str(task.get("source_kind", "")),
+            "reachable": bool(task.get("reachable", False)),
             "timestamp": now_iso(),
         }
 
     @staticmethod
     def _file_completion_counts(task: dict[str, Any]) -> tuple[int, int]:
+        if any(key in task for key in ("selected_link", "reachable", "checked_at")):
+            return (1 if str(task.get("status", "")) == "completed" else 0, 0 if str(task.get("status", "")) == "completed" else 1)
         file_path = Path(str(task.get("target_file_path", "")).strip())
         if not file_path.exists():
             return (1 if str(task.get("status", "")) == "completed" else 0, 0 if str(task.get("status", "")) == "completed" else 1)
@@ -1233,6 +1585,42 @@ class KnowledgeGraphWorkflow:
     def _route_after_validation(state: WorkflowState) -> str:
         queue = state.get("task_queue_snapshot", {})
         return "fill_evidence" if queue.get("final_status") == "ready_for_fill" else "run_query_queue"
+
+    @staticmethod
+    def _route_after_structure_review(state: WorkflowState) -> str:
+        return "review_structure_round_2" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_1"
+
+    @staticmethod
+    def _route_after_final_structure_review(state: WorkflowState) -> str:
+        return "generate_architecture_documents" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_2"
+
+    @staticmethod
+    def _route_after_final_structure_repair(state: WorkflowState) -> str:
+        return "finalize_structure_review_failure"
+
+    def _finalize_structure_review_failure(self, state: WorkflowState) -> dict[str, Any]:
+        review = (state.get("structure_review_rounds") or [{}])[-1]
+        updates = {
+            "task_status": "repair_required",
+            "current_step": "structure_review",
+            "current_action": "两轮知识架构审查后仍存在结构缺口，需要人工修复或重新生成图谱。",
+            "completeness": CompletenessResult(
+                status="supplement_required",
+                reasons=[str(review.get("reasoning", "知识架构审查未通过。"))],
+                missing_topics=[str(item) for item in review.get("missing_topics", [])],
+                supplement_queries=[],
+                failure_categories=["structure_review_incomplete"],
+            ),
+        }
+        self._commit_state(state, updates)
+        self._emit_workflow_event(
+            state,
+            "structure_review",
+            "两轮知识架构审查未通过",
+            "blocked",
+            {"missing_topics": review.get("missing_topics", [])},
+        )
+        return updates
 
     def _emit_workflow_event(self, state: WorkflowState, step_id: str, label: str, status: str, details: dict[str, Any] | None = None) -> None:
         event = self._make_workflow_event(step_id, label, status, details)
@@ -1297,6 +1685,18 @@ class KnowledgeGraphWorkflow:
             node.setdefault("pending_task_count", 0)
             node.setdefault("completed_task_count", 0)
 
+    @staticmethod
+    def _set_all_structure_nodes_status(context: RequestContext, generation_state: str) -> None:
+        graph = context.structure_graph or {}
+        if not isinstance(graph, dict):
+            return
+        for node in graph.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node["generation_state"] = generation_state
+            node["self_generation_state"] = generation_state
+            node["updated_at"] = now_iso()
+
     def _set_local_structure_node_status(
         self,
         context: RequestContext,
@@ -1314,8 +1714,8 @@ class KnowledgeGraphWorkflow:
             return
         target["self_generation_state"] = generation_state
         target["generation_state"] = generation_state
-        target["is_generated"] = generation_state in {"generated", "evidence_pending", "evidence_running", "completed"}
-        target["is_completed"] = generation_state == "completed"
+        target["is_generated"] = generation_state in {"documented", "link_querying", "link_verified", "approved"}
+        target["is_completed"] = generation_state in {"documented", "link_verified", "approved"}
         if generated_path:
             target["generated_path"] = generated_path
         if pending_task_count is not None:
@@ -1325,9 +1725,8 @@ class KnowledgeGraphWorkflow:
             target["self_completed_task_count"] = max(0, int(completed_task_count))
             target["completed_task_count"] = max(0, int(completed_task_count))
         target["updated_at"] = now_iso()
-        if generation_state == "completed":
+        if target["is_completed"]:
             target["completed_at"] = now_iso()
-        self._aggregate_local_structure_graph(context)
 
     @staticmethod
     def _aggregate_local_structure_graph(context: RequestContext) -> None:

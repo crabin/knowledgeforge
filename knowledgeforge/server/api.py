@@ -283,6 +283,16 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "frozen version not found"}), 404
         return jsonify(report), 200
 
+    @app.post("/tasks/<task_id>/documents/complete")
+    def complete_documents(task_id: str):
+        try:
+            task = service.complete_documents(task_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if task is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(task), 200
+
     return app
 
 
