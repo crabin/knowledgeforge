@@ -244,15 +244,28 @@ function normalizeWorkflowEvents(payload) {
 }
 
 function getCurrentWorkflowStep(payload, events) {
-  return payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "blueprint_ready";
+  return normalizeWorkflowStepId(payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "intent_recognition");
+}
+
+function normalizeWorkflowStepId(stepId) {
+  const aliases = {
+    structure_graph_ready: "structure_graph_planning",
+    blueprint_ready: "structure_graph_planning",
+    evidence_filling: "evidence_realtime_write",
+    planning: "intent_recognition",
+    awaiting_confirmation: "intent_recognition",
+    collecting: "query_queue_running",
+    evaluating: "round_validation",
+    writing: "evidence_realtime_write",
+  };
+  return aliases[stepId] || stepId;
 }
 
 function renderWorkflowMap(payload) {
   const events = normalizeWorkflowEvents(payload);
-  const byStep = new Map(events.map((event) => [event.step_id, event]));
+  const byStep = new Map(events.map((event) => [normalizeWorkflowStepId(event.step_id), { ...event, step_id: normalizeWorkflowStepId(event.step_id) }]));
   const current = getCurrentWorkflowStep(payload, events);
   renderWorkflowFallback(byStep, current);
-  renderWorkflowX6(byStep, current);
 }
 
 function initializeWorkflowMap() {
@@ -265,10 +278,15 @@ function renderWorkflowFallback(byStep, current) {
     const stepId = step.dataset.stepId;
     const event = byStep.get(stepId);
     const status = getWorkflowStepStatus(stepId, byStep, current);
+    step.dataset.status = status;
+    step.dataset.statusLabel = getWorkflowStatusLabel(status);
+    step.setAttribute("aria-current", status === "active" ? "step" : "false");
+    if (event?.label) step.setAttribute("title", event.label);
     step.classList.toggle("active", status === "active");
     step.classList.toggle("focused", status === "active");
     step.classList.toggle("done", status === "completed");
-    step.classList.toggle("blocked", event?.status === "blocked");
+    step.classList.toggle("pending", status === "pending");
+    step.classList.toggle("blocked", status === "blocked");
   });
 }
 
@@ -413,9 +431,21 @@ function fitGraphToContainer(graph, container, padding = 24, maxScale = 1) {
 function getWorkflowStepStatus(stepId, byStep, current) {
   const event = byStep.get(stepId);
   if (event?.status === "blocked") return "blocked";
-  if (stepId === current) return "active";
   if (event?.status === "completed") return "completed";
+  if (stepId === current) return "active";
+  const stepIndex = workflowSteps.findIndex((step) => step.id === stepId);
+  const currentIndex = workflowSteps.findIndex((step) => step.id === current);
+  if (stepIndex >= 0 && currentIndex >= 0 && stepIndex < currentIndex) return "completed";
   return "pending";
+}
+
+function getWorkflowStatusLabel(status) {
+  return {
+    completed: "已完成",
+    active: "执行中",
+    blocked: "需处理",
+    pending: "待处理",
+  }[status] || "待处理";
 }
 
 function getWorkflowNodeAttrs(step, status) {

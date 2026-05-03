@@ -28,7 +28,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "交互式输入" in body
     assert "任务操作" in body
     assert "实时流程图" in body
-    assert "workflow-x6" in body
+    assert "flow-track" in body
     assert "Neo4j 实时知识图谱" in body
     assert "neo4j-graph" in body
     assert "neo4j-auto-follow" in body

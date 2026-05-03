@@ -385,3 +385,21 @@
 - 结果：`49 passed in 9.80s`
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`152 passed in 27.98s`
+
+## 2026-05-03 实时流程图 HTML 展示优化
+
+- 将前端“实时流程图”主展示从 X6 SVG 改为原生 HTML/CSS 流程卡片轨道，避免 SVG 箭头重叠、尺寸裁切和已完成状态颜色不同步的问题。
+- 流程步骤现在统一通过 `data-status` 与 `data-status-label` 渲染 `待处理/执行中/已完成/需处理`，并兼容旧的 workflow step id（如 `blueprint_ready`、`evidence_filling`、`collecting` 等）映射到目标流程步骤。
+- 当前执行步骤增加绿色强调、状态胶囊、底部进度线和呼吸光圈动画；已完成步骤自动根据当前步骤位置向前推断，不再依赖每个步骤都显式写入 completed 事件。
+- 流程卡片改为自适应换行布局，8 个目标步骤在当前工作台宽度内完整展示，不再横向裁掉最后的步骤；Neo4j 图谱仍保留 X6 渲染。
+- 同步更新 Dashboard 测试断言，确认页面使用新的 `flow-track` 展示容器。
+
+## Verification
+
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py tests/test_workflow.py`
+- 结果：`40 passed in 7.38s`
+- 使用 in-app browser 刷新 `http://localhost:5001/` 验证：`#workflow-map` 存在、`#workflow-x6` 不存在、8 个流程步骤完整渲染，当前步骤显示 `执行中`。
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`154 passed in 32.80s`
