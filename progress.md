@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-03 Neo4j 图谱优先与补全文档后置文档同步
+
+- 按用户确认的新方向同步 `docs/项目需求.md`、`docs/流程执行文档.md`、`docs/知识文档格式规范.md`、`task_plan.md` 和 `findings.md`。
+- 文档口径调整为：默认主链路只完善 Neo4j 知识图谱、review 结果、证据链接、建议路径和治理状态；本地知识 Markdown 只在用户点击 `/tasks/{task_id}/documents/complete` 后生成。
+- 明确未点击补全文档时，不要求 `save/{领域}/README.md` 或知识点 Markdown 存在；运行态状态、日志、缓存和队列文件不属于知识文档落盘。
+- 明确 Neo4j 节点需保存补全文档所需字段，包括 `evidence_links`、`selected_link`、`source_kind`、`reachable`、`relevance_reason`、`checked_at`、`claim_or_gap`、`expected_evidence`、`review_status`、`repair_log`、`suggested_relative_path` 和 `document_completion_status`。
+- 未直接编辑 `docs/流程图.excalidraw`，遵守本次计划的文档范围。
+
 ## 2026-05-03 Neovis.js 图谱展示接入
 
 - 按官方 Neovis.js 安装文档为项目安装 `neovis.js`，新增 `package.json` 与 `package-lock.json`，并将 `node_modules/` 加入 `.gitignore`。

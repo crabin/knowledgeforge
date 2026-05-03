@@ -24,10 +24,10 @@
 | 知识文档 Markdown 规范视为关键数据合同 | 它同时支撑本地存储、抽取、Neo4j 映射、质量检测与版本管理 |
 
 ## 2026-05-03 真实代码流程对齐结论
-- 当前真实主流程已经从旧的“三路计划确认后并行采集，再统一写文档”演进为“意图识别 → 结构图谱 → Neo4j 任务图 → 串行知识点文件生成 → 文件级证据队列 → 单条证据即时回写 → 父级状态聚合 → 治理质检 → 版本研报”。
+- 当前真实主流程文档口径已从旧的“三路计划确认后并行采集，再统一写文档”演进为“意图识别 → 结构图谱 → Neo4j 任务图 → 两轮架构 review → 图谱补全 → 图谱级证据队列 → 单条证据写入 Neo4j → 治理质检 → 等待补全文档 / 可选研报”。
 - `/tasks`、`/tasks/async` 与 intake confirm 已统一经过 `IntakeClarifier` 风格的归一化逻辑，`request_context` 会保留 `original_input`、`normalized_domain` 和 `confirmed=true`；概念解释类输入不能绕过 intake 直接创建知识库任务。
 - Neo4j 结构节点现在承担任务状态职责：`planned`、`generating`、`generated`、`evidence_pending`、`evidence_running`、`completed`、`failed` 是主状态流转；`is_generated`、`is_completed`、`generated_path`、证据计数与父节点 ID 是前端和治理层共享字段。
-- 证据回填不再等待所有队列完成。每个 query task 完成后会立即更新目标 Markdown contract、队列 JSON、图谱节点和 SSE payload；最终 `fill_evidence` 只做收尾校验和兼容兜底。
+- 证据回填不再等待所有队列完成。每个 query task 完成后应立即更新运行态队列、Neo4j 图谱节点和 SSE payload；Markdown contract 只在补全文档动作生成本地文档后参与一致性检查。
 - 前端实时同步的主通道是 SSE。`/tasks/{task_id}/stream` 直接带 `graph_snapshot`、`graph_event`、`file_update`，`/tasks/{task_id}/graph` 只保留给手动刷新、Neo4j 重连和兜底展示。
 - 历史文档中“前端轮询后再拉图谱”“最后统一回填”“默认等待三路计划确认”的描述均视为旧阶段记录，不再代表当前主流程。
 
@@ -36,6 +36,12 @@
 - 当前图执行顺序是生成结构图谱后先同步 Neo4j；第一轮 review 如果直接通过，会进入第二轮，中间没有再同步 Neo4j；第一轮有缺口时会在 repair 后同步。
 - `sync_structure_graph` 写 Neo4j 时使用 `coalesce(n.generation_state, 'planned')`，会保留旧状态，无法用后续 review 阶段的本地 `reviewing/approved` 状态覆盖 Neo4j。
 - 测试中已有失败态文案不包含“人工”的回归断言，但 review payload 仍可能传入 `suggested_repairs=[{"type": "manual_review"}]` 并被原样保存。
+
+## 2026-05-03 本地 Markdown 后置化决策
+- 用户已确认“不落本地文件”的范围指不生成本地知识 Markdown；任务状态、日志、缓存和运行态队列文件可以继续存在。
+- 默认主链路的事实源调整为 Neo4j 知识图谱：结构关系、review 结果、修补记录、证据链接、来源类型、可访问性、关联 claim、建议路径和补全文档状态都应优先写入图谱。
+- `save/{领域}/README.md` 与 `save/{领域}/{子领域}/{文档}.md` 只在用户点击 `/tasks/{task_id}/documents/complete` 后生成；未点击前不要求本地知识 Markdown 存在。
+- 补全文档动作需要先检查 Neo4j 架构 review、可信链接和治理状态，再消费图谱上下文生成 Markdown，并把 `generated_path` / `document_completion_status` 同步回图谱。
 
 ## 遇到的问题
 | 问题 | 解决方案 |
@@ -62,7 +68,7 @@
 - 第一批实施按“前半段主链路做实、后半段关键骨架接上”的方式推进。
 - 完整性评估为独立评估节点；Neo4j 失败采用 `graph_sync_pending` 异步补偿；版本冻结点在质量通过且文件图谱一致之后。
 - 核心模块边界固定为 Web Interface、Orchestrator、Context Builder、三大 Engine、Completeness Evaluator、Knowledge Document Writer、Post-Storage Pipeline、Report Branch。
-- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 串行文件生成 → 证据队列执行 → 即时回写 → 父级完成聚合 → 后置治理 → 版本化 → 可选研报”，并以本地 Markdown 作为源事实存储。
+- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 两轮架构 review → 图谱补全 → 证据队列执行 → 图谱证据写入 → 后置治理 → 等待补全文档 / 可选研报”，并以 Neo4j 作为默认主链路事实源。
 - 回流规则固定为 repair_flow 与 research_flow 两类，禁止仅返回模糊失败。
 - 质量状态固定为 `passed` / `repair_required` / `research_required`；达到最大轮次、补偿或最小新增阈值时转入 `needs_human_review`。
 
@@ -284,13 +290,13 @@
 
 ## 知识框架优先流程结论
 - 默认产物应是“领域知识框架 + 官方/权威证据”，而不是每个知识点的完整正文；这样用户先获得一眼可读的学习地图、角色、顺序和证据基础。
-- `completion_mode` 需要表达产品意图：`framework` 是默认必做链路，`full_document` 是最后补全完整知识库文档；旧 `file_level` 只能作为兼容别名，不能继续代表默认主线。
+- `completion_mode` 曾用于表达产品意图；当前文档方向已收敛为默认 Neo4j 图谱主链路，完整知识库文档只能由补全文档动作生成。
 - 框架证据文件的质量标准应看图谱、蓝图、证据文件、官方来源和路径关联；不能继续用完整文章的“摘要/正文”结构作为默认门槛。
 - 实时来源保存可能刷新领域 README 和部分 index 文档；治理框架模式时应选择仍保留“知识定位/证据与来源”的框架证据文件作为代表 artifact，而不是固定使用领域 README。
 - 完整文档生成必须在证据闭环之后执行，避免“先写长文再找证据”的流程把知识库变成不可追溯摘要。
 
 ## 知识架构 Review 优先流程结论
-- 用户重新定义核心链路：LLM 生成的知识架构图谱必须先在 Neo4j 呈现，并经过两轮 review 检查完整性；只有架构通过后才生成本地架构文档。
+- 用户重新定义核心链路：LLM 生成的知识架构图谱必须先在 Neo4j 呈现，并经过两轮 review 检查完整性；只有用户点击补全文档按钮后才生成本地知识 Markdown。
 - 两轮 review 是架构阶段的完成门槛，不再由父级 SubTopic / Domain 聚合状态判断架构是否完整。
 - 证据阶段的职责收窄为“找到真实、可访问、最贴近知识点的官方或高公信力链接”，链接内容解析和正文补全属于后置文档补全阶段。
 - 主链路默认只使用 QueryEngine 执行链接查询；MediaEngine 保留给后续文档补全、社区观点或扩展材料，不参与默认架构证据链接阶段。

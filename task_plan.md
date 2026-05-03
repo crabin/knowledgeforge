@@ -4,23 +4,23 @@
 在不偏离项目需求、知识文档格式规范和流程执行文档的前提下，分阶段落地 KnowledgeForge 的主链路闭环，并为 Neo4j、质量检测、版本更新和后续研报分支建立稳定接口与治理骨架。
 
 ## 当前阶段
-阶段 11：知识架构 review 优先主链路已完成，当前默认产物为 Neo4j 知识架构图谱、两轮架构 review、架构 Markdown 与可信证据链接；完整知识文档保留为后置可选分支
+阶段 12：Neo4j 图谱优先主链路文档已同步，当前默认产物为 Neo4j 知识架构图谱、两轮架构 review、图谱级证据链接与治理状态；本地知识 Markdown 只由“补全文档”按钮后置生成
 
 ## 当前真实代码主链路（2026-05-03）
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
 - 结构先行：工作流先生成知识架构型 `structure_graph`，立即同步 Neo4j 首屏呈现，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
-- 架构 review：本地 Markdown 落盘前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时进入 `repair_required`，不生成本地架构文档。
-- repair flow 接续：`repair_required` 的架构审查终态保留为可恢复状态；当任务已有修补后的 `structure_graph` 和 `knowledge_blueprint` 时，`/tasks/{task_id}/resume` 会复用当前图谱继续架构文档、证据链接与治理链路，不再从头生成图谱。
-- 架构文档串行生成：按 review 通过后的结构图谱推导 `knowledge_blueprint`，默认一次生成一个架构 Markdown 文件；文件开始生成时图谱节点进入 `documenting`，写入成功后进入 `documented`。
-- 证据链接记录：`query_evidence_links` 每完成一条链接任务，只更新 `knowledge_task_queue.json` 的 `selected_link/source_kind/reachable/relevance_reason/checked_at`、Neo4j 目标节点和任务 SSE payload；不再把网页内容或摘要即时写回 Markdown。
+- 架构 review：图谱补全前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时进入 `repair_required`，不生成本地知识 Markdown。
+- repair flow 接续：`repair_required` 的架构审查终态保留为可恢复状态；当任务已有修补后的 `structure_graph` 和 `knowledge_blueprint` 时，`/tasks/{task_id}/resume` 会复用当前图谱继续图谱补全、证据链接与治理链路，不再从头生成图谱。
+- 图谱补全文档上下文：按 review 通过后的结构图谱推导 `knowledge_blueprint`，把知识定位、学习路径、证据需求、建议路径和 `document_completion_status` 写入 Neo4j；默认不生成 README、基础知识 Markdown 或完整知识 Markdown。
+- 证据链接记录：`query_evidence_links` 每完成一条链接任务，只更新运行态队列、Neo4j 目标节点和任务 SSE payload，写入 `selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap` 等字段；不再把网页内容或摘要即时写回 Markdown。
 - 父级不再自动聚合：架构阶段完整性只看两轮 review 结果，文档补全阶段如需进度聚合另行实现。
 - 前端实时同步：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot`、`graph_event`、`file_update`；前端优先使用 SSE 图谱快照渲染，`/tasks/{task_id}/graph` 与手动刷新只作为 fallback。
-- 后置治理分支：`completion_mode=framework` 时治理框架图谱与证据文件并跳过完整文档；`completion_mode=full_document` 时在证据完成后补全最终 mixed 完整文档；旧值 `file_level` 兼容为 `full_document`。ChromaDB 仍不进入当前主链路。
+- 后置补全文档分支：“补全文档”按钮是唯一的本地知识 Markdown 落盘入口；点击后检查 Neo4j 架构 review、证据链接和治理状态，再生成 `save/{领域}/README.md` 与知识点 Markdown。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
 - repair_required 恢复执行优化（2026-05-03）
   - [complete] 定位第二轮结构修补后仍被无条件终止为 `repair_required` 的路由与恢复入口。
-  - [complete] 新增 workflow 接续入口，复用已修补图谱继续生成架构文档、查询证据链接、验证、收尾与治理。
+  - [complete] 新增 workflow 接续入口，复用已修补图谱继续图谱补全、查询证据链接、验证、收尾与治理。
   - [complete] 调整 `/tasks/{task_id}/resume`，对结构 review 的 `repair_required` 任务走 repair flow 接续，不再重跑图谱生成或直接触发最大轮次拦截。
   - [complete] 增加回归测试覆盖 `repair_required -> resume -> 文档/队列继续生成`。
 - 架构 review 去人工化与 Neo4j 上下文增强（2026-05-03）
@@ -39,14 +39,14 @@
   - 已完成：文件骨架生成改为严格串行，一次只处理一个文件，并把待补依据立即写入 `knowledge_task_queue.json`。
   - 已完成：Query / Media 改为按单 task 串行执行，结果完成后立即回写 Markdown contract、队列 JSON、Neo4j 图谱与 SSE 任务快照。
   - 已完成：前端 Flow Map 与状态面板切到“意图识别 → 图谱规划 → 文件生成 → 证据查询 → 即时回写 → 父级聚合 → 治理质检 → 版本研报”视角。
-  - 已完成：`fill_evidence` 从主回填责任降级为最终一致性校验与兼容兜底。
+  - 历史完成：收尾校验曾从主回填责任降级为最终一致性校验与兼容兜底；当前新方向要求主链路不生成本地知识 Markdown。
   - 待继续：把轮次验证从当前 fallback + LLM 兼容模式继续收紧为更细的文件级 completeness 策略，并补足更多自动化回归。
 - 文件级知识库架构落地
-  - 已完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode`，把知识树从纯路径工具升级为可执行蓝图；当前默认 `framework`，旧 `file_level` 兼容为 `full_document`。
-  - 已完成：`framework` 模式只生成知识定位、学习角色与路径、知识关系、证据与来源、后续动作和 contract，不生成完整正文。
-  - 已完成：`full_document` 模式在框架证据验证后才生成最终完整知识库文档。
+  - 历史完成：引入 `knowledge_blueprint` / `required_files` / `completion_mode`，把知识树从纯路径工具升级为可执行蓝图；当前文档方向已改为 Neo4j 图谱优先，完整 Markdown 只通过补全文档按钮生成。
+  - 历史完成：`framework` 模式曾生成知识定位、学习角色与路径、知识关系、证据与来源、后续动作和 contract；当前新方向要求这些内容先进入 Neo4j 补全文档上下文。
+  - 已调整：完整知识库文档不再由主链路模式直通生成，而由 `/tasks/{task_id}/documents/complete` 后置生成。
   - 已完成：Writer 在计划阶段前先全量物化知识库骨架文件，并为每个文件写入 front matter + 固定 JSON 合同。
-  - 已完成：QueryEngine 优先从知识文件 JSON 合同提取 `query_tasks`，按文件级证据槽位执行检索。
+  - 已调整：QueryEngine 证据任务口径改为图谱级证据槽位，补全文档时再把任务与 contract 写入 Markdown。
   - 已完成：三路 Engine 输出统一携带 `target_file_path` / `target_section` / `artifacts`，可回写到同一文件树。
   - 已完成：完整性评估切入 file-level 模式，优先依据文件级 artifact 状态判断，而不是只看旧的 topic/module 执行痕迹。
 - 前端动作实时展示修复
@@ -128,7 +128,7 @@
 - 先打通主链路，再补深治理能力。
 - 先稳定 Markdown 本地存储与状态模型，再接 Neo4j 和质量闭环。
 - 先做接口和契约，再逐步替换为更完整的实现。
-- 保留 Insight / Query / Media 三路 Engine 能力、状态持久化与恢复、路径稳定、来源追溯；当前任务主链路以结构图谱和文件级证据队列驱动，三路采集能力作为 Engine 层能力继续服务证据、分析与治理。
+- 保留 Insight / Query / Media 三路 Engine 能力、状态持久化与恢复、路径稳定、来源追溯；当前任务主链路以结构图谱和图谱级证据队列驱动，三路采集能力作为 Engine 层能力继续服务证据、分析与治理。
 - 当前阶段不把 ChromaDB 纳入主链路。
 
 ## 阶段计划
