@@ -282,13 +282,20 @@ function normalizeWorkflowEvents(payload) {
 }
 
 function getCurrentWorkflowStep(payload, events) {
-  return normalizeWorkflowStepId(payload.current_step || payload.task?.current_step || events.at(-1)?.step_id || "intent_recognition");
+  const explicitStep = normalizeWorkflowStepId(payload.current_step || payload.task?.current_step || "");
+  if (workflowSteps.some((step) => step.id === explicitStep)) return explicitStep;
+  const latestEventStep = normalizeWorkflowStepId(events.at(-1)?.step_id || "");
+  if (workflowSteps.some((step) => step.id === latestEventStep)) return latestEventStep;
+  return "intent_recognition";
 }
 
 function normalizeWorkflowStepId(stepId) {
   const aliases = {
     structure_graph_ready: "structure_graph_planning",
     blueprint_ready: "structure_graph_planning",
+    structure_repair: "structure_review",
+    repair_structure_graph_round_1: "structure_review",
+    repair_structure_graph_round_2: "structure_review",
     llm_generating: "architecture_documents",
     query_queue_running: "evidence_link_query",
     evidence_realtime_write: "evidence_link_query",

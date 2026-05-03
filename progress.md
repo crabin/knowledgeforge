@@ -521,3 +521,8 @@
 - 结果：通过。
 - 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
 - 结果：`7 passed in 0.71s`
+- 修复处理中第 01 步颜色回退问题：将内部 `structure_repair` / `repair_structure_graph_round_*` 映射回第 04 步，并在当前步骤不属于主流程节点时使用最新 workflow event 兜底。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_dashboard.py`
+- 结果：`7 passed in 0.68s`
