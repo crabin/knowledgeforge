@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 Role = Literal["user", "assistant", "system"]
 TaskIntent = Literal["knowledge_collection", "concept_explanation", "qa"]
-CompletionMode = Literal["framework", "full_document"]
+CompletionMode = Literal["framework"]
 CompletenessStatus = Literal["pass", "supplement_required"]
 GovernanceStatus = Literal["passed", "failed"]
 RemediationFlow = Literal["repair_flow", "research_flow"]
@@ -81,9 +81,6 @@ class RequestContext:
 
 
 def normalize_completion_mode(value: object) -> CompletionMode:
-    mode = str(value or "").strip().lower().replace("-", "_")
-    if mode in {"full_document", "full", "complete", "complete_document", "file_level"}:
-        return "full_document"
     return "framework"
 
 

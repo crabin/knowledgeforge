@@ -271,6 +271,6 @@ def test_workflow_uses_index_decision_to_dispatch_query_supplement(tmp_path: Pat
     assert final_state["task_status"] == "verified"
     assert final_state["round_number"] == 1
     assert query_engine.approved_queries
-    assert final_state["task_queue_snapshot"]["final_status"] == "ready_for_fill"
+    assert final_state["task_queue_snapshot"]["final_status"] == "ready_for_governance"
     assert final_state["task_queue_snapshot"]["tasks"]
     assert all(task["status"] == "completed" for task in final_state["task_queue_snapshot"]["tasks"])

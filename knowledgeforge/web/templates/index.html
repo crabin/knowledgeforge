@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Knowledge Engineering Console</p>
         <h1>KnowledgeForge 功能工作台</h1>
-        <p class="lead">从领域输入、Neo4j 知识架构图谱、两轮架构审查、架构文档、证据链接到质量回流和可选完整文档的一站式演示面板。</p>
+        <p class="lead">从领域输入、Neo4j 知识架构图谱、两轮架构审查、图谱补全、证据链接到质量回流和后置补全文档的一站式演示面板。</p>
       </div>
       <div class="status-stack" aria-label="系统状态">
         <div class="status-pill">
@@ -61,28 +61,33 @@
             <h3>架构Review</h3>
             <p>执行两轮自动审查与修补。</p>
           </article>
-          <article class="flow-step" data-step-id="architecture_documents">
+          <article class="flow-step" data-step-id="graph_completion">
             <span>05</span>
-            <h3>架构文档</h3>
-            <p>审查通过后生成本地架构文档。</p>
+            <h3>图谱补全</h3>
+            <p>写入补全文档所需的图谱上下文。</p>
           </article>
           <article class="flow-step" data-step-id="evidence_link_query">
             <span>06</span>
             <h3>证据链接</h3>
             <p>只记录官方或高公信力链接。</p>
           </article>
-          <article class="flow-step" data-step-id="governing">
+          <article class="flow-step" data-step-id="evidence_link_recorded">
             <span>07</span>
+            <h3>图谱证据写入</h3>
+            <p>把证据链接、来源类型和 claim 写入 Neo4j。</p>
+          </article>
+          <article class="flow-step" data-step-id="governing">
+            <span>08</span>
             <h3>治理质检</h3>
             <p>抽取、Neo4j 路径关联、质量检测和回流分类。</p>
           </article>
           <article class="flow-step" data-step-id="document_completion">
-            <span>08</span>
+            <span>09</span>
             <h3>补全文档</h3>
-            <p>可选：框架完成后逐个补全知识文档。</p>
+            <p>可选：验证后生成本地知识文档。</p>
           </article>
           <article class="flow-step" data-step-id="versioning">
-            <span>09</span>
+            <span>10</span>
             <h3>版本研报</h3>
             <p>可选：冻结版本并生成研报。</p>
           </article>

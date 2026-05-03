@@ -8,6 +8,17 @@
 - 明确 Neo4j 节点需保存补全文档所需字段，包括 `evidence_links`、`selected_link`、`source_kind`、`reachable`、`relevance_reason`、`checked_at`、`claim_or_gap`、`expected_evidence`、`review_status`、`repair_log`、`suggested_relative_path` 和 `document_completion_status`。
 - 未直接编辑 `docs/流程图.excalidraw`，遵守本次计划的文档范围。
 
+## 2026-05-03 Neo4j 图谱优先主链路代码改造
+
+- 将默认 workflow 从本地架构 Markdown 生成改为图谱补全文档上下文：review 通过后写入 Neo4j 节点状态、建议路径、证据需求和 `document_completion_status=not_requested`，不生成 `save/{领域}/README.md` 或知识点 Markdown。
+- 证据阶段继续使用 QueryEngine 查询可信链接，但实时文件保存会在默认主链路中跳过；证据结果写入运行态队列、SSE payload、本地图谱快照和 Neo4j 节点字段。
+- 治理阶段改用 `.knowledgeforge/tasks/graph_governance/` 下的运行态图谱治理摘要，避免把治理摘要当作本地知识库 Markdown 落到 `save/`。
+- `/tasks/{task_id}/documents/complete` 现在负责唯一的知识 Markdown 落盘入口：前置检查通过后创建缺失的文档骨架、消费队列证据补全文档，并把 `generated_path` / `document_completion_status=generated` 同步回图谱。
+- 前端流程和图谱状态文案同步为“图谱补全 / 图谱证据写入 / 补全文档”，并新增 `completion_ready`、`document_generating` 状态展示。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_knowledge_blueprint.py tests/test_integration_layers.py tests/test_dashboard.py`，结果：`60 passed`。
+- 运行 `PYTHONPATH=. pytest -q tests/test_quality_source_checks.py tests/test_ml_regression.py tests/test_writer_dynamic_status.py`，修复质量门禁后相关用例通过。
+- 运行 `PYTHONPATH=. pytest -q`，结果：`165 passed, 1 failed`；唯一失败为 live browser 外网用例 `tests/test_agent_browser_live.py::test_agent_browser_can_fetch_page_text` 访问 LangGraph 站点超时，非本地代码回归。
+
 ## 2026-05-03 Neovis.js 图谱展示接入
 
 - 按官方 Neovis.js 安装文档为项目安装 `neovis.js`，新增 `package.json` 与 `package-lock.json`，并将 `node_modules/` 加入 `.gitignore`。

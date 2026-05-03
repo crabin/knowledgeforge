@@ -116,6 +116,7 @@ class PostStoragePipeline:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict | None = None,
     ):
         if not hasattr(self._graph_mapper, "update_structure_node_status"):
             return None
@@ -127,4 +128,5 @@ class PostStoragePipeline:
             generated_path=generated_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
+            extra_properties=extra_properties or {},
         )

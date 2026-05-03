@@ -19,7 +19,7 @@ class CompletenessEvaluator:
         expected_topics = context.core_topics or context.subdomains
         missing_topics = [topic for topic in expected_topics if topic not in covered_topics]
         completed_structure = self._completed_structure_nodes(outputs)
-        use_legacy_structure_gate = context.completion_mode == "full_document"
+        use_legacy_structure_gate = False
         if use_legacy_structure_gate and (completed_structure["modules"] or completed_structure["topic_overviews"]):
             required_modules = {"overview", "foundations", "papers"}
             missing_modules = sorted(required_modules - completed_structure["modules"])

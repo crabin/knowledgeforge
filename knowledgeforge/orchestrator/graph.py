@@ -156,17 +156,16 @@ class KnowledgeGraphWorkflow:
             state,
             {
                 "task_status": "running",
-                "current_step": "architecture_documents",
-                "current_action": "已接续 repair flow，将基于当前修补后的知识架构继续生成文档与证据链接。",
+                "current_step": "graph_completion",
+                "current_action": "已接续 repair flow，将基于当前修补后的知识架构继续补全图谱上下文与证据链接。",
             },
         )
-        self._generate_files(state)
+        self._enrich_graph_for_completion(state)
         while True:
             self._run_query_queue(state)
             self._validate_round(state)
-            if self._route_after_validation(state) == "fill_evidence":
+            if self._route_after_validation(state) == "run_post_storage":
                 break
-        self._fill_evidence(state)
         self._run_post_storage(state)
         return state
 
@@ -182,10 +181,9 @@ class KnowledgeGraphWorkflow:
         graph.add_node("review_structure_round_2", self._review_structure_round_2)
         graph.add_node("repair_structure_graph_round_2", self._repair_structure_graph_round_2)
         graph.add_node("finalize_structure_review_failure", self._finalize_structure_review_failure)
-        graph.add_node("generate_architecture_documents", self._generate_files)
+        graph.add_node("enrich_graph_for_completion", self._enrich_graph_for_completion)
         graph.add_node("query_evidence_links", self._run_query_queue)
         graph.add_node("validate_round", self._validate_round)
-        graph.add_node("fill_evidence", self._fill_evidence)
         graph.add_node("run_post_storage", self._run_post_storage)
         graph.set_entry_point("generate_structure_graph")
         graph.add_edge("generate_structure_graph", "sync_structure_graph_to_neo4j")
@@ -204,7 +202,7 @@ class KnowledgeGraphWorkflow:
             self._route_after_final_structure_review,
             {
                 "repair_structure_graph_round_2": "repair_structure_graph_round_2",
-                "generate_architecture_documents": "generate_architecture_documents",
+                "enrich_graph_for_completion": "enrich_graph_for_completion",
                 "finalize_structure_review_failure": "finalize_structure_review_failure",
             },
         )
@@ -212,21 +210,20 @@ class KnowledgeGraphWorkflow:
             "repair_structure_graph_round_2",
             self._route_after_final_structure_repair,
             {
-                "generate_architecture_documents": "generate_architecture_documents",
+                "enrich_graph_for_completion": "enrich_graph_for_completion",
                 "finalize_structure_review_failure": "finalize_structure_review_failure",
             },
         )
-        graph.add_edge("generate_architecture_documents", "query_evidence_links")
+        graph.add_edge("enrich_graph_for_completion", "query_evidence_links")
         graph.add_edge("query_evidence_links", "validate_round")
         graph.add_conditional_edges(
             "validate_round",
             self._route_after_validation,
             {
                 "run_query_queue": "query_evidence_links",
-                "fill_evidence": "fill_evidence",
+                "run_post_storage": "run_post_storage",
             },
         )
-        graph.add_edge("fill_evidence", "run_post_storage")
         graph.add_edge("finalize_structure_review_failure", END)
         graph.add_edge("run_post_storage", END)
         return graph.compile()
@@ -454,7 +451,7 @@ class KnowledgeGraphWorkflow:
         self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构已自动修补", "completed", repair_entry)
         return updates
 
-    def _generate_files(self, state: WorkflowState) -> dict[str, Any]:
+    def _enrich_graph_for_completion(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
         context.prompt_profile_version = PROMPT_PROFILE_VERSION
         if not context.knowledge_blueprint:
@@ -474,99 +471,80 @@ class KnowledgeGraphWorkflow:
         domain_dir = self._domain_dir(context)
         queue = self._queue_store.initialize(domain=context.domain, domain_dir=domain_dir)
         context.generation_queue_path = self._queue_store.queue_path(domain_dir).as_posix()
-        self._emit_workflow_event(state, "architecture_documents", "知识架构文档蓝图已准备", "active")
-        file_states = self._writer.materialize_knowledge_base(context=context, round_number=state.get("round_number", 1))
+        self._emit_workflow_event(state, "graph_completion", "图谱补全文档上下文已准备", "active")
         total_files = len(context.knowledge_blueprint)
-        generated_count = 0
-        file_label = "框架证据文件" if context.completion_mode == "framework" else "文件骨架"
+        prepared_count = 0
         for blueprint in context.knowledge_blueprint:
             relative_path = str(blueprint.get("relative_path", "")).strip()
             if not relative_path:
                 continue
-            file_path = domain_dir / relative_path
             spec = build_prompt_spec(blueprint, completion_mode=context.completion_mode)
+            suggested_path = (domain_dir / relative_path).as_posix()
             self._emit_workflow_event(
                 state,
-                "architecture_documents",
-                f"开始生成文件：{relative_path}",
+                "graph_completion",
+                f"补全图谱节点上下文：{relative_path}",
                 "active",
                 {
-                    "event": "file_generation_started",
-                    "file_path": file_path.as_posix(),
+                    "event": "graph_completion_started",
+                    "suggested_relative_path": relative_path,
                     "relative_path": relative_path,
-                    "completed_files": generated_count,
+                    "completed_files": prepared_count,
                     "total_files": total_files,
                     "current_file": relative_path,
                 },
             )
-            self._update_structure_node_status(
+            contract = self._build_graph_completion_contract(context, blueprint, spec, suggested_path)
+            query_tasks = self._extract_queue_tasks(contract, blueprint, Path(suggested_path), queue.get("current_round", 1))
+            node_sync = self._update_structure_node_status(
                 state,
                 context,
                 blueprint,
-                generation_state="documenting",
-                generated_path=file_path.as_posix(),
-            )
-            self._emit_workflow_event(
-                state,
-                "architecture_documents",
-                f"生成{file_label}：{relative_path}",
-                "active",
-                {"file_path": file_path.as_posix()},
-            )
-            queue["generation_status"] = {
-                "total_files": total_files,
-                "completed_files": generated_count,
-                "current_file": relative_path,
-                "last_saved_path": queue.get("generation_status", {}).get("last_saved_path", ""),
-            }
-            self._queue_store.save(domain_dir, queue)
-            self._commit_queue_snapshot(
-                state,
-                domain_dir,
-                queue,
-                current_step="architecture_documents",
-                current_action=f"正在生成{file_label}：{relative_path}",
-            )
-            generated = self._generate_single_file(context, blueprint, spec, file_path)
-            file_path.write_text(generated["markdown"], encoding="utf-8")
-            query_tasks = self._extract_queue_tasks(generated["contract"], blueprint, file_path, queue.get("current_round", 1))
-            graph_generation_sync = self._update_structure_node_status(
-                state,
-                context,
-                blueprint,
-                generation_state="documented",
-                generated_path=file_path.as_posix(),
+                generation_state="completion_ready",
                 pending_task_count=len(query_tasks),
                 completed_task_count=0,
+                extra_properties={
+                    "suggested_relative_path": relative_path,
+                    "document_completion_status": "not_requested",
+                    "review_status": state.get("structure_review_status", ""),
+                    "repair_log": state.get("structure_repair_log", []),
+                    "claim_or_gap": "; ".join(str(task.get("claim_or_gap", "")) for task in query_tasks if str(task.get("claim_or_gap", "")).strip()),
+                    "expected_evidence": [
+                        str(item)
+                        for task in query_tasks
+                        for item in task.get("expected_evidence", [])
+                        if str(item).strip()
+                    ],
+                },
             )
             queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), query_tasks)
-            generated_count += 1
+            prepared_count += 1
             queue["generation_status"] = {
                 "total_files": total_files,
-                "completed_files": generated_count,
+                "completed_files": prepared_count,
                 "current_file": relative_path,
-                "last_saved_path": file_path.as_posix(),
+                "last_saved_path": suggested_path,
             }
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(
                 state,
                 domain_dir,
                 queue,
-                current_step="architecture_documents",
-                current_action=f"{file_label}已保存：{relative_path}",
-                extra_updates={"latest_structure_node_sync": graph_generation_sync} if graph_generation_sync else None,
+                current_step="graph_completion",
+                current_action=f"图谱补全文档上下文已写入：{relative_path}",
+                extra_updates={"latest_structure_node_sync": node_sync} if node_sync else None,
             )
             self._emit_workflow_event(
                 state,
-                "architecture_documents",
-                f"{file_label}已保存：{relative_path}",
+                "graph_completion",
+                f"图谱补全文档上下文已写入：{relative_path}",
                 "completed",
                 {
-                    "event": "file_generation_completed",
-                    "file_path": file_path.as_posix(),
+                    "event": "graph_completion_completed",
+                    "suggested_relative_path": relative_path,
                     "relative_path": relative_path,
                     "enqueued_tasks": len(query_tasks),
-                    "completed_files": generated_count,
+                    "completed_files": prepared_count,
                     "total_files": total_files,
                     "current_file": relative_path,
                 },
@@ -574,16 +552,18 @@ class KnowledgeGraphWorkflow:
         queue["final_status"] = "generated"
         queue_path = self._queue_store.save(domain_dir, queue)
         updates = {
-            "knowledge_file_states": file_states,
+            "knowledge_file_states": [],
             "generation_progress": queue["generation_status"],
             "task_queue_path": queue_path.as_posix(),
             "task_queue_snapshot": queue,
             "task_status": "running",
-            "current_step": "architecture_documents",
-            "current_action": f"{file_label}串行生成完成，准备进入证据链接查询。",
+            "current_step": "graph_completion",
+            "current_action": "图谱补全文档上下文已完成，准备进入证据链接查询。",
+            "document_completion_status": state.get("document_completion_status", "not_requested"),
+            "full_document_status": state.get("full_document_status", "not_requested"),
             "messages": [
                 *state.get("messages", []),
-                AgentMessage(role="assistant", content=f"{file_label}已串行生成，开始查询可信证据链接。"),
+                AgentMessage(role="assistant", content="图谱补全文档上下文已写入，开始查询可信证据链接。"),
             ],
         }
         self._commit_state(state, updates)
@@ -640,6 +620,7 @@ class KnowledgeGraphWorkflow:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         node_id = self._structure_node_id_for_blueprint(blueprint)
         if not node_id:
@@ -652,6 +633,7 @@ class KnowledgeGraphWorkflow:
             generated_path=generated_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
+            extra_properties=extra_properties,
         )
 
     def _update_structure_node_status_for_task(
@@ -663,9 +645,10 @@ class KnowledgeGraphWorkflow:
         generation_state: str,
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        target_path = str(task.get("target_file_path", "")).strip()
-        node_id = self._structure_node_id_for_file(context, target_path)
+        target_path = str(task.get("target_file_path") or task.get("suggested_relative_path") or "").strip()
+        node_id = str(task.get("target_node_id", "")).strip() or self._structure_node_id_for_file(context, target_path)
         if not node_id:
             return {"status": "skipped", "reason": "missing_structure_node_id", "path": target_path}
         return self._update_structure_node_status_by_id(
@@ -676,6 +659,7 @@ class KnowledgeGraphWorkflow:
             generated_path=target_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
+            extra_properties=extra_properties,
         )
 
     def _update_structure_node_status_by_id(
@@ -688,6 +672,7 @@ class KnowledgeGraphWorkflow:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         graph_sync = {"status": "skipped", "reason": "structure_graph_sync_not_available", "node_id": node_id, "path": generated_path}
         if (state.get("structure_graph_sync") or {}).get("status") == "passed":
@@ -700,6 +685,7 @@ class KnowledgeGraphWorkflow:
                     generated_path=generated_path,
                     pending_task_count=pending_task_count,
                     completed_task_count=completed_task_count,
+                    extra_properties=extra_properties or {},
                 )
                 graph_sync = result.to_dict() if result is not None else graph_sync
             except Exception as exc:
@@ -712,6 +698,7 @@ class KnowledgeGraphWorkflow:
             generated_path=generated_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
+            extra_properties=extra_properties,
         )
         state["request_context"] = context
         state["structure_graph"] = context.structure_graph
@@ -823,6 +810,17 @@ class KnowledgeGraphWorkflow:
                 generation_state="link_verified" if result["status"] == "completed" else "link_failed",
                 pending_task_count=pending_count,
                 completed_task_count=completed_count,
+                extra_properties={
+                    "evidence_links": [result["selected_link"]] if result["selected_link"] else [],
+                    "selected_link": result["selected_link"],
+                    "source_kind": result["source_kind"],
+                    "reachable": result["reachable"],
+                    "relevance_reason": result["relevance_reason"],
+                    "checked_at": result["checked_at"],
+                    "claim_or_gap": str(queue["tasks"][index].get("claim_or_gap", "")),
+                    "expected_evidence": queue["tasks"][index].get("expected_evidence", []),
+                    "document_completion_status": "not_requested",
+                },
             )
             self._queue_store.save(domain_dir, queue)
             self._commit_queue_snapshot(
@@ -872,10 +870,10 @@ class KnowledgeGraphWorkflow:
         for item in validation.file_status_updates:
             self._apply_file_status_update(item)
         if validation.is_complete:
-            queue["final_status"] = "ready_for_fill"
+            queue["final_status"] = "ready_for_governance"
             completeness = CompletenessResult(
                 status="pass",
-                reasons=["文件级查询队列验证通过。"],
+                reasons=["图谱级查询队列验证通过。"],
                 missing_topics=[],
                 supplement_queries=[],
                 failure_categories=[],
@@ -886,7 +884,7 @@ class KnowledgeGraphWorkflow:
             queue["tasks"] = self._merge_queue_tasks(queue.get("tasks", []), validation.new_tasks)
             completeness = CompletenessResult(
                 status="supplement_required",
-                reasons=["文件级查询队列仍有证据缺口。"],
+                reasons=["图谱级查询队列仍有证据缺口。"],
                 missing_topics=[],
                 supplement_queries=[str(item.get("query_text", "")) for item in validation.new_tasks if str(item.get("query_text", "")).strip()],
                 failure_categories=["file_completion_incomplete"],
@@ -906,18 +904,17 @@ class KnowledgeGraphWorkflow:
     def _fill_evidence(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
         queue = state.get("task_queue_snapshot", {})
-        full_document_mode = context.completion_mode == "full_document"
         self._emit_workflow_event(
             state,
             "evidence_filling",
-            "开始生成完整知识文档" if full_document_mode else "开始收尾知识框架证据文件",
+            "开始收尾图谱证据任务",
             "active",
             {"completion_mode": context.completion_mode},
         )
         outputs = dict(state.get("agent_outputs", {}))
         outputs["QueueFillPass"] = EngineRunResult(
             agent_name="QueueFillPass",
-            summary="统一回填队列中的来源与结论。" if full_document_mode else "可信证据链接队列已完成收尾，正文补全留给后置文档补全任务。",
+            summary="可信证据链接队列已完成收尾，正文补全留给后置文档补全任务。",
             key_points=[],
             raw_material=[],
             coverage_topics=context.subdomains,
@@ -926,27 +923,15 @@ class KnowledgeGraphWorkflow:
             round_number=state.get("round_number", 1),
             artifacts=self._build_fill_artifacts(queue.get("tasks", [])),
         )
-        if full_document_mode:
-            self._writer.apply_output_artifacts(context, outputs)
-        if full_document_mode:
-            artifact = self._writer.write(
-                context=context,
-                outputs=outputs,
-                completeness=state.get("completeness")
-                or CompletenessResult(status="pass", reasons=["文件级回填完成。"], missing_topics=[], supplement_queries=[]),
-                round_number=state.get("round_number", 1),
-            )
-            full_document_status = "generated"
-            current_action = "所有已验证依据已统一回填，并生成完整知识库文档。"
-        else:
-            artifact = self._writer.build_domain_artifact(context)
-            full_document_status = "skipped"
-            current_action = "知识框架图谱与证据文件已完成，完整知识文档按需后置生成。"
+        artifact = self._writer.build_graph_governance_artifact(context=context, queue=queue, outputs=outputs)
+        full_document_status = "not_requested"
+        current_action = "知识框架图谱与证据链接已完成，本地知识 Markdown 按需后置生成。"
         updates = {
             "agent_outputs": outputs,
             "document_artifact": artifact,
             "completion_mode": context.completion_mode,
             "full_document_status": full_document_status,
+            "document_completion_status": "not_requested",
             "fill_progress": {
                 "completed_tasks": len([task for task in queue.get("tasks", []) if str(task.get("status", "")) == "completed"]),
                 "total_tasks": len(queue.get("tasks", [])),
@@ -959,7 +944,7 @@ class KnowledgeGraphWorkflow:
         self._emit_workflow_event(
             state,
             "evidence_filling",
-            "完整知识文档已生成" if full_document_mode else "知识框架证据文件已收尾",
+            "图谱证据任务已收尾",
             "completed",
             {"completion_mode": context.completion_mode, "full_document_status": full_document_status},
         )
@@ -967,17 +952,27 @@ class KnowledgeGraphWorkflow:
 
     def _run_post_storage(self, state: WorkflowState) -> dict[str, Any]:
         self._emit_workflow_event(state, "governing", "结构化治理与质量检测", "active")
+        artifact = state.get("document_artifact")
+        if artifact is None:
+            artifact = self._writer.build_graph_governance_artifact(
+                context=state["request_context"],
+                queue=state.get("task_queue_snapshot", {}),
+                outputs=state.get("agent_outputs", {}),
+            )
         result = self._post_storage_pipeline.run(
-            state["document_artifact"],
+            artifact,
             state["request_context"],
             state.get("agent_outputs", {}),
         )
         task_status = self._task_status_from_post_storage(result)
         updates = {
             "post_storage_result": result,
+            "document_artifact": artifact,
             "task_status": task_status,
             "current_step": "versioning" if task_status == "verified" else "governing",
             "current_action": "治理链路已完成。" if task_status == "verified" else "治理链路需要修复。",
+            "document_completion_status": state.get("document_completion_status", "not_requested"),
+            "full_document_status": state.get("full_document_status", "not_requested"),
         }
         self._commit_state(state, updates)
         self._emit_workflow_event(state, "governing", "结构化治理与质量检测", "completed" if task_status == "verified" else "blocked")
@@ -1160,8 +1155,7 @@ class KnowledgeGraphWorkflow:
                 body.extend(["| 编号 | 来源 | 关键信息 | 可信度 | 备注 |", "|---|---|---|---|---|", "| S0 | scaffold | 初始骨架 | unknown | 待补真实来源 |"])
             elif section == "后续动作":
                 body.extend(["- 根据 JSON 合同中的 query_tasks 串行补充官方或权威依据。"])
-                if context.completion_mode == "full_document":
-                    body.append("- 证据完成后生成完整知识库文档。")
+                body.append("- 证据完成后等待用户点击补全文档生成本地知识 Markdown。")
             else:
                 body.append("待补充。")
             body.append("")
@@ -1218,8 +1212,29 @@ class KnowledgeGraphWorkflow:
             }
         ]
 
+    def _build_graph_completion_contract(self, context: RequestContext, blueprint: dict[str, Any], spec, suggested_path: str) -> dict[str, Any]:
+        file_path = Path(suggested_path)
+        tasks = self._default_query_tasks(blueprint, file_path, spec)
+        return {
+            "file_id": str(blueprint.get("file_id", file_path.stem)),
+            "file_path": suggested_path,
+            "required_sections": list(spec.required_sections),
+            "claims": [f"{spec.title} 需要形成可追溯知识说明。"],
+            "evidence_needed": ["官方定义", "官方文档或标准来源", "关键关系与学习路径依据"],
+            "query_tasks": tasks,
+            "completion_status": {
+                "state": "completion_ready",
+                "required": True,
+                "completed_task_ids": [],
+                "pending_task_ids": [str(item.get("task_id", "")) for item in tasks],
+                "document_completion_status": "not_requested",
+            },
+        }
+
     def _extract_queue_tasks(self, contract: dict[str, Any], blueprint: dict[str, Any], file_path: Path, round_number: int) -> list[dict[str, Any]]:
         tasks: list[dict[str, Any]] = []
+        node_id = self._structure_node_id_for_blueprint(blueprint)
+        suggested_relative_path = str(blueprint.get("relative_path", "")).strip()
         for task in contract.get("query_tasks", []):
             if not isinstance(task, dict):
                 continue
@@ -1240,6 +1255,8 @@ class KnowledgeGraphWorkflow:
             queue_task["module_label"] = str(blueprint.get("module_label", ""))
             queue_task["doc_role"] = str(blueprint.get("doc_role", ""))
             queue_task["subdomain"] = str(blueprint.get("subdomain", ""))
+            queue_task["target_node_id"] = node_id
+            queue_task["suggested_relative_path"] = suggested_relative_path
             tasks.append(queue_task)
         return tasks
 
@@ -1755,7 +1772,7 @@ class KnowledgeGraphWorkflow:
     @staticmethod
     def _route_after_validation(state: WorkflowState) -> str:
         queue = state.get("task_queue_snapshot", {})
-        return "fill_evidence" if queue.get("final_status") == "ready_for_fill" else "run_query_queue"
+        return "run_post_storage" if queue.get("final_status") == "ready_for_governance" else "run_query_queue"
 
     @staticmethod
     def _route_after_structure_review(state: WorkflowState) -> str:
@@ -1763,7 +1780,7 @@ class KnowledgeGraphWorkflow:
 
     @staticmethod
     def _route_after_final_structure_review(state: WorkflowState) -> str:
-        return "generate_architecture_documents" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_2"
+        return "enrich_graph_for_completion" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_2"
 
     @staticmethod
     def _route_after_final_structure_repair(state: WorkflowState) -> str:
@@ -1861,8 +1878,8 @@ class KnowledgeGraphWorkflow:
         graph = context.structure_graph or {}
         if not isinstance(graph, dict):
             return
-        is_generated = generation_state in {"documented", "link_querying", "link_verified", "approved"}
-        is_completed = generation_state in {"documented", "link_verified", "approved"}
+        is_generated = generation_state in {"completion_ready", "document_generating", "documented", "link_querying", "link_verified", "approved"}
+        is_completed = generation_state in {"completion_ready", "documented", "link_verified", "approved"}
         for node in graph.get("nodes", []):
             if not isinstance(node, dict):
                 continue
@@ -1883,6 +1900,7 @@ class KnowledgeGraphWorkflow:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict[str, Any] | None = None,
     ) -> None:
         graph = context.structure_graph or {}
         nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
@@ -1891,10 +1909,14 @@ class KnowledgeGraphWorkflow:
             return
         target["self_generation_state"] = generation_state
         target["generation_state"] = generation_state
-        target["is_generated"] = generation_state in {"documented", "link_querying", "link_verified", "approved"}
-        target["is_completed"] = generation_state in {"documented", "link_verified", "approved"}
+        target["is_generated"] = generation_state in {"completion_ready", "document_generating", "documented", "link_querying", "link_verified", "approved"}
+        target["is_completed"] = generation_state in {"completion_ready", "documented", "link_verified", "approved"}
         if generated_path:
             target["generated_path"] = generated_path
+        if extra_properties:
+            for key, value in extra_properties.items():
+                if value is not None:
+                    target[key] = value
         if pending_task_count is not None:
             target["self_pending_task_count"] = max(0, int(pending_task_count))
             target["pending_task_count"] = max(0, int(pending_task_count))

@@ -60,6 +60,7 @@ from knowledgeforge.storage.realtime_reviewer import (
     RealtimeReviewResult,
 )
 from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
+from knowledgeforge.utils.paths import sanitize_path_segment
 from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
@@ -658,7 +659,8 @@ class TaskService:
             "round_number": 1,
             "max_rounds": self._config.max_rounds,
             "completion_mode": request_context.completion_mode,
-            "full_document_status": "pending" if request_context.completion_mode == "full_document" else "skipped",
+            "document_completion_status": "not_requested",
+            "full_document_status": "not_requested",
             "structure_review_rounds": [],
             "structure_review_status": "pending",
             "structure_repair_log": [],
@@ -860,7 +862,9 @@ class TaskService:
         result = self._writer.complete_framework_documents(
             request_context,
             round_number=int(stored.get("round_number", 1)),
+            queue=stored.get("task_queue_snapshot") or {},
         )
+        self._mark_completed_documents_on_graph(request_context, result)
         now = now_iso()
         event = WorkflowStepEvent(
             step_id="document_completion",
@@ -871,6 +875,7 @@ class TaskService:
         )
         stored["request_context"] = request_context.to_dict()
         stored["completion_mode"] = "framework"
+        stored["document_completion_status"] = "generated"
         stored["full_document_status"] = "generated"
         stored["document_completion_result"] = result
         stored["current_step"] = "document_completion"
@@ -885,6 +890,42 @@ class TaskService:
         self._audit_logger.log(task_id, "documents_completed", result)
         self._audit_logger.log(task_id, "workflow_step", event.to_dict())
         return self._attach_runtime_observability(stored)
+
+    def _mark_completed_documents_on_graph(self, request_context: RequestContext, result: dict[str, Any]) -> None:
+        completed_paths = {str(path) for path in result.get("completed_files", []) if str(path).strip()}
+        if not completed_paths:
+            return
+        domain_dir = self._config.save_root / sanitize_path_segment(request_context.domain, "domain")
+        graph = request_context.structure_graph if isinstance(request_context.structure_graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        for blueprint in request_context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            generated_path = (domain_dir / relative_path).as_posix()
+            if generated_path not in completed_paths:
+                continue
+            requirements = blueprint.get("completion_requirements", {})
+            node_id = str(requirements.get("structure_node_id", "")) if isinstance(requirements, dict) else ""
+            for node in nodes:
+                if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                    node["generation_state"] = "documented"
+                    node["self_generation_state"] = "documented"
+                    node["document_completion_status"] = "generated"
+                    node["generated_path"] = generated_path
+                    node["is_generated"] = True
+                    node["is_completed"] = True
+                    node["completed_at"] = now_iso()
+            if self._graph_client is not None and node_id:
+                with suppress(Exception):
+                    self._graph_client.update_structure_node_status(
+                        domain=request_context.domain,
+                        task_id=request_context.task_id,
+                        node_id=node_id,
+                        generation_state="documented",
+                        generated_path=generated_path,
+                        extra_properties={"document_completion_status": "generated"},
+                    )
 
     @staticmethod
     def _ensure_framework_ready_for_document_completion(stored: dict[str, Any]) -> None:
@@ -948,7 +989,8 @@ class TaskService:
             "round_number": round_number + 1,
             "max_rounds": self._config.max_rounds,
             "completion_mode": request_context.completion_mode,
-            "full_document_status": stored.get("full_document_status", "pending" if request_context.completion_mode == "full_document" else "skipped"),
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
             "structure_review_rounds": stored.get("structure_review_rounds", []),
             "structure_review_status": stored.get("structure_review_status", "pending"),
             "structure_repair_log": stored.get("structure_repair_log", []),
@@ -984,7 +1026,7 @@ class TaskService:
         messages.append(
             AgentMessage(
                 role="system",
-                content="任务从 repair_required 的知识架构修复流继续执行，复用当前已修补图谱生成文档与证据链接。",
+                content="任务从 repair_required 的知识架构修复流继续执行，复用当前已修补图谱补全文档上下文与证据链接。",
                 metadata={"resume_from_status": previous_status, "resume_mode": "continue_after_structure_repair"},
             )
         )
@@ -995,7 +1037,8 @@ class TaskService:
             "round_number": int(stored.get("round_number", 1)),
             "max_rounds": self._config.max_rounds,
             "completion_mode": request_context.completion_mode,
-            "full_document_status": stored.get("full_document_status", "pending" if request_context.completion_mode == "full_document" else "skipped"),
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
             "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
             "structure_graph_sync": stored.get("structure_graph_sync", {}),
             "structure_review_rounds": stored.get("structure_review_rounds", []),
@@ -1300,6 +1343,20 @@ class TaskService:
         task_id: str,
         candidate: RealtimeReviewCandidate,
     ) -> RealtimeReviewResult:
+        task_snapshot = self.get_task(task_id) or {}
+        if (task_snapshot.get("request_context") or {}).get("completion_mode", "framework") == "framework":
+            result = RealtimeReviewResult(status="skipped", reason="默认主链路不生成本地知识 Markdown；证据只写入 Neo4j 图谱上下文。")
+            self._audit_logger.log(
+                task_id,
+                "realtime_file_review_skipped",
+                {
+                    "agent": candidate.agent,
+                    "round": candidate.round_number,
+                    "plan_item_id": candidate.plan_item_id,
+                    "reason": result.reason,
+                },
+            )
+            return result
         result = self._realtime_file_reviewer.review_and_save(candidate)
         self._audit_logger.log(
             task_id,

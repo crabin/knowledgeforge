@@ -569,6 +569,7 @@ h3 {
 }
 
 .neo4j-map-node.state-approved,
+.neo4j-map-node.state-completion_ready,
 .neo4j-map-node.state-documented,
 .neo4j-map-node.state-link_verified,
 .neo4j-map-node.state-completed,
@@ -579,7 +580,7 @@ h3 {
 
 .neo4j-map-node.state-reviewing,
 .neo4j-map-node.state-repairing,
-.neo4j-map-node.state-documenting,
+.neo4j-map-node.state-document_generating,
 .neo4j-map-node.state-link_querying {
   border-left-color: var(--blue);
   background: #f2f6fb;
@@ -748,6 +749,7 @@ h3 {
 }
 
 .neo4j-node-card.state-approved,
+.neo4j-node-card.state-completion_ready,
 .neo4j-node-card.state-documented,
 .neo4j-node-card.state-link_verified {
   border-left-color: var(--green);
@@ -756,7 +758,7 @@ h3 {
 
 .neo4j-node-card.state-reviewing,
 .neo4j-node-card.state-repairing,
-.neo4j-node-card.state-documenting,
+.neo4j-node-card.state-document_generating,
 .neo4j-node-card.state-link_querying {
   border-left-color: var(--blue);
   background: #f2f6fb;

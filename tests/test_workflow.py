@@ -13,7 +13,7 @@ from knowledgeforge.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.services.task_service import TaskService
 
 
-def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> None:
+def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(
             save_root=tmp_path / "save",
@@ -37,9 +37,12 @@ def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> N
     payload = response.get_json()
     assert payload["task_status"] == "verified"
     assert payload["request_context"]["completion_mode"] == "framework"
-    assert payload["full_document_status"] == "skipped"
+    assert payload["document_completion_status"] == "not_requested"
+    assert payload["full_document_status"] == "not_requested"
     assert payload["document_artifact"]["path"].endswith(".md")
     assert not payload["document_artifact"]["path"].endswith("-mixed.md")
+    assert ".knowledgeforge" not in payload["document_artifact"]["path"]
+    assert "graph_governance" in payload["document_artifact"]["path"]
     assert payload["post_storage_result"]["status"] == "passed"
     assert payload["post_storage_result"]["quality_check"]["status"] == "passed"
     assert payload["post_storage_result"]["quality_check"]["checks"]["framework_graph_check"] is True
@@ -56,7 +59,7 @@ def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> N
     assert len(payload["structure_review_rounds"]) == 2
     assert payload["structure_review_status"] == "passed"
     assert any(
-        node["properties"].get("generation_state") in {"documented", "link_verified"}
+        node["properties"].get("generation_state") in {"completion_ready", "link_verified"}
         for node in payload["graph_snapshot"]["nodes"]
     )
     assert payload["graph_event"]["event_type"] == "structure_node_status_changed"
@@ -67,14 +70,16 @@ def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> N
     assert all(task["task_type"] == "query" for task in payload["task_queue_snapshot"]["tasks"])
     assert any(task.get("selected_link") for task in payload["task_queue_snapshot"]["tasks"])
 
-    document_path = Path(payload["document_artifact"]["path"])
-    assert document_path.exists()
+    knowledge_markdown = [
+        path for path in (tmp_path / "save" / "知识工程").rglob("*.md")
+        if path.name == "README.md" or path.parent.name != "graph_governance"
+    ]
+    assert knowledge_markdown == []
 
-    content = document_path.read_text(encoding="utf-8")
+    content = Path(payload["document_artifact"]["path"]).read_text(encoding="utf-8")
     assert "## 证据与来源" in content
     assert "## 知识定位" in content
-    assert "source_type: query" in content
-    assert "## 正文" not in content
+    assert "source_type: neo4j" in content
 
     graph_response = client.get(f"/tasks/{payload['task_id']}/graph")
     assert graph_response.status_code == 200
@@ -83,7 +88,7 @@ def test_task_workflow_writes_framework_markdown_by_default(tmp_path: Path) -> N
     assert graph_payload["graph"]["nodes"]
 
 
-def test_task_workflow_full_document_mode_writes_final_document(tmp_path: Path) -> None:
+def test_task_workflow_ignores_full_document_mode_until_completion_button(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(
             save_root=tmp_path / "save",
@@ -107,14 +112,11 @@ def test_task_workflow_full_document_mode_writes_final_document(tmp_path: Path) 
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["task_status"] == "verified"
-    assert payload["request_context"]["completion_mode"] == "full_document"
-    assert payload["full_document_status"] == "generated"
-    assert payload["document_artifact"]["path"].endswith("-mixed.md")
-
-    document_path = Path(payload["document_artifact"]["path"])
-    content = document_path.read_text(encoding="utf-8")
-    assert "## 正文" in content
-    assert "source_type: mixed" in content
+    assert payload["request_context"]["completion_mode"] == "framework"
+    assert payload["document_completion_status"] == "not_requested"
+    assert payload["full_document_status"] == "not_requested"
+    assert not payload["document_artifact"]["path"].endswith("-mixed.md")
+    assert not list((tmp_path / "save" / "知识工程").rglob("*.md"))
 
 
 def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, monkeypatch) -> None:
@@ -162,7 +164,11 @@ def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, m
     assert [item["status"] for item in payload["structure_review_rounds"]] == ["needs_repair", "passed"]
     assert payload["structure_repair_log"]
     assert any(node["title"] == "评估指标" for node in payload["structure_graph"]["nodes"])
-    assert payload["document_artifact"]["generated_files"]
+    assert payload["document_artifact"]["doc_role"] == "graph_governance"
+    assert any(
+        node.get("generation_state") in {"completion_ready", "link_verified"}
+        for node in payload["structure_graph"]["nodes"]
+    )
 
 
 def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path, monkeypatch) -> None:
@@ -563,7 +569,7 @@ def test_direct_async_task_normalizes_legacy_file_level_completion_mode(tmp_path
 
     assert response.status_code == 202
     context = response.get_json()["request_context"]
-    assert context["completion_mode"] == "full_document"
+    assert context["completion_mode"] == "framework"
 
 
 def test_direct_task_rejects_unconfirmed_concept_explanation(tmp_path: Path) -> None:

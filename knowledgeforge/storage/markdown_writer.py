@@ -247,8 +247,107 @@ class MarkdownKnowledgeWriter:
             generated_files=generated_files,
         )
 
-    def complete_framework_documents(self, context: RequestContext, *, round_number: int) -> dict[str, object]:
+    def build_graph_governance_artifact(
+        self,
+        *,
+        context: RequestContext,
+        queue: dict[str, object],
+        outputs: dict[str, EngineRunResult],
+    ) -> DocumentArtifact:
+        runtime_dir = self._config.task_state_root / "graph_governance"
+        ensure_directory(runtime_dir)
+        task_id = context.task_id or sanitize_path_segment(context.domain, "domain")
+        document_id = f"{task_id}-graph-governance"
+        document_path = runtime_dir / f"{document_id}.md"
+        tasks = queue.get("tasks", [])
+        task_items = tasks if isinstance(tasks, list) else []
+        completed_tasks = [
+            task for task in task_items if isinstance(task, dict) and str(task.get("status", "")) == "completed"
+        ]
+        source_rows: list[str] = []
+        for index, task in enumerate(completed_tasks, start=1):
+            source_rows.append(
+                "| S{index} | {link} | {claim} | {kind} | {checked} |".format(
+                    index=index,
+                    link=str(task.get("selected_link", "")) or "未找到链接",
+                    claim=str(task.get("claim_or_gap", "")) or str(task.get("query_text", "")),
+                    kind=str(task.get("source_kind", "")) or "unknown",
+                    checked=str(task.get("checked_at", "")),
+                )
+            )
+        if not source_rows:
+            source_rows.append("| S0 | Neo4j graph context | 暂无已完成证据链接 | unknown |  |")
+        front_matter = {
+            "id": document_id,
+            "title": f"{context.domain} 图谱治理摘要",
+            "domain": context.domain,
+            "subdomain": context.core_topics[0] if context.core_topics else (context.subdomains[0] if context.subdomains else "通用"),
+            "doc_type": "runtime_graph_governance",
+            "source_type": "neo4j",
+            "agent": "KnowledgeForge",
+            "status": "draft",
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+            "path": document_path.as_posix(),
+        }
+        front_matter_text = yaml.safe_dump(front_matter, allow_unicode=True, sort_keys=False).strip()
+        node_count = len((context.structure_graph or {}).get("nodes", [])) if isinstance(context.structure_graph, dict) else 0
+        document_path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    front_matter_text,
+                    "---",
+                    "",
+                    f"# {context.domain} 图谱治理摘要",
+                    "",
+                    "## 知识定位",
+                    "",
+                    f"- 领域：{context.domain}",
+                    "- 当前主链路默认只完善 Neo4j 知识图谱，不生成本地知识 Markdown。",
+                    "",
+                    "## 证据与来源",
+                    "",
+                    "| 编号 | 来源 | 关键信息 | 可信度 | 备注 |",
+                    "|---|---|---|---|---|",
+                    *source_rows,
+                    "",
+                    "## 图谱状态",
+                    "",
+                    f"- 结构节点数：{node_count}",
+                    f"- 证据任务数：{len(task_items)}",
+                    f"- 已完成证据任务：{len(completed_tasks)}",
+                    "- 本地知识 Markdown 状态：not_requested",
+                    "",
+                    "## 后续动作",
+                    "",
+                    "- 用户点击补全文档后，再基于 Neo4j 图谱和已验证链接生成本地 Markdown。",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return DocumentArtifact(
+            document_id=document_id,
+            title=f"{context.domain} 图谱治理摘要",
+            domain=context.domain,
+            subdomain=str(front_matter["subdomain"]),
+            path=document_path.as_posix(),
+            status="draft",
+            version="v1",
+            module_id="graph_governance",
+            module_label="Graph Governance",
+            doc_role="graph_governance",
+            generated_files=[],
+        )
+
+    def complete_framework_documents(self, context: RequestContext, *, round_number: int, queue: dict[str, object] | None = None) -> dict[str, object]:
         domain_dir = self._config.save_root / sanitize_path_segment(context.domain, "domain")
+        queue_tasks = [
+            task
+            for task in ((queue or {}).get("tasks", []) if isinstance((queue or {}).get("tasks", []), list) else [])
+            if isinstance(task, dict)
+        ]
         completed_files: list[str] = []
         skipped_files: list[str] = []
         for blueprint in context.knowledge_blueprint:
@@ -257,13 +356,54 @@ class MarkdownKnowledgeWriter:
                 continue
             file_path = domain_dir / relative_path
             if not file_path.exists():
-                skipped_files.append(file_path.as_posix())
-                continue
+                ensure_directory(file_path.parent)
+                file_path.write_text(
+                    self._render_blueprint_skeleton(
+                        context=context,
+                        blueprint=blueprint,
+                        round_number=round_number,
+                        file_path=file_path,
+                        timestamp=now_iso(),
+                    ),
+                    encoding="utf-8",
+                )
             text = file_path.read_text(encoding="utf-8")
             if "## 正文" in text and "## 知识定位" not in text:
                 skipped_files.append(file_path.as_posix())
                 continue
             contract = parse_contract_block(text) or self._initial_contract(context, blueprint, file_path)
+            node_id = ""
+            requirements = blueprint.get("completion_requirements", {})
+            if isinstance(requirements, dict):
+                node_id = str(requirements.get("structure_node_id", ""))
+            matching_tasks = [
+                task
+                for task in queue_tasks
+                if str(task.get("target_node_id", "")) == node_id
+                or str(task.get("target_file_path", "")) == file_path.as_posix()
+                or str(task.get("suggested_relative_path", "")) == relative_path
+            ]
+            if matching_tasks:
+                contract["query_tasks"] = [
+                    {
+                        "task_id": str(task.get("task_id", "")),
+                        "task_type": "query",
+                        "section": str(task.get("target_section", "证据与来源")),
+                        "claim_or_gap": str(task.get("claim_or_gap", "")),
+                        "query_text": str(task.get("query_text", "")),
+                        "expected_evidence": task.get("expected_evidence", []),
+                        "preferred_source_types": task.get("preferred_source_types", []),
+                        "acceptance_criteria": task.get("acceptance_criteria", []),
+                        "status": str(task.get("status", "")),
+                        "citation": (task.get("citations") or [{}])[0] if isinstance(task.get("citations"), list) and task.get("citations") else {},
+                        "selected_link": str(task.get("selected_link", "")),
+                        "source_kind": str(task.get("source_kind", "")),
+                        "reachable": bool(task.get("reachable", False)),
+                        "relevance_reason": str(task.get("relevance_reason", "")),
+                        "checked_at": str(task.get("checked_at", "")),
+                    }
+                    for task in matching_tasks
+                ]
             contract["required_sections"] = ["摘要", "关键结论", "背景与上下文", "正文", "证据与来源", "实体与关系候选", "冲突与不确定性", "后续动作"]
             contract["completion_status"] = {
                 **(contract.get("completion_status", {}) if isinstance(contract.get("completion_status"), dict) else {}),
@@ -397,7 +537,7 @@ class MarkdownKnowledgeWriter:
                     "## 后续动作",
                     "",
                     "- 根据 JSON 合同中的 query_tasks 补充官方或权威证据。",
-                    "- 完整知识库文档在 full_document 模式中后置生成。",
+                    "- 完整知识库文档在用户点击补全文档后置动作时生成。",
                     "",
                     render_contract_block(contract),
                     "",

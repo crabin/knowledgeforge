@@ -86,7 +86,7 @@ def test_structure_graph_derives_dynamic_blueprint_without_fixed_modules() -> No
     assert all(path.startswith("save/") for path in derived["required_files"])
 
 
-def test_context_builder_normalizes_full_document_completion_mode() -> None:
+def test_context_builder_normalizes_legacy_completion_mode_to_framework() -> None:
     context = ContextBuilder().build(
         {
             "domain": "Knowledge Engineering",
@@ -94,7 +94,7 @@ def test_context_builder_normalizes_full_document_completion_mode() -> None:
         }
     )
 
-    assert context.completion_mode == "full_document"
+    assert context.completion_mode == "framework"
 
 
 def test_structure_graph_sanitizes_paths_and_dedupes() -> None:

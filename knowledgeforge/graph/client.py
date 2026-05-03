@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+import json
 from contextlib import suppress
 from typing import Any
 
 from neo4j import GraphDatabase
 
 from knowledgeforge.config import Neo4jConfig
+
+
+def _neo4j_safe_properties(properties: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in properties.items():
+        if isinstance(value, list):
+            if all(isinstance(item, (str, int, float, bool)) or item is None for item in value):
+                safe[key] = value
+            else:
+                safe[key] = json.dumps(value, ensure_ascii=False)
+        elif isinstance(value, dict):
+            safe[key] = json.dumps(value, ensure_ascii=False)
+        else:
+            safe[key] = value
+    return safe
 
 
 class Neo4jGraphClient:
@@ -154,6 +170,7 @@ class Neo4jGraphClient:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict[str, Any] | None = None,
     ) -> None:
         driver = GraphDatabase.driver(
             self._config.uri,
@@ -172,6 +189,7 @@ class Neo4jGraphClient:
                     generated_path,
                     pending_task_count,
                     completed_task_count,
+                    _neo4j_safe_properties(extra_properties or {}),
                 )
         finally:
             with suppress(Exception):
@@ -293,6 +311,9 @@ class Neo4jGraphClient:
                     n.is_generated = $is_generated,
                     n.is_completed = $is_completed,
                     n.generation_state = $generation_state,
+                    n.suggested_relative_path = $suggested_relative_path,
+                    n.document_completion_status = $document_completion_status,
+                    n.review_status = $review_status,
                     n.pending_task_count = $pending_task_count,
                     n.completed_task_count = $completed_task_count,
                     n.updated_at = $updated_at
@@ -307,8 +328,11 @@ class Neo4jGraphClient:
                 doc_type=str(node.get("doc_type", "")),
                 parent_node_id=str(node.get("parent_node_id", "")),
                 generation_state=generation_state,
-                is_generated=bool(node.get("is_generated", False)) or generation_state in {"documented", "link_querying", "link_verified", "approved"},
-                is_completed=bool(node.get("is_completed", False)) or generation_state in {"documented", "link_verified", "approved"},
+                is_generated=bool(node.get("is_generated", False)) or generation_state in {"completion_ready", "document_generating", "documented", "link_querying", "link_verified", "approved"},
+                is_completed=bool(node.get("is_completed", False)) or generation_state in {"completion_ready", "documented", "link_verified", "approved"},
+                suggested_relative_path=str(node.get("suggested_relative_path", node.get("relative_path", ""))),
+                document_completion_status=str(node.get("document_completion_status", "not_requested")),
+                review_status=str(node.get("review_status", "")),
                 pending_task_count=int(node.get("pending_task_count", 0) or 0),
                 completed_task_count=int(node.get("completed_task_count", 0) or 0),
                 updated_at=str(structure_graph.get("generated_at", "")),
@@ -349,6 +373,7 @@ class Neo4jGraphClient:
             SET n.is_generated = true,
                 n.generation_state = 'documented',
                 n.generated_path = $generated_path,
+                n.document_completion_status = 'generated',
                 n.task_id = $task_id,
                 n.generated_at = datetime()
             """,
@@ -368,20 +393,33 @@ class Neo4jGraphClient:
         generated_path: str,
         pending_task_count: int | None,
         completed_task_count: int | None,
+        extra_properties: dict[str, Any],
     ) -> None:
         tx.run(
             """
             MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(n:KnowledgeStructureNode {id: $node_id})
             SET n.generation_state = $generation_state,
-                n.is_generated = $generation_state IN ['documented', 'link_querying', 'link_verified', 'approved'],
-                n.is_completed = $generation_state IN ['documented', 'link_verified', 'approved'],
+                n.is_generated = $generation_state IN ['completion_ready', 'document_generating', 'documented', 'link_querying', 'link_verified', 'approved'],
+                n.is_completed = $generation_state IN ['completion_ready', 'documented', 'link_verified', 'approved'],
                 n.generated_path = CASE WHEN $generated_path <> '' THEN $generated_path ELSE n.generated_path END,
+                n.suggested_relative_path = coalesce($extra_properties.suggested_relative_path, n.suggested_relative_path),
+                n.document_completion_status = coalesce($extra_properties.document_completion_status, n.document_completion_status),
+                n.review_status = coalesce($extra_properties.review_status, n.review_status),
+                n.repair_log = coalesce($extra_properties.repair_log, n.repair_log),
+                n.evidence_links = coalesce($extra_properties.evidence_links, n.evidence_links, []),
+                n.selected_link = coalesce($extra_properties.selected_link, n.selected_link),
+                n.source_kind = coalesce($extra_properties.source_kind, n.source_kind),
+                n.reachable = coalesce($extra_properties.reachable, n.reachable),
+                n.relevance_reason = coalesce($extra_properties.relevance_reason, n.relevance_reason),
+                n.checked_at = coalesce($extra_properties.checked_at, n.checked_at),
+                n.claim_or_gap = coalesce($extra_properties.claim_or_gap, n.claim_or_gap),
+                n.expected_evidence = coalesce($extra_properties.expected_evidence, n.expected_evidence, []),
                 n.pending_task_count = coalesce($pending_task_count, n.pending_task_count, 0),
                 n.completed_task_count = coalesce($completed_task_count, n.completed_task_count, 0),
                 n.task_id = $task_id,
                 n.domain = $domain,
                 n.updated_at = datetime(),
-                n.completed_at = CASE WHEN $generation_state IN ['documented', 'link_verified', 'approved'] THEN datetime() ELSE n.completed_at END
+                n.completed_at = CASE WHEN $generation_state IN ['completion_ready', 'documented', 'link_verified', 'approved'] THEN datetime() ELSE n.completed_at END
             """,
             domain=domain,
             task_id=task_id,
@@ -390,6 +428,7 @@ class Neo4jGraphClient:
             generated_path=generated_path,
             pending_task_count=pending_task_count,
             completed_task_count=completed_task_count,
+            extra_properties=extra_properties,
         )
 
     @staticmethod

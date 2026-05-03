@@ -42,11 +42,12 @@ const workflowSteps = [
   { id: "structure_graph_planning", order: "02", title: "图谱生成", description: "根据用户意图生成知识架构图谱。" },
   { id: "neo4j_structure_sync", order: "03", title: "Neo4j呈现", description: "先将知识架构图谱同步到 Neo4j。" },
   { id: "structure_review", order: "04", title: "架构Review", description: "执行两轮自动审查与修补。" },
-  { id: "architecture_documents", order: "05", title: "架构文档", description: "审查通过后生成本地架构文档。" },
+  { id: "graph_completion", order: "05", title: "图谱补全", description: "写入补全文档所需的图谱上下文。" },
   { id: "evidence_link_query", order: "06", title: "证据链接", description: "只记录官方或高公信力链接。" },
-  { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
-  { id: "document_completion", order: "08", title: "补全文档", description: "可选：框架完成后逐个补全知识文档。", optional: true },
-  { id: "versioning", order: "09", title: "版本研报", description: "可选：冻结版本并生成研报。", optional: true },
+  { id: "evidence_link_recorded", order: "07", title: "图谱证据写入", description: "把证据链接、来源类型和 claim 写入 Neo4j。" },
+  { id: "governing", order: "08", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
+  { id: "document_completion", order: "09", title: "补全文档", description: "可选：验证后生成本地知识文档。", optional: true },
+  { id: "versioning", order: "10", title: "版本研报", description: "可选：冻结版本并生成研报。", optional: true },
 ];
 
 async function requestJson(path, options = {}) {
@@ -143,7 +144,7 @@ function renderSummary(payload) {
     ["Session ID", payload.session_id || payload.intake_session?.session_id],
     ["状态", payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status],
     ["产出模式", formatCompletionMode(getNested(payload, "request_context.completion_mode") || getNested(payload, "task.request_context.completion_mode") || payload.completion_mode || payload.intake_session?.completion_mode)],
-    ["完整文档", formatFullDocumentStatus(payload.full_document_status || payload.task?.full_document_status)],
+    ["补全文档", formatFullDocumentStatus(payload.document_completion_status || payload.full_document_status || payload.task?.document_completion_status || payload.task?.full_document_status)],
     ["补全文档数", summarizeDocumentCompletion(payload)],
     ["执行耗时", summarizeTaskTiming(payload)],
     ["当前步骤", payload.current_step || payload.task?.current_step],
@@ -151,7 +152,7 @@ function renderSummary(payload) {
     ["架构Review", summarizeStructureReview(payload)],
     ["生成进度", summarizeGenerationProgress(payload)],
     ["队列进度", summarizeQueueProgress(payload)],
-    ["当前文件", summarizeCurrentFile(payload)],
+    ["当前图谱节点", summarizeCurrentFile(payload)],
     ["当前链接任务", summarizeCurrentEvidenceTask(payload)],
     ["图谱完成", summarizeGraphCompletion(payload)],
     ["最近链接", payload.file_update?.selected_link || payload.file_update?.path],
@@ -160,7 +161,7 @@ function renderSummary(payload) {
     ["队列统计", summarizeQueueCountSummary(queueSummary.counts)],
     ["最新 LLM", summarizeLatestLlm(latestLlmDetails)],
     ["最近错误", latestError.error || latestError.event],
-    ["文档路径", getNested(payload, "document_artifact.path")],
+    ["治理摘要", getNested(payload, "document_artifact.path")],
     ["质量检查", getNested(payload, "post_storage_result.quality_check.status")],
     ["冻结版本", getNested(payload, "post_storage_result.version_record.version") || payload.version],
     ["研报资格", getNested(payload, "post_storage_result.version_record.report_eligible")],
@@ -190,9 +191,9 @@ function summarizeDocumentCompletion(payload) {
 function formatCompletionMode(mode) {
   if (!mode) return "";
   return {
-    framework: "知识框架与证据",
-    full_document: "完整知识文档",
-    file_level: "完整知识文档",
+    framework: "Neo4j 图谱与证据",
+    full_document: "Neo4j 图谱与证据",
+    file_level: "Neo4j 图谱与证据",
   }[mode] || mode;
 }
 
@@ -308,17 +309,17 @@ function normalizeWorkflowStepId(stepId) {
     structure_repair: "structure_review",
     repair_structure_graph_round_1: "structure_review",
     repair_structure_graph_round_2: "structure_review",
-    llm_generating: "architecture_documents",
+    architecture_documents: "graph_completion",
+    llm_generating: "graph_completion",
     query_queue_running: "evidence_link_query",
-    evidence_realtime_write: "evidence_link_query",
-    evidence_link_recorded: "evidence_link_query",
+    evidence_realtime_write: "evidence_link_recorded",
     evidence_filling: "evidence_link_query",
     documents_completed: "document_completion",
     planning: "intent_recognition",
     awaiting_confirmation: "intent_recognition",
     collecting: "evidence_link_query",
     evaluating: "governing",
-    writing: "architecture_documents",
+    writing: "graph_completion",
   };
   return aliases[stepId] || stepId;
 }
@@ -326,8 +327,8 @@ function normalizeWorkflowStepId(stepId) {
 function renderWorkflowMap(payload) {
   const events = normalizeWorkflowEvents(payload);
   const byStep = new Map(events.map((event) => [normalizeWorkflowStepId(event.step_id), { ...event, step_id: normalizeWorkflowStepId(event.step_id) }]));
-  if ((payload.full_document_status || payload.task?.full_document_status) === "generated") {
-    byStep.set("document_completion", { step_id: "document_completion", status: "completed", label: "完整知识文档已补全" });
+  if ((payload.document_completion_status || payload.full_document_status || payload.task?.document_completion_status || payload.task?.full_document_status) === "generated") {
+    byStep.set("document_completion", { step_id: "document_completion", status: "completed", label: "本地知识文档已补全" });
   }
   const current = getCurrentWorkflowStep(payload, events);
   renderWorkflowFallback(byStep, current, payload);
@@ -503,7 +504,7 @@ function getWorkflowStepStatus(stepId, byStep, current, payload = {}) {
   if (event?.status === "completed") return "completed";
   if (stepId === current) return "active";
   if (stepId === "document_completion") {
-    return (payload.full_document_status || payload.task?.full_document_status) === "generated" ? "completed" : "pending";
+    return (payload.document_completion_status || payload.full_document_status || payload.task?.document_completion_status || payload.task?.full_document_status) === "generated" ? "completed" : "pending";
   }
   if (stepId === "versioning") {
     const versionRecord = getNested(payload, "post_storage_result.version_record") || getNested(payload, "task.post_storage_result.version_record");
@@ -678,7 +679,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     state.neo4jSelectedNodeId = chooseDefaultNeo4jSelectedNode(nodes)?.id || "";
   }
   const counts = summarizeNeo4jNodeStates(nodes);
-  const generatingCount = counts.generating + counts.generated + counts.documenting;
+  const generatingCount = counts.generating + counts.generated + counts.completion_ready + counts.document_generating;
   const evidenceCount = counts.evidence_pending + counts.evidence_running + counts.link_querying;
   const completedCount = counts.completed + counts.approved + counts.documented + counts.link_verified;
   const visibleNodes = selectNeo4jMapNodes(nodes);
@@ -733,7 +734,8 @@ function summarizeNeo4jNodeStates(nodes) {
     reviewing: 0,
     repairing: 0,
     approved: 0,
-    documenting: 0,
+    completion_ready: 0,
+    document_generating: 0,
     documented: 0,
     link_querying: 0,
     link_verified: 0,
@@ -780,7 +782,8 @@ function getNeo4jHtmlNodePriority(node) {
     link_querying: 0,
     reviewing: 1,
     repairing: 2,
-    documenting: 3,
+    completion_ready: 3,
+    document_generating: 3,
     link_failed: 4,
     documented: 5,
     link_verified: 6,
@@ -1041,7 +1044,7 @@ function getNeo4jVisNodePalette(node, stateName) {
   if (stateName === "failed" || stateName === "link_failed") {
     return { background: "#f6aaa1", border: "#a9483f", hover: "#ffd6d1" };
   }
-  if (stateName === "reviewing" || stateName === "repairing" || stateName === "documenting" || stateName === "link_querying") {
+  if (stateName === "reviewing" || stateName === "repairing" || stateName === "document_generating" || stateName === "link_querying") {
     return { background: "#91bdf4", border: "#2f5f91", hover: "#cfe2fb" };
   }
   if (stateName === "approved" || stateName === "documented" || stateName === "link_verified" || stateName === "completed" || stateName === "generated") {
@@ -1191,7 +1194,8 @@ function formatNeo4jGenerationState(stateName) {
     reviewing: "审查中",
     repairing: "修补中",
     approved: "已通过",
-    documenting: "写文档",
+    completion_ready: "可补全",
+    document_generating: "补全中",
     documented: "已落盘",
     link_querying: "查链接",
     link_verified: "链接OK",

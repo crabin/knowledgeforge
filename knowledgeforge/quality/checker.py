@@ -48,12 +48,13 @@ class QualityChecker:
             "evidence_support_check": bool(all_sources),
         }
         checks.update(source_checks)
-        if context.completion_mode == "framework":
+        framework_context_available = bool(context.structure_graph or context.knowledge_blueprint or artifact.doc_role == "graph_governance")
+        if context.completion_mode == "framework" and framework_context_available:
             checks.update(
                 {
                     "framework_graph_check": bool(context.structure_graph.get("nodes")) if isinstance(context.structure_graph, dict) else False,
                     "framework_blueprint_check": bool(context.knowledge_blueprint),
-                    "framework_generated_files_check": bool(artifact.generated_files),
+                    "framework_graph_governance_check": artifact.doc_role == "graph_governance" or bool(artifact.generated_files),
                     "framework_official_evidence_check": bool(authoritative_sources),
                 }
             )
@@ -114,7 +115,7 @@ class QualityChecker:
                     flow="research_flow",
                 )
             )
-        if context.completion_mode == "framework":
+        if context.completion_mode == "framework" and framework_context_available:
             if not checks["framework_graph_check"] or not checks["framework_blueprint_check"]:
                 issues.append(
                     QualityIssue(
@@ -123,15 +124,6 @@ class QualityChecker:
                         flow="repair_flow",
                     )
                 )
-            if not checks["framework_generated_files_check"]:
-                issues.append(
-                    QualityIssue(
-                        category="file_write_failed",
-                        detail="知识框架证据文件缺失，需重新生成本地文件。",
-                        flow="repair_flow",
-                    )
-                )
-
         status = "failed" if issues else "passed"
         return QualityCheckResult(
             document_id=artifact.document_id,

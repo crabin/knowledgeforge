@@ -22,9 +22,12 @@ class Neo4jPathMapper:
                         "id": str(node.get("node_id", "")),
                         "title": str(node.get("title", "")),
                         "path": str(node.get("relative_path", "")),
-                        "is_generated": bool(node.get("is_generated", False)) or generation_state in {"documented", "link_querying", "link_verified", "approved"},
-                        "is_completed": bool(node.get("is_completed", False)) or generation_state in {"documented", "link_verified", "approved"},
+                        "is_generated": bool(node.get("is_generated", False)) or generation_state in {"completion_ready", "document_generating", "documented", "link_querying", "link_verified", "approved"},
+                        "is_completed": bool(node.get("is_completed", False)) or generation_state in {"completion_ready", "documented", "link_verified", "approved"},
                         "generation_state": generation_state,
+                        "suggested_relative_path": str(node.get("suggested_relative_path", node.get("relative_path", ""))),
+                        "document_completion_status": str(node.get("document_completion_status", "not_requested")),
+                        "review_status": str(node.get("review_status", "")),
                     }
                 )
             for edge in structure_graph.get("edges", []):
@@ -130,6 +133,7 @@ class Neo4jPathMapper:
         generated_path: str = "",
         pending_task_count: int | None = None,
         completed_task_count: int | None = None,
+        extra_properties: dict | None = None,
     ) -> GraphSyncResult:
         status = "passed"
         error = None
@@ -143,6 +147,7 @@ class Neo4jPathMapper:
                     generated_path=generated_path,
                     pending_task_count=pending_task_count,
                     completed_task_count=completed_task_count,
+                    extra_properties=extra_properties or {},
                 )
             except Exception as exc:
                 status = "failed"
@@ -155,8 +160,9 @@ class Neo4jPathMapper:
                     "label": "KnowledgeStructureNode",
                     "id": node_id,
                     "generation_state": generation_state,
-                    "is_generated": generation_state in {"documented", "link_querying", "link_verified", "approved"},
-                    "is_completed": generation_state in {"documented", "link_verified", "approved"},
+                    "is_generated": generation_state in {"completion_ready", "document_generating", "documented", "link_querying", "link_verified", "approved"},
+                    "is_completed": generation_state in {"completion_ready", "documented", "link_verified", "approved"},
+                    **(extra_properties or {}),
                 }
             ],
             relationships=[],
