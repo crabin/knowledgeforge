@@ -18,17 +18,17 @@ from knowledgeforge.agent.QueryEngine.utils.ranking import (
     build_site_constrained_queries,
     detect_candidate_official_domains,
 )
-from knowledgeforge.utils.query_normalization import normalize_query_term
-from knowledgeforge.llms.openai_compatible import (
+from knowledgeforge.server.utils.query_normalization import normalize_query_term
+from knowledgeforge.server.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )
-from knowledgeforge.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
-from knowledgeforge.utils.file_contract import parse_contract_block
-from knowledgeforge.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
-from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
-from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
-from knowledgeforge.utils.time import now_iso
+from knowledgeforge.server.storage.realtime_reviewer import RealtimeReviewCandidate, RealtimeReviewResult
+from knowledgeforge.server.utils.file_contract import parse_contract_block
+from knowledgeforge.server.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
+from knowledgeforge.server.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
+from knowledgeforge.server.utils.paths import sanitize_path_segment, slugify_filename
+from knowledgeforge.server.utils.time import now_iso
 
 QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
 

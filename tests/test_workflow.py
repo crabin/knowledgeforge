@@ -5,12 +5,12 @@ import time
 from pathlib import Path
 
 from knowledgeforge.server import create_app
-from knowledgeforge.config import AppConfig
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.models import GraphSyncResult
-from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
-from knowledgeforge.postprocess.pipeline import PostStoragePipeline
-from knowledgeforge.services.task_service import TaskService
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.models import GraphSyncResult
+from knowledgeforge.server.orchestrator.graph import KnowledgeGraphWorkflow
+from knowledgeforge.server.postprocess.pipeline import PostStoragePipeline
+from knowledgeforge.server.services.task_service import TaskService
 
 
 def _fill_evidence_and_wait(client, task_id: str) -> dict:

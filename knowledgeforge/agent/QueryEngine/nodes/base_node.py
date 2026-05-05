@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState
-from knowledgeforge.utils.time import now_iso
+from knowledgeforge.server.utils.time import now_iso
 
 
 QueryEventCallback = Callable[[str, dict[str, Any]], None]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from threading import Lock
 from time import sleep
 
-from knowledgeforge.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
+from knowledgeforge.server.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
 
 
 def test_retrieval_task_queue_caps_network_concurrency() -> None:

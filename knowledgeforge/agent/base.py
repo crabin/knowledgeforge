@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from knowledgeforge.models import EnginePlan, EngineRunResult, RequestContext
+from knowledgeforge.server.models import EnginePlan, EngineRunResult, RequestContext
 
 
 class BaseEngine(ABC):

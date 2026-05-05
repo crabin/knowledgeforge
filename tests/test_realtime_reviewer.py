@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.models import RequestContext
-from knowledgeforge.storage.realtime_reviewer import RealtimeFileReviewer, RealtimeReviewCandidate
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.models import RequestContext
+from knowledgeforge.server.storage.realtime_reviewer import RealtimeFileReviewer, RealtimeReviewCandidate
 
 
 @dataclass(slots=True)

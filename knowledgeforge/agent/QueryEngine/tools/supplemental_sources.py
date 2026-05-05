@@ -5,7 +5,7 @@ from urllib.parse import quote_plus
 
 import httpx
 
-from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
 
 
 BLOCKED_ZHIHU_MARKERS = (

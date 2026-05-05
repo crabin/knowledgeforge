@@ -14,9 +14,9 @@ from knowledgeforge.agent.MediaEngine.agent import MediaEngine
 from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from knowledgeforge.agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-from knowledgeforge.config import AppConfig
-from knowledgeforge.intake.context_builder import ContextBuilder
-from knowledgeforge.llms.openai_compatible import (
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.intake.context_builder import ContextBuilder
+from knowledgeforge.server.llms.openai_compatible import (
     OpenAICompatibleChatClient,
     OpenAICompatibleEmbeddingClient,
 )

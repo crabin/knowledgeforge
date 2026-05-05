@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.runtime.token_usage import (
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.runtime.token_usage import (
     TokenUsageRecord,
     build_token_usage_record,
     estimate_text_tokens,
     summarize_token_usage,
     token_tracking_context,
 )
-from knowledgeforge.services.task_service import TaskService
+from knowledgeforge.server.services.task_service import TaskService
 
 
 def test_token_usage_summary_counts_prompt_completion_and_total_tokens() -> None:

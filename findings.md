@@ -336,3 +336,16 @@
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
+
+## 后端结构重构发现（2026-05-05）
+
+- 当前 `knowledgeforge/` 一级除 `agent/server/web` 外还有 `orchestrator/services/runtime/storage/graph/quality/reporting/evaluation/postprocess/intake/llms/prompts/tools/utils/versioning` 以及 `config.py/models.py`，这些都是后端实现或后端支撑层。
+- `knowledgeforge/server/api.py` 目前已是 Flask 应用工厂，但仍从 `knowledgeforge.config` 和 `knowledgeforge.services.task_service` 导入，说明 server 层还没有成为后端边界。
+- Agent Engine 仍需要共享模型、LLM client、运行队列、工具和路径工具；迁移后这些依赖应通过 `knowledgeforge.server.*` 引用，避免重新在 `knowledgeforge/` 顶层增加共享模块。
+
+## 后端结构重构结论（2026-05-05）
+
+- 后端边界已收敛为 `knowledgeforge/server`：API、配置、模型、编排、应用服务、运行态状态、Markdown 存储、Neo4j 图谱、质量治理、版本、研报、LLM adapter、后端工具和通用 helper 都在该包下。
+- `knowledgeforge/agent` 保持能力域 Engine 结构不变；Engine 现在通过 `knowledgeforge.server.*` 使用共享数据契约、LLM client、运行队列和后端工具。
+- `knowledgeforge/server/README.md` 明确了 server 子目录职责，并约束依赖方向：server 编排选择 Engine，Engine 不直接互相依赖。
+- 验证显示迁移未改变主链路行为：workflow、dashboard、QueryEngine、MediaEngine 重点回归和全量 pytest 均通过。

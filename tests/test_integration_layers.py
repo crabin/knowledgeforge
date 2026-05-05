@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from knowledgeforge.agent.QueryEngine.agent import QueryEngine
-from knowledgeforge.graph.neo4j_adapter import Neo4jPathMapper
-from knowledgeforge.models import DocumentArtifact, RequestContext, StructuredExtractionResult
+from knowledgeforge.server.graph.neo4j_adapter import Neo4jPathMapper
+from knowledgeforge.server.models import DocumentArtifact, RequestContext, StructuredExtractionResult
 from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument, SearchHit
 
 

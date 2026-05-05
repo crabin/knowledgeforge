@@ -3,7 +3,7 @@ from __future__ import annotations
 from knowledgeforge.agent.MediaEngine.agent import MediaEngine
 from knowledgeforge.agent.MediaEngine.state.state import MediaCrawledDocument, MediaSearchHit
 from knowledgeforge.agent.MediaEngine.utils.ranking import is_technical_context, score_media_url
-from knowledgeforge.models import RequestContext
+from knowledgeforge.server.models import RequestContext
 
 
 class FakeMediaChatClient:

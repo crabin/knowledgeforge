@@ -6,8 +6,8 @@ import time
 
 import httpx
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
 
 
 REAL_COMPLETE_JSON = OpenAICompatibleChatClient.complete_json

@@ -9,8 +9,8 @@ import json as _json
 
 from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.services.task_service import TaskService
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.services.task_service import TaskService
 
 
 def create_app(config: AppConfig | None = None) -> Flask:

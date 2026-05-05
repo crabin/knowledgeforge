@@ -817,3 +817,35 @@
 - 结果：`55 passed in 14.32s`
 - 运行 `PYTHONPATH=. pytest -q`
 - 结果：`172 passed in 29.23s`
+
+## 2026-05-05 后端代码结构重构启动
+
+- 用户要求优化项目代码结构：后端全放到 `server` 下，`knowledgeforge` 下只保留 `agent/server/web` 三个部分。
+- 已读取项目源头文档、agent 架构范式、当前计划文件、当前目录和导入关系。
+- 决策：保留 Agent Engine 目录不动，把后端支撑模块整体迁移进 `knowledgeforge/server/` 并更新导入路径。
+
+## 2026-05-05 结构移动工具环境问题
+
+- 第一次移动尝试失败：当前 shell 没有解析到 `mv/find/sort`，错误为 `command not found`。
+- 处理：后续使用 `/bin/mv`、`/usr/bin/find`、`/usr/bin/sort` 这类绝对路径执行。
+
+## 2026-05-05 后端结构迁移完成待验证
+
+- 已将 `config.py/models.py` 以及 `orchestrator/services/runtime/storage/graph/quality/reporting/evaluation/postprocess/intake/llms/prompts/tools/utils/versioning` 移入 `knowledgeforge/server/`。
+- 已批量更新 Python 源码、测试和脚本中的旧 `knowledgeforge.<backend_module>` 导入为 `knowledgeforge.server.<backend_module>`。
+- 已新增 `knowledgeforge/server/README.md`，说明 server 内部职责边界和 agent/server 依赖方向。
+
+## 2026-05-05 后端结构重构验证
+
+- `knowledgeforge/` 一级现在只剩 `__init__.py`、`agent/`、`server/`、`web/`。
+- 旧后端包导入扫描通过：源码、测试、脚本里不再引用 `knowledgeforge.config/models/orchestrator/...` 等旧顶层后端路径。
+- 运行 `PYTHONPATH=. python -m compileall -q knowledgeforge app.py scripts tests`：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`：通过。
+- 运行 `PYTHONPATH=. python -m pytest -q tests/test_workflow.py tests/test_dashboard.py tests/test_query_engine.py tests/test_media_engine.py`：`70 passed in 18.07s`。
+- 运行 `PYTHONPATH=. python -m pytest -q`：`173 passed in 28.41s`。
+- 已清理测试生成的 `__pycache__`。
+
+## 2026-05-05 后端结构重构暂存
+
+- 已暂存本次结构重构相关文件：`knowledgeforge/`、`tests/`、`scripts/`、`task_plan.md`、`findings.md`、`progress.md`。
+- 未暂存用户已有改动：`AGENTS.md`、`docs/流程图.excalidraw` 和 `docs/learning_coach_在线资源说明包/`。

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from knowledgeforge.evaluation.completeness import CompletenessEvaluator
-from knowledgeforge.models import EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.server.evaluation.completeness import CompletenessEvaluator
+from knowledgeforge.server.models import EngineRunResult, RequestContext, SourceRecord
 
 
 def _make_context(domain: str = "Machine Learning") -> RequestContext:

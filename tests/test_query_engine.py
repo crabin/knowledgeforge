@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from knowledgeforge.agent.QueryEngine.agent import QueryEngine
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-from knowledgeforge.models import RequestContext
+from knowledgeforge.server.models import RequestContext
 
 
 class FakeChatClient:

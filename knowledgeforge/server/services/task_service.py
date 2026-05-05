@@ -1,0 +1,2657 @@
+from __future__ import annotations
+
+from contextlib import suppress
+from datetime import datetime
+import json
+import shutil
+from threading import Lock, Thread
+import uuid
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any
+
+from knowledgeforge.agent.InsightEngine.agent import InsightEngine
+from knowledgeforge.agent.MediaEngine.agent import MediaEngine
+from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
+from knowledgeforge.agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.evaluation.completeness import CompletenessEvaluator
+from knowledgeforge.server.evaluation.supplement_decision import SupplementDecisionPlanner
+from knowledgeforge.server.graph.client import Neo4jGraphClient
+from knowledgeforge.server.graph.neo4j_adapter import Neo4jPathMapper
+from knowledgeforge.server.intake.clarifier import IntakeClarifier
+from knowledgeforge.server.intake.context_builder import ContextBuilder
+from knowledgeforge.server.llms.openai_compatible import (
+    OpenAICompatibleChatClient,
+    OpenAICompatibleEmbeddingClient,
+)
+from knowledgeforge.server.models import (
+    AgentMessage,
+    ClarificationResult,
+    EnginePlan,
+    EnginePlanItem,
+    EngineRunResult,
+    FrozenVersionRecord,
+    IntakeSession,
+    RequestContext,
+    SourceRecord,
+    WorkflowStepEvent,
+    normalize_completion_mode,
+)
+from knowledgeforge.server.orchestrator.graph import KnowledgeGraphWorkflow
+from knowledgeforge.server.orchestrator.state import WorkflowState
+from knowledgeforge.server.postprocess.extractor import StructuredExtractor
+from knowledgeforge.server.postprocess.pipeline import PostStoragePipeline
+from knowledgeforge.server.quality.checker import QualityChecker
+from knowledgeforge.server.runtime.audit import AuditLogger
+from knowledgeforge.server.runtime.frozen_store import FrozenVersionStore
+from knowledgeforge.server.runtime.intake_session_store import IntakeSessionStore
+from knowledgeforge.server.runtime.state_store import TaskStateStore
+from knowledgeforge.server.runtime.task_queue import RetrievalTaskQueue
+from knowledgeforge.server.runtime.token_usage import (
+    TokenUsageRecord,
+    summarize_token_usage,
+    token_tracking_context,
+)
+from knowledgeforge.server.reporting.report_service import ReportService
+from knowledgeforge.server.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.server.storage.realtime_reviewer import (
+    RealtimeFileReviewer,
+    RealtimeReviewCandidate,
+    RealtimeReviewResult,
+)
+from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIAdapter
+from knowledgeforge.server.utils.paths import sanitize_path_segment, slugify_filename
+from knowledgeforge.server.utils.structure_graph import derive_context_from_structure_graph, normalize_structure_graph_payload
+from knowledgeforge.server.utils.time import now_iso
+from knowledgeforge.server.versioning.recorder import VersionRecorder
+
+
+class _TaskCancelled(RuntimeError):
+    pass
+
+
+def _format_generation_prefix(details: dict[str, Any]) -> str:
+    current_file = str(details.get("current_file", "") or "").strip()
+    completed_files = details.get("completed_files")
+    total_files = details.get("total_files")
+    progress = ""
+    if total_files not in {None, ""}:
+        current_index = int(completed_files or 0) + 1
+        progress = f"[{current_index}/{total_files}] "
+    if current_file:
+        return f"{progress}{current_file} · "
+    return progress
+
+
+class TaskService:
+    def __init__(self, config: AppConfig) -> None:
+        self._config = config
+        self._context_builder = ContextBuilder()
+        self._state_store = TaskStateStore(config.task_state_root)
+        self._intake_store = IntakeSessionStore(config.intake_session_root)
+        self._audit_logger = AuditLogger(config.audit_root)
+        self._frozen_store = FrozenVersionStore(config.frozen_root)
+        self._report_service = ReportService()
+        self._realtime_file_reviewer = RealtimeFileReviewer(config)
+        self._writer = MarkdownKnowledgeWriter(config)
+        self._retrieval_task_queue = RetrievalTaskQueue(
+            max_network_concurrency=config.max_network_task_concurrency,
+            max_llm_concurrency=config.max_llm_task_concurrency,
+        )
+        crawl4ai_adapter = Crawl4AIAdapter(
+            enabled=config.enable_crawl4ai,
+            headless=config.crawl4ai_headless,
+            verbose=config.crawl4ai_verbose,
+            page_timeout_ms=config.crawl4ai_page_timeout_ms,
+        )
+        planning_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.plan_llm_timeout,
+            operation="planning.chat_json",
+            token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
+            max_retries=config.plan_llm_max_retries,
+        )
+        generation_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.generation_llm_timeout,
+            operation="generation.chat_json",
+            token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
+            max_retries=config.generation_llm_max_retries,
+        )
+        execution_chat_client = OpenAICompatibleChatClient(
+            config.openai,
+            timeout=config.execution_llm_timeout,
+            operation="execution.chat_json",
+            token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
+            max_retries=config.execution_llm_max_retries,
+        )
+        query_embedding_client = OpenAICompatibleEmbeddingClient(
+            config.openai,
+            timeout=2.0,
+            operation="query.embeddings",
+            token_usage_callback=self._record_token_usage,
+            llm_event_callback=self._log_llm_event,
+        )
+        self._intake_clarifier = IntakeClarifier(
+            OpenAICompatibleChatClient(
+                config.openai,
+                timeout=1.0,
+                operation="intake.clarify",
+                token_usage_callback=self._record_token_usage,
+                llm_event_callback=self._log_llm_event,
+                max_retries=config.intake_llm_max_retries,
+            )
+        )
+        self._graph_client = Neo4jGraphClient(config.neo4j)
+        self._workflow = KnowledgeGraphWorkflow(
+            insight_engine=InsightEngine(chat_client=planning_chat_client),
+            query_engine=QueryEngine(
+                chat_client=planning_chat_client,
+                embedding_client=query_embedding_client,
+                crawler=(
+                    DomainKnowledgeCrawler(crawl4ai_adapter=crawl4ai_adapter)
+                    if config.enable_live_crawlers
+                    else _NoopQueryCrawler()
+                ),
+                event_callback=self._log_realtime_query_event,
+                realtime_file_callback=self._review_realtime_file,
+                max_concurrent_network_tasks=config.max_query_network_concurrency,
+                task_queue=self._retrieval_task_queue,
+                save_root=config.save_root,
+            ),
+            media_engine=MediaEngine(
+                chat_client=execution_chat_client,
+                planning_chat_client=planning_chat_client,
+                crawler=(
+                    MediaPerspectiveCrawler(crawl4ai_adapter=crawl4ai_adapter)
+                    if config.enable_live_crawlers
+                    else _NoopMediaCrawler()
+                ),
+                event_callback=self._log_realtime_media_event,
+                realtime_file_callback=self._review_realtime_file,
+                max_concurrent_network_tasks=config.max_network_task_concurrency,
+                task_queue=self._retrieval_task_queue,
+                save_root=config.save_root,
+            ),
+            evaluator=CompletenessEvaluator(),
+            supplement_planner=SupplementDecisionPlanner(
+                save_root=config.save_root,
+                chat_client=planning_chat_client,
+            ),
+            writer=self._writer,
+            post_storage_pipeline=PostStoragePipeline(
+                extractor=StructuredExtractor(),
+                graph_mapper=Neo4jPathMapper(client=self._graph_client),
+                quality_checker=QualityChecker(),
+                version_recorder=VersionRecorder(),
+                strict_graph_sync=config.strict_graph_sync,
+            ),
+            workflow_event_callback=self._log_workflow_step_event,
+            state_update_callback=self._persist_running_state_update,
+            generation_chat_client=generation_chat_client,
+        )
+        self._tasks: dict[str, WorkflowState] = {}
+        self._cancelled_task_ids: set[str] = set()
+        self._task_lock = Lock()
+
+    def get_config_status(self) -> dict[str, Any]:
+        return self._config.show_config_status()
+
+    def run_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_context = self._build_confirmed_context_from_payload(payload)
+        initial_state = self._create_initial_state(request_context, audit_source="api")
+        with token_tracking_context(initial_state["task_id"]):
+            final_state = self._workflow.run(initial_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def start_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        request_context = self._build_confirmed_context_from_payload(payload)
+        return self._start_task_from_context(request_context)
+
+    def _build_confirmed_context_from_payload(self, payload: dict[str, Any]) -> RequestContext:
+        message = str(payload.get("message") or payload.get("original_input") or payload.get("domain") or "").strip()
+        if not message:
+            raise ValueError("`domain` or `message` is required.")
+        with token_tracking_context("direct-intake"):
+            clarification = self._intake_clarifier.clarify([message])
+        if clarification.intent != "knowledge_collection":
+            raise ValueError("direct task input is not confirmed for knowledge collection; please clarify the intent first.")
+        normalized_payload = dict(payload)
+        normalized_payload["domain"] = clarification.normalized_domain
+        normalized_payload["normalized_domain"] = clarification.normalized_domain
+        normalized_payload["original_input"] = clarification.original_input
+        normalized_payload["intent"] = clarification.intent
+        normalized_payload["output_language"] = clarification.output_language
+        normalized_payload["search_language"] = clarification.search_language
+        normalized_payload["search_terms"] = clarification.search_terms
+        normalized_payload["clarification_summary"] = clarification.clarification_summary
+        normalized_payload["confirmed"] = True
+        normalized_payload["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
+        if not normalized_payload.get("subdomains"):
+            normalized_payload["subdomains"] = clarification.subdomains
+        if not normalized_payload.get("focus_points"):
+            normalized_payload["focus_points"] = clarification.focus_points
+        return self._context_builder.build(normalized_payload)
+
+    def _start_task_from_context(self, request_context: RequestContext) -> dict[str, Any]:
+        initial_state = self._create_initial_state(request_context, audit_source="api_async")
+        task_id = initial_state["task_id"]
+        with self._task_lock:
+            self._cancelled_task_ids.discard(task_id)
+            self._tasks[task_id] = initial_state
+        payload_dict = self._serialize_state(initial_state)
+        self._state_store.save(task_id, payload_dict)
+        self._audit_logger.log(
+            task_id,
+            "task_started_async",
+            {"status": "running", "source": "api_async", "round": initial_state.get("round_number", 1)},
+        )
+        Thread(target=self._run_started_task, args=(initial_state,), daemon=True).start()
+        return self._attach_runtime_observability(payload_dict)
+
+    def _persist_plan_failed(self, state: WorkflowState, exc: Exception) -> dict[str, Any]:
+        task_id = state["task_id"]
+        message = str(exc)
+        event = WorkflowStepEvent(
+            step_id="planning",
+            label="三路计划生成失败",
+            status="blocked",
+            timestamp=now_iso(),
+            details={"error": message},
+        )
+        state["task_status"] = "plan_failed"
+        state["current_step"] = "planning"
+        state["current_action"] = f"计划生成失败：{message}"
+        state.setdefault("workflow_events", []).append(event)
+        with self._task_lock:
+            self._tasks[task_id] = state
+        payload_dict = self._serialize_state(state)
+        self._state_store.save(task_id, payload_dict)
+        self._audit_logger.log(
+            task_id,
+            "agent_plan_failed",
+            {"status": "plan_failed", "error": message},
+        )
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(payload_dict)
+
+    def get_task_plan(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        self._refresh_task_queue_snapshot_from_path(task)
+        return {
+            "task_id": task_id,
+            "task_status": task.get("task_status", "unknown"),
+            "task_queue_path": task.get("task_queue_path", ""),
+            "task_queue_snapshot": task.get("task_queue_snapshot", {}),
+        }
+
+    def update_plan_item(
+        self,
+        task_id: str,
+        agent_name: str,
+        plan_item_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        raise ValueError("当前流程已改为直接执行，不再支持计划项编辑。")
+
+    def delete_plan_item(
+        self,
+        task_id: str,
+        agent_name: str,
+        plan_item_id: str,
+    ) -> dict[str, Any] | None:
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        raise ValueError("当前流程已改为直接执行，不再支持计划项删除。")
+
+    def confirm_task_plan(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        raise ValueError("当前流程已改为直接执行，不再需要确认计划。")
+
+    def list_tasks(self) -> dict[str, Any]:
+        tasks = self._state_store.list()
+        in_memory_ids = {task["task_id"] for task in tasks}
+        for task_id, state in self._tasks.items():
+            if task_id in in_memory_ids:
+                continue
+            tasks.append(self._summarize_state(self._serialize_state(state)))
+        tasks = sorted(tasks, key=lambda item: item["updated_at"], reverse=True)
+        return {"count": len(tasks), "tasks": tasks}
+
+    def initialize_system(self) -> dict[str, Any]:
+        running_task_ids = self._collect_running_task_ids()
+        with self._task_lock:
+            self._cancelled_task_ids.update(running_task_ids)
+            self._tasks.clear()
+
+        storage_roots = [
+            ("tasks", self._config.task_state_root),
+            ("sessions", self._config.intake_session_root),
+            ("audit", self._config.audit_root),
+            ("frozen_versions", self._config.frozen_root),
+            ("saved_files", self._config.save_root),
+        ]
+        storage_results = [self._clear_runtime_directory(name, path) for name, path in storage_roots]
+        graph_result: dict[str, Any]
+        try:
+            graph_result = self._graph_client.clear_knowledgeforge_graph()
+        except Exception as exc:  # pragma: no cover - depends on local Neo4j availability.
+            graph_result = {
+                "status": "unavailable",
+                "error": self._sanitize_graph_error(str(exc)),
+            }
+
+        return {
+            "status": "initialized",
+            "initialized_at": now_iso(),
+            "scope": "runtime_artifacts_only",
+            "stopped_task_ids": running_task_ids,
+            "preserved": [
+                "source_code",
+                "configuration",
+                "project_docs",
+                "dependencies",
+                "chroma_db",
+                "mysql",
+                "application_log_files",
+            ],
+            "storage": storage_results,
+            "neo4j": graph_result,
+        }
+
+    def update_task(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be updated.")
+
+        request_updates = payload.get("request_context") if isinstance(payload.get("request_context"), dict) else payload
+        request_context = dict(stored.get("request_context") or {})
+        changed: dict[str, Any] = {}
+        allowed_context_fields = {
+            "domain",
+            "normalized_domain",
+            "subdomains",
+            "time_window",
+            "focus_points",
+            "constraints",
+            "initial_strategy",
+            "original_input",
+            "output_language",
+            "search_language",
+            "search_terms",
+            "clarification_summary",
+            "confirmed",
+            "completion_mode",
+        }
+        for field in allowed_context_fields:
+            if field not in request_updates:
+                continue
+            value = request_updates[field]
+            if field in {"subdomains", "focus_points", "constraints", "initial_strategy", "search_terms"}:
+                if not isinstance(value, list):
+                    raise ValueError(f"`{field}` must be a list.")
+                value = [str(item).strip() for item in value if str(item).strip()]
+            elif field == "confirmed":
+                value = bool(value)
+            elif field == "completion_mode":
+                value = normalize_completion_mode(value)
+            else:
+                value = str(value).strip()
+            if request_context.get(field) != value:
+                request_context[field] = value
+                changed[f"request_context.{field}"] = value
+
+        if "task_status" in payload:
+            status = str(payload["task_status"]).strip()
+            if not status:
+                raise ValueError("`task_status` cannot be empty.")
+            if stored.get("task_status") != status:
+                stored["task_status"] = status
+                changed["task_status"] = status
+
+        metadata = stored.setdefault("management_metadata", {})
+        if "management_note" in payload:
+            note = str(payload["management_note"]).strip()
+            metadata["note"] = note
+            changed["management_metadata.note"] = note
+        if changed:
+            metadata["updated_at"] = now_iso()
+            stored["request_context"] = request_context
+            with self._task_lock:
+                self._tasks[task_id] = stored
+            self._state_store.save(task_id, stored)
+            self._audit_logger.log(task_id, "task_updated", {"changed_fields": sorted(changed.keys())})
+        return self._attach_runtime_observability(stored)
+
+    def delete_task(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be deleted.")
+        self._audit_logger.log(
+            task_id,
+            "task_deleted",
+            {
+                "status": stored.get("task_status", "unknown"),
+                "domain": (stored.get("request_context") or {}).get("domain", ""),
+            },
+        )
+        with self._task_lock:
+            self._tasks.pop(task_id, None)
+        state_deleted = self._state_store.delete(task_id)
+        frozen_deleted = self._frozen_store.delete(task_id)
+        return {
+            "task_id": task_id,
+            "deleted": True,
+            "state_deleted": state_deleted,
+            "frozen_deleted": frozen_deleted,
+        }
+
+    def _collect_running_task_ids(self) -> list[str]:
+        task_ids: set[str] = set()
+        for task in self._state_store.list():
+            if self._is_running_status(task.get("task_status", "")):
+                task_ids.add(str(task.get("task_id", "")))
+        with self._task_lock:
+            for task_id, state in self._tasks.items():
+                if self._is_running_status(state.get("task_status", "")):
+                    task_ids.add(task_id)
+        return sorted(task_id for task_id in task_ids if task_id)
+
+    def _clear_runtime_directory(self, name: str, path: Path) -> dict[str, Any]:
+        root = self._validate_initialization_root(path)
+        files_deleted = 0
+        directories_deleted = 0
+        if root.exists():
+            for child in root.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    files_deleted += sum(1 for nested in child.rglob("*") if nested.is_file() or nested.is_symlink())
+                    directories_deleted += sum(1 for nested in child.rglob("*") if nested.is_dir() and not nested.is_symlink())
+                    directories_deleted += 1
+                    shutil.rmtree(child)
+                else:
+                    with suppress(FileNotFoundError):
+                        child.unlink()
+                    files_deleted += 1
+        root.mkdir(parents=True, exist_ok=True)
+        return {
+            "name": name,
+            "path": root.as_posix(),
+            "files_deleted": files_deleted,
+            "directories_deleted": directories_deleted,
+        }
+
+    @staticmethod
+    def _validate_initialization_root(path: Path) -> Path:
+        root = path.resolve()
+        cwd = Path.cwd().resolve()
+        forbidden = {Path("/").resolve(), cwd, cwd.parent, Path.home().resolve()}
+        if root in forbidden or cwd.is_relative_to(root):
+            raise ValueError(f"refusing to initialize unsafe path: {root}")
+        if root.is_symlink():
+            raise ValueError(f"refusing to initialize symlink path: {root}")
+        return root
+
+    @staticmethod
+    def _sanitize_graph_error(message: str) -> str:
+        lowered = message.lower()
+        if "authentication" in lowered or "password" in lowered or "credentials" in lowered:
+            return "Neo4j authentication failed."
+        if "bolt://" in message or "neo4j://" in message:
+            return "Neo4j connection failed."
+        return message[:200]
+
+    def create_intake_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+        message = str(payload.get("message", payload.get("domain", ""))).strip()
+        if not message:
+            raise ValueError("`message` is required.")
+        session_id = uuid.uuid4().hex
+        with token_tracking_context(session_id):
+            clarification = self._intake_clarifier.clarify([message])
+        now = now_iso()
+        session = IntakeSession(
+            session_id=session_id,
+            status="draft",
+            messages=[AgentMessage(role="user", content=message, metadata={"source": "api"})],
+            candidate_context=clarification,
+            created_at=now,
+            updated_at=now,
+        )
+        payload_dict = session.to_dict()
+        payload_dict["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
+        self._intake_store.save(session_id, payload_dict)
+        self._audit_logger.log(
+            session_id,
+            "intake_session_created",
+            {"intent": clarification.intent, "normalized_domain": clarification.normalized_domain},
+        )
+        self._audit_logger.log(
+            session_id,
+            "intake_clarified",
+            {
+                "needs_clarification": clarification.needs_clarification,
+                "output_language": clarification.output_language,
+            },
+        )
+        return self._attach_runtime_observability(payload_dict)
+
+    def append_intake_message(self, session_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self._intake_store.load(session_id)
+        if stored is None:
+            return None
+        message = str(payload.get("message", "")).strip()
+        if not message:
+            raise ValueError("`message` is required.")
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(AgentMessage(role="user", content=message, metadata={"source": "api"}))
+        with token_tracking_context(session_id):
+            clarification = self._intake_clarifier.clarify([item.content for item in messages])
+        stored["messages"] = [item.to_dict() for item in messages]
+        stored["candidate_context"] = clarification.to_dict()
+        if "completion_mode" in payload:
+            stored["completion_mode"] = normalize_completion_mode(payload.get("completion_mode"))
+        stored["updated_at"] = now_iso()
+        self._intake_store.save(session_id, stored)
+        self._audit_logger.log(
+            session_id,
+            "intake_clarified",
+            {
+                "intent": clarification.intent,
+                "needs_clarification": clarification.needs_clarification,
+                "output_language": clarification.output_language,
+            },
+        )
+        return self._attach_runtime_observability(stored)
+
+    def confirm_intake_session(self, session_id: str) -> dict[str, Any] | None:
+        stored = self._intake_store.load(session_id)
+        if stored is None:
+            return None
+        clarification = ClarificationResult(**stored["candidate_context"])
+        if clarification.intent != "knowledge_collection":
+            raise ValueError("intake session is not confirmed for knowledge collection.")
+        request_context = self._context_builder.build(
+            {
+                "domain": clarification.normalized_domain,
+                "original_input": clarification.original_input,
+                "normalized_domain": clarification.normalized_domain,
+                "intent": clarification.intent,
+                "output_language": clarification.output_language,
+                "search_language": clarification.search_language,
+                "search_terms": clarification.search_terms,
+                "subdomains": clarification.subdomains,
+                "focus_points": clarification.focus_points,
+                "clarification_summary": clarification.clarification_summary,
+                "confirmed": True,
+                "completion_mode": normalize_completion_mode(stored.get("completion_mode")),
+            }
+        )
+        self._audit_logger.log(
+            session_id,
+            "intake_confirmed",
+            {"domain": request_context.domain, "output_language": request_context.output_language},
+        )
+        task_payload = self._start_task_from_context(request_context)
+        stored["status"] = "confirmed"
+        stored["task_id"] = task_payload["task_id"]
+        stored["updated_at"] = now_iso()
+        self._intake_store.save(session_id, stored)
+        self._audit_logger.log(
+            task_payload["task_id"],
+            "task_created_from_intake",
+            {"session_id": session_id, "domain": request_context.domain},
+        )
+        return {"intake_session": stored, "task": task_payload}
+
+    def _run_workflow(self, request_context: RequestContext, *, audit_source: str) -> dict[str, Any]:
+        initial_state = self._create_initial_state(request_context, audit_source=audit_source)
+        with token_tracking_context(initial_state["task_id"]):
+            final_state = self._workflow.run(initial_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def _approve_plans_in_state(self, state: WorkflowState) -> WorkflowState:
+        approved_at = now_iso()
+        for plan in state.get("agent_plans", {}).values():
+            plan.status = "approved"
+            plan.approved_at = approved_at
+            for item in plan.plan_items:
+                item.status = "approved"
+        state["plan_approved_at"] = approved_at
+        state["task_status"] = "running"
+        state["current_step"] = "collecting"
+        state["current_action"] = "用户已确认三路计划，开始并行执行。"
+        state.setdefault("workflow_events", []).append(
+            WorkflowStepEvent(
+                step_id="awaiting_confirmation",
+                label="等待用户确认计划",
+                status="completed",
+                timestamp=approved_at,
+            )
+        )
+        return state
+
+    def _create_initial_state(self, request_context: RequestContext, *, audit_source: str) -> WorkflowState:
+        task_id = uuid.uuid4().hex
+        request_context.task_id = task_id
+        initial_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": [
+                AgentMessage(
+                    role="user",
+                    content=f"为领域 {request_context.domain} 启动知识沉淀任务。",
+                    metadata={"source": audit_source},
+                )
+            ],
+            "round_number": 1,
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": "not_requested",
+            "full_document_status": "not_requested",
+            "structure_review_rounds": [],
+            "structure_review_status": "pending",
+            "structure_repair_log": [],
+            "task_status": "running" if audit_source == "api_async" else "created",
+            "current_step": "intent_recognition",
+            "current_action": "真实意图与领域名称已确认，等待生成目录结构图谱。",
+            "started_at": now_iso(),
+            "updated_at": now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_created",
+            {
+                "domain": request_context.domain,
+                "normalized_domain": request_context.normalized_domain,
+                "round": 1,
+                "source": audit_source,
+            },
+        )
+        return initial_state
+
+    def _run_started_task(self, initial_state: WorkflowState) -> None:
+        task_id = initial_state["task_id"]
+        try:
+            with token_tracking_context(task_id):
+                final_state = self._workflow.run(initial_state)
+        except _TaskCancelled:
+            return
+        except Exception as exc:
+            if self._is_cancelled(task_id):
+                return
+            failed_state = dict(initial_state)
+            failed_state["task_status"] = "failed"
+            failed_state["finished_at"] = now_iso()
+            failed_state["updated_at"] = failed_state["finished_at"]
+            with self._task_lock:
+                self._tasks[task_id] = failed_state
+            payload = self._serialize_state(failed_state)
+            self._state_store.save(task_id, payload)
+            self._audit_logger.log(task_id, "task_failed", {"error": str(exc)})
+            return
+        if self._is_cancelled(task_id):
+            return
+        self._persist_and_serialize(final_state, "task_completed")
+
+    def _sync_plan_document(self, stored: dict[str, Any], agent_name: str) -> None:
+        plan_path = (stored.get("plan_document_paths") or {}).get(agent_name)
+        if not plan_path:
+            return
+        plan_payload = (stored.get("agent_plans") or {}).get(agent_name)
+        if not isinstance(plan_payload, dict):
+            return
+        try:
+            context = self._deserialize_request_context(stored["request_context"])
+            plan = self._deserialize_engine_plans({agent_name: plan_payload})[agent_name]
+            synced_path = self._writer.write_agent_plan_document(
+                context=context,
+                plan=plan,
+                round_number=int(stored.get("round_number", 1)),
+                document_path=plan_path,
+            )
+        except Exception as exc:
+            self._audit_logger.log(
+                stored["task_id"],
+                "plan_document_sync_failed",
+                {"agent": agent_name, "path": plan_path, "error": str(exc)},
+            )
+            return
+        stored.setdefault("plan_document_paths", {})[agent_name] = synced_path
+
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        if task_id in self._tasks:
+            return self._attach_runtime_observability(self._serialize_state(self._tasks[task_id]))
+        stored = self._state_store.load(task_id)
+        if stored is None:
+            return None
+        return self._attach_runtime_observability(stored)
+
+    def get_frozen_version(self, task_id: str) -> dict[str, Any] | None:
+        return self._frozen_store.load(task_id)
+
+    def get_task_logs(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        audit_logs = self._audit_logger.read(task_id)
+        self._backfill_audit_logs_from_task(task_id, task, audit_logs)
+        refreshed_logs = self._audit_logger.read(task_id)
+        queue_snapshot = task.get("task_queue_snapshot", {}) or {}
+        payload = {
+            "task_id": task_id,
+            "task_status": task.get("task_status"),
+            "current_step": task.get("current_step"),
+            "current_action": task.get("current_action"),
+            "round_number": task.get("round_number"),
+            "started_at": task.get("started_at", ""),
+            "finished_at": task.get("finished_at", ""),
+            "updated_at": task.get("updated_at", ""),
+            "agent_plans": task.get("agent_plans", {}),
+            "workflow_events": task.get("workflow_events", []),
+            "structure_graph": task.get("structure_graph", (task.get("request_context") or {}).get("structure_graph", {})),
+            "graph_snapshot": task.get("graph_snapshot", {}),
+            "graph_event": task.get("graph_event", {}),
+            "file_update": task.get("file_update", {}),
+            "generation_progress": task.get("generation_progress", {}),
+            "task_queue_snapshot": queue_snapshot,
+            "queue_summary": self._build_queue_summary(queue_snapshot),
+            "log_summary": self._build_log_summary(refreshed_logs),
+            "llm_activity": self._build_llm_activity(refreshed_logs),
+            "recent_errors": self._collect_recent_errors(refreshed_logs),
+            "log_files": {
+                "audit_jsonl": self._audit_logger.path_for(task_id).as_posix(),
+                "application_log": (self._config.app_log_root / "knowledgeforge-server.log").as_posix(),
+            },
+            "logs": refreshed_logs,
+            "token_usage": summarize_token_usage(refreshed_logs),
+        }
+        self._attach_task_timing(payload)
+        return payload
+
+    def get_task_graph_snapshot(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        limits = {"nodes": 300, "edges": 600}
+        if not domain:
+            return {
+                "task_id": task_id,
+                "domain": "",
+                "status": "unavailable",
+                "refreshed_at": now_iso(),
+                "graph": {"nodes": [], "edges": []},
+                "limits": limits,
+                "error": "Task domain is unavailable.",
+            }
+        try:
+            graph = self._graph_client.snapshot_domain_graph(
+                domain=domain,
+                node_limit=limits["nodes"],
+                relationship_limit=limits["edges"],
+            )
+        except Exception:
+            local_graph = task.get("graph_snapshot") or {}
+            if local_graph.get("nodes") or local_graph.get("edges"):
+                return {
+                    "task_id": task_id,
+                    "domain": domain,
+                    "status": "local",
+                    "refreshed_at": now_iso(),
+                    "graph": local_graph,
+                    "limits": limits,
+                    "error": "Neo4j graph snapshot unavailable; using task-local graph snapshot.",
+                }
+            return {
+                "task_id": task_id,
+                "domain": domain,
+                "status": "unavailable",
+                "refreshed_at": now_iso(),
+                "graph": {"nodes": [], "edges": []},
+                "limits": limits,
+                "error": "Neo4j graph snapshot unavailable.",
+            }
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "status": "ok",
+            "refreshed_at": now_iso(),
+            "graph": graph,
+            "limits": limits,
+        }
+
+    def inspect_graph_issues(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        try:
+            result = self._graph_client.inspect_domain_graph_issues(domain=domain, task_id=task_id)
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue inspection failed: {self._sanitize_graph_error(str(exc))}") from exc
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "status": "ok",
+            "inspected_at": now_iso(),
+            **result,
+        }
+
+    def delete_graph_issue_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        graph_id = str(payload.get("graph_id") or payload.get("node_graph_id") or "").strip()
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        if not graph_id:
+            raise ValueError("`graph_id` is required.")
+        try:
+            result = self._graph_client.delete_domain_graph_issue_node(domain=domain, task_id=task_id, graph_id=graph_id)
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue deletion failed: {self._sanitize_graph_error(str(exc))}") from exc
+        graph = self.get_task_graph_snapshot(task_id) or {}
+        self._audit_logger.log(task_id, "graph_issue_node_deleted", result)
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "operation": "delete",
+            "result": result,
+            "graph_snapshot": graph.get("graph", {}),
+            "updated_at": now_iso(),
+        }
+
+    def link_graph_issue_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        graph_id = str(payload.get("graph_id") or payload.get("node_graph_id") or "").strip()
+        target_node_id = str(payload.get("target_node_id") or "").strip()
+        relationship_type = str(payload.get("relationship_type") or "RELATED_TO").strip()
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        if not graph_id:
+            raise ValueError("`graph_id` is required.")
+        if not target_node_id:
+            raise ValueError("`target_node_id` is required.")
+        try:
+            result = self._graph_client.link_domain_graph_issue_node(
+                domain=domain,
+                task_id=task_id,
+                graph_id=graph_id,
+                target_node_id=target_node_id,
+                relationship_type=relationship_type,
+            )
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue linking failed: {self._sanitize_graph_error(str(exc))}") from exc
+        graph = self.get_task_graph_snapshot(task_id) or {}
+        self._audit_logger.log(task_id, "graph_issue_node_linked", result)
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "operation": "link",
+            "result": result,
+            "graph_snapshot": graph.get("graph", {}),
+            "updated_at": now_iso(),
+        }
+
+    def expand_graph_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be expanded; wait for the current workflow to finish.")
+
+        node_id = str(payload.get("node_id") or payload.get("knowledge_id") or "").strip()
+        if not node_id:
+            raise ValueError("`node_id` is required.")
+        force = bool(payload.get("force", False))
+
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        graph = self._task_structure_graph(stored, request_context)
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        selected_node = next((node for node in nodes if str(node.get("node_id", "")) == node_id), None)
+        if selected_node is None:
+            raise ValueError(f"graph node not found: {node_id}")
+        child_edges = [
+            edge
+            for edge in graph.get("edges", [])
+            if isinstance(edge, dict)
+            and str(edge.get("from_node_id", "")) == node_id
+            and str(edge.get("edge_type", "CONTAINS")) == "CONTAINS"
+        ]
+        if child_edges and not force:
+            raise ValueError("selected node already has child branches; pass `force=true` to expand it anyway.")
+
+        related_context = self._graph_node_related_context(request_context, graph, node_id)
+        expansion = self._generate_graph_node_expansion(
+            request_context=request_context,
+            graph=graph,
+            selected_node=selected_node,
+            related_context=related_context,
+            payload=payload,
+        )
+        merged_graph, added_nodes, added_edges = self._merge_graph_node_expansion(
+            graph=graph,
+            parent_node=selected_node,
+            expansion=expansion,
+        )
+        if not added_nodes:
+            raise ValueError("node expansion did not produce any new knowledge points.")
+
+        normalized = normalize_structure_graph_payload(
+            payload=merged_graph,
+            domain=request_context.domain,
+            subdomains=request_context.subdomains,
+            focus_points=request_context.focus_points,
+            source_intent=request_context.original_input or request_context.domain,
+        )
+        request_context.structure_graph = normalized.to_dict()
+        derived = derive_context_from_structure_graph(graph=normalized, domain=request_context.domain)
+        request_context.knowledge_modules = derived["knowledge_modules"]
+        request_context.core_topics = derived["core_topics"]
+        request_context.navigation_targets = derived["navigation_targets"]
+        request_context.knowledge_blueprint = derived["knowledge_blueprint"]
+        request_context.required_files = derived["required_files"]
+        request_context.structure_mode = derived["structure_mode"]
+
+        sync_result: dict[str, Any]
+        try:
+            self._graph_client.sync_structure_graph(
+                domain=request_context.domain,
+                task_id=task_id,
+                structure_graph=request_context.structure_graph,
+            )
+            sync_result = {"status": "passed", "synced_nodes": len(request_context.structure_graph.get("nodes", []))}
+        except Exception as exc:
+            sync_result = {"status": "failed", "error": self._sanitize_graph_error(str(exc))}
+
+        now = now_iso()
+        graph_snapshot = KnowledgeGraphWorkflow._local_graph_snapshot(request_context)
+        event = WorkflowStepEvent(
+            step_id="graph_node_expansion",
+            label="图谱节点扩展",
+            status="completed",
+            timestamp=now,
+            details={
+                "node_id": node_id,
+                "added_node_ids": [str(node.get("node_id", "")) for node in added_nodes],
+                "added_edge_count": len(added_edges),
+                "sync": sync_result,
+            },
+        )
+        stored["request_context"] = request_context.to_dict()
+        stored["structure_graph"] = request_context.structure_graph
+        stored["structure_graph_sync"] = sync_result
+        stored["graph_snapshot"] = graph_snapshot
+        stored["graph_event"] = {
+            "event_type": "graph_node_expanded",
+            "node_id": node_id,
+            "added_node_ids": [str(node.get("node_id", "")) for node in added_nodes],
+            "timestamp": now,
+        }
+        stored["current_step"] = "graph_node_expansion"
+        stored["current_action"] = f"已为 {selected_node.get('title', node_id)} 扩展 {len(added_nodes)} 个知识点。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "graph_node_expanded", event.details)
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(
+            {
+                "task_id": task_id,
+                "status": "expanded",
+                "node_id": node_id,
+                "added_nodes": added_nodes,
+                "added_edges": added_edges,
+                "related_context": related_context,
+                "structure_graph_sync": sync_result,
+                "graph_snapshot": graph_snapshot,
+                "task": stored,
+            }
+        )
+
+    @staticmethod
+    def _domain_for_task_payload(task: dict[str, Any]) -> str:
+        request_context = task.get("request_context") or {}
+        return str(request_context.get("domain") or request_context.get("normalized_domain") or task.get("domain") or "").strip()
+
+    @staticmethod
+    def _task_structure_graph(stored: dict[str, Any], request_context: RequestContext) -> dict[str, Any]:
+        graph = stored.get("structure_graph") or request_context.structure_graph or (stored.get("request_context") or {}).get("structure_graph") or {}
+        return json.loads(json.dumps(graph, ensure_ascii=False)) if isinstance(graph, dict) else {"nodes": [], "edges": []}
+
+    def _graph_node_related_context(self, request_context: RequestContext, graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+        try:
+            payload = self._graph_client.structure_review_context(
+                domain=request_context.domain,
+                task_id=request_context.task_id,
+                knowledge_id=node_id,
+            )
+            if payload.get("nodes") or payload.get("edges"):
+                return {
+                    "status": "ok",
+                    "source": "neo4j",
+                    "domain": request_context.domain,
+                    "task_id": request_context.task_id,
+                    "knowledge_id": node_id,
+                    "nodes": payload.get("nodes", []),
+                    "edges": payload.get("edges", []),
+                }
+        except Exception as exc:
+            return {
+                **self._local_graph_node_related_context(request_context, graph, node_id),
+                "neo4j_lookup": {"status": "failed", "error": self._sanitize_graph_error(str(exc))},
+            }
+        return self._local_graph_node_related_context(request_context, graph, node_id)
+
+    @staticmethod
+    def _local_graph_node_related_context(request_context: RequestContext, graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        related_ids = {node_id}
+        for edge in edges:
+            source = str(edge.get("from_node_id", ""))
+            target = str(edge.get("to_node_id", ""))
+            if source == node_id and target:
+                related_ids.add(target)
+            if target == node_id and source:
+                related_ids.add(source)
+        return {
+            "status": "local",
+            "source": "local_structure_graph",
+            "domain": request_context.domain,
+            "task_id": request_context.task_id,
+            "knowledge_id": node_id,
+            "nodes": [node for node in nodes if str(node.get("node_id", "")) in related_ids],
+            "edges": [
+                edge
+                for edge in edges
+                if str(edge.get("from_node_id", "")) in related_ids and str(edge.get("to_node_id", "")) in related_ids
+            ],
+        }
+
+    def _generate_graph_node_expansion(
+        self,
+        *,
+        request_context: RequestContext,
+        graph: dict[str, Any],
+        selected_node: dict[str, Any],
+        related_context: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        chat_client = getattr(self._workflow, "_generation_chat_client", None)
+        expansion_focus = str(payload.get("focus") or payload.get("instruction") or "").strip()
+        if chat_client is not None:
+            try:
+                result = chat_client.complete_json(
+                    system_prompt=(
+                        "你是 KnowledgeForge 图谱节点增量扩展器。"
+                        "请只围绕用户点击的叶子知识节点继续细分知识点，输出严格 JSON。"
+                        "JSON 必须包含 nodes 和 edges。新增 nodes 必须包含 title、node_type、relative_path、doc_type、owner_engine_candidates、required_query_tasks。"
+                        "新增节点应以 clicked_node 为父级，node_type 通常为 article；edge_type 使用 CONTAINS，可补充 RELATED_TO。"
+                        "不要生成 Markdown 正文，不要重复已有相邻节点。"
+                    ),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": request_context.domain,
+                            "clicked_node": selected_node,
+                            "related_context": related_context,
+                            "existing_structure_graph": graph,
+                            "expansion_focus": expansion_focus,
+                            "output_language": request_context.output_language,
+                            "requirements": [
+                                "优先生成 3 到 6 个可继续追溯证据的子知识点",
+                                "参考关联节点，避免与包含关系或平行关系重复",
+                                "为每个子知识点给出简短 description 和 metadata.learning_role",
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                if isinstance(result, dict) and isinstance(result.get("nodes"), list) and result.get("nodes"):
+                    return result
+            except Exception as exc:
+                self._audit_logger.log(
+                    request_context.task_id,
+                    "graph_node_expansion_llm_failed",
+                    {"node_id": selected_node.get("node_id", ""), "error": str(exc)},
+                )
+        return self._fallback_graph_node_expansion(selected_node=selected_node, focus=expansion_focus)
+
+    @staticmethod
+    def _fallback_graph_node_expansion(*, selected_node: dict[str, Any], focus: str) -> dict[str, Any]:
+        title = str(selected_node.get("title") or "知识点").strip()
+        parent_path = str(selected_node.get("relative_path") or "").strip()
+        if parent_path.endswith(".md"):
+            parent_dir = parent_path.rsplit("/", 1)[0] if "/" in parent_path else slugify_filename(title, "expanded-topic")
+        else:
+            parent_dir = parent_path.strip("/") or slugify_filename(title, "expanded-topic")
+        suffixes = ["核心概念", "关键方法", "实践与边界"]
+        if focus:
+            suffixes[0] = focus
+        nodes = []
+        edges = []
+        parent_id = str(selected_node.get("node_id", ""))
+        parent_slug = slugify_filename(title, "expanded-topic")
+        for index, suffix in enumerate(suffixes, start=1):
+            child_title = f"{title}：{suffix}"
+            child_id = f"{parent_id}-exp-{index}" if parent_id else f"{parent_slug}-exp-{index}"
+            child_slug = slugify_filename(suffix, f"part-{index}")
+            nodes.append(
+                {
+                    "node_id": child_id,
+                    "title": child_title,
+                    "node_type": "article",
+                    "parent_node_id": parent_id,
+                    "relative_path": f"{parent_dir}/{child_slug}.md",
+                    "description": "由图谱叶子节点增量扩展生成的基础知识点。",
+                    "doc_type": "article",
+                    "owner_engine_candidates": ["QueryEngine", "InsightEngine"],
+                    "required_query_tasks": 1,
+                    "metadata": {"expanded_from_node_id": parent_id, "learning_role": "细分知识点"},
+                }
+            )
+            edges.append({"from_node_id": parent_id, "edge_type": "CONTAINS", "to_node_id": child_id})
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _merge_graph_node_expansion(
+        *,
+        graph: dict[str, Any],
+        parent_node: dict[str, Any],
+        expansion: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        merged = json.loads(json.dumps(graph, ensure_ascii=False))
+        nodes = merged.setdefault("nodes", [])
+        edges = merged.setdefault("edges", [])
+        parent_id = str(parent_node.get("node_id", ""))
+        existing_ids = {str(node.get("node_id", "")) for node in nodes if isinstance(node, dict)}
+        existing_titles = {str(node.get("title", "")).strip().lower() for node in nodes if isinstance(node, dict)}
+        added_nodes: list[dict[str, Any]] = []
+        raw_nodes = [node for node in expansion.get("nodes", []) if isinstance(node, dict)]
+        for index, raw_node in enumerate(raw_nodes, start=1):
+            title = str(raw_node.get("title") or f"{parent_node.get('title', '知识点')} 扩展 {index}").strip()
+            if title.lower() in existing_titles:
+                continue
+            node_id = str(raw_node.get("node_id") or raw_node.get("id") or "").strip()
+            if not node_id or node_id in existing_ids:
+                node_id = f"{parent_id}-exp-{index}"
+                while node_id in existing_ids:
+                    index += 1
+                    node_id = f"{parent_id}-exp-{index}"
+            parent_path = str(parent_node.get("relative_path") or "").strip()
+            parent_dir = parent_path.rsplit("/", 1)[0] if parent_path.endswith(".md") and "/" in parent_path else parent_path.replace(".md", "")
+            if not parent_dir:
+                parent_dir = slugify_filename(str(parent_node.get("title", "")), "expanded-topic")
+            relative_path = str(raw_node.get("relative_path") or "").strip()
+            if not relative_path:
+                relative_path = f"{parent_dir}/{slugify_filename(title, f'expansion-{index}')}.md"
+            node = {
+                **raw_node,
+                "node_id": node_id,
+                "title": title,
+                "node_type": str(raw_node.get("node_type") or "article"),
+                "parent_node_id": str(raw_node.get("parent_node_id") or parent_id),
+                "relative_path": relative_path,
+                "doc_type": str(raw_node.get("doc_type") or "article"),
+                "owner_engine_candidates": raw_node.get("owner_engine_candidates") or ["QueryEngine", "InsightEngine"],
+                "required_query_tasks": int(raw_node.get("required_query_tasks", 1) or 1),
+                "generation_state": "planned",
+                "is_generated": False,
+                "is_completed": False,
+                "document_completion_status": "not_requested",
+            }
+            node.setdefault("metadata", {})
+            if isinstance(node["metadata"], dict):
+                node["metadata"].setdefault("expanded_from_node_id", parent_id)
+            nodes.append(node)
+            existing_ids.add(node_id)
+            existing_titles.add(title.lower())
+            added_nodes.append(node)
+
+        existing_edge_keys = {
+            (str(edge.get("from_node_id", "")), str(edge.get("edge_type", "CONTAINS")), str(edge.get("to_node_id", "")))
+            for edge in edges
+            if isinstance(edge, dict)
+        }
+        added_edges: list[dict[str, Any]] = []
+        raw_edges = [edge for edge in expansion.get("edges", []) if isinstance(edge, dict)]
+        if not raw_edges:
+            raw_edges = [
+                {"from_node_id": parent_id, "edge_type": "CONTAINS", "to_node_id": str(node.get("node_id", ""))}
+                for node in added_nodes
+            ]
+        added_node_ids = {str(node.get("node_id", "")) for node in added_nodes}
+        for raw_edge in raw_edges:
+            source = str(raw_edge.get("from_node_id") or raw_edge.get("source") or parent_id)
+            target = str(raw_edge.get("to_node_id") or raw_edge.get("target") or "")
+            if target not in added_node_ids and source != parent_id:
+                continue
+            edge_type = str(raw_edge.get("edge_type") or raw_edge.get("type") or "CONTAINS")
+            key = (source, edge_type, target)
+            if not source or not target or key in existing_edge_keys:
+                continue
+            edge = {"from_node_id": source, "edge_type": edge_type, "to_node_id": target}
+            edges.append(edge)
+            existing_edge_keys.add(key)
+            added_edges.append(edge)
+        merged["generated_at"] = now_iso()
+        return merged, added_nodes, added_edges
+
+    def generate_learning_plan(self, task_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot generate a learning plan; wait for the current workflow to finish.")
+
+        payload = payload or {}
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        graph = self._task_structure_graph(stored, request_context)
+        if not graph.get("nodes"):
+            raise ValueError("knowledge graph is not ready for learning plan generation.")
+
+        plan = self._build_learning_plan_from_graph(
+            task_id=task_id,
+            request_context=request_context,
+            graph=graph,
+            queue=stored.get("task_queue_snapshot") or {},
+            profile=str(payload.get("profile") or "default"),
+        )
+        now = plan["generated_at"]
+        event = WorkflowStepEvent(
+            step_id="learning_plan_generation",
+            label="生成学习计划",
+            status="completed",
+            timestamp=now,
+            details={
+                "stage_count": len(plan.get("stages", [])),
+                "topic_count": plan.get("graph_summary", {}).get("topic_count", 0),
+                "evidence_ready_count": plan.get("evidence_summary", {}).get("ready_count", 0),
+            },
+        )
+        stored["learning_plan"] = plan
+        stored["current_step"] = "learning_plan_generation"
+        stored["current_action"] = f"已生成 {request_context.domain} 的由浅入深学习计划。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "learning_plan_generated", event.details)
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(
+            {
+                "task_id": task_id,
+                "domain": request_context.domain,
+                "status": "generated",
+                "learning_plan": plan,
+                "task": stored,
+            }
+        )
+
+    def _build_learning_plan_from_graph(
+        self,
+        *,
+        task_id: str,
+        request_context: RequestContext,
+        graph: dict[str, Any],
+        queue: dict[str, Any],
+        profile: str,
+    ) -> dict[str, Any]:
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        root_node_id = str(graph.get("root_node_id") or "")
+        if not root_node_id:
+            root_node_id = next((str(node.get("node_id", "")) for node in nodes if str(node.get("node_type", "")) == "domain"), "")
+        depth_by_id = self._learning_depth_by_node(nodes, edges, root_node_id)
+        queue_by_node = self._learning_queue_by_node(queue)
+        ordered_topics = sorted(
+            [node for node in nodes if str(node.get("node_type", "")) != "domain"],
+            key=lambda node: self._learning_node_sort_key(node, depth_by_id),
+        )
+        stage_defs = [
+            ("stage-1", "入门定位", "beginner", "先建立领域地图、基本术语和学习边界。"),
+            ("stage-2", "基础能力", "foundation", "掌握核心子领域的基础概念、前置关系和标准证据。"),
+            ("stage-3", "进阶结构", "intermediate", "串联关键方法、机制、实践边界和相邻知识点。"),
+            ("stage-4", "综合应用", "advanced", "围绕真实问题组织跨子领域练习，开始形成可迁移判断。"),
+            ("stage-5", "精通沉淀", "mastery", "复盘证据、构建个人知识图谱，并能独立评估争议与缺口。"),
+        ]
+        buckets: dict[str, list[dict[str, Any]]] = {stage_id: [] for stage_id, *_ in stage_defs}
+        max_depth = max(depth_by_id.values(), default=1)
+        for node in ordered_topics:
+            stage_id = self._learning_stage_for_node(node, depth_by_id, max_depth)
+            buckets[stage_id].append(node)
+
+        stages: list[dict[str, Any]] = []
+        for stage_index, (stage_id, title, level, objective) in enumerate(stage_defs, start=1):
+            stage_nodes = buckets[stage_id]
+            if not stage_nodes and stage_id not in {"stage-1", "stage-5"}:
+                continue
+            topics = [self._learning_topic_entry(node, depth_by_id, queue_by_node) for node in stage_nodes[:8]]
+            if stage_id == "stage-1" and not topics:
+                topics = [
+                    {
+                        "node_id": root_node_id,
+                        "title": f"{request_context.domain} 领域总览",
+                        "node_type": "domain",
+                        "subdomain": "",
+                        "relative_path": "README.md",
+                        "learning_role": "领域总览",
+                        "depth": 0,
+                        "evidence_status": "pending",
+                        "evidence": [],
+                    }
+                ]
+            if stage_id == "stage-5" and not topics:
+                topics = [self._learning_topic_entry(node, depth_by_id, queue_by_node) for node in ordered_topics[-5:]]
+            stages.append(
+                {
+                    "stage_id": stage_id,
+                    "order": stage_index,
+                    "title": title,
+                    "level": level,
+                    "objective": objective,
+                    "estimated_effort": self._learning_estimated_effort(stage_index, len(topics)),
+                    "focus_subdomains": self._learning_focus_subdomains(topics, request_context),
+                    "topics": topics,
+                    "practice": self._learning_practice_for_stage(stage_index, request_context.domain),
+                    "checkpoint": self._learning_checkpoint_for_stage(stage_index, request_context.domain),
+                }
+            )
+
+        ready_count = 0
+        pending_count = 0
+        for tasks in queue_by_node.values():
+            if any(str(task.get("selected_link", "")).strip() or str(task.get("status", "")).lower() in {"completed", "verified"} for task in tasks):
+                ready_count += 1
+            else:
+                pending_count += 1
+        return {
+            "task_id": task_id,
+            "domain": request_context.domain,
+            "profile": profile,
+            "generated_at": now_iso(),
+            "source": "structure_graph_and_evidence_queue",
+            "mastery_target": f"能够围绕 {request_context.domain} 独立解释知识结构、验证证据、解决综合问题并持续维护个人知识图谱。",
+            "graph_summary": {
+                "topic_count": len(ordered_topics),
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "max_depth": max_depth,
+            },
+            "evidence_summary": {
+                "ready_count": ready_count,
+                "pending_count": pending_count,
+                "note": "已填充证据会作为优先阅读材料；未填充证据的主题应先完成查询填充或人工补证。",
+            },
+            "stages": stages,
+            "milestones": [
+                {"title": "能画出领域结构图", "after_stage": "stage-1"},
+                {"title": "能解释核心子领域和前置关系", "after_stage": "stage-2"},
+                {"title": "能基于证据比较方法与边界", "after_stage": "stage-3"},
+                {"title": "能完成跨主题项目或案例复盘", "after_stage": "stage-4"},
+                {"title": "能维护和扩展自己的知识图谱", "after_stage": "stage-5"},
+            ],
+            "source_traceability": {
+                "structure_graph_generated_at": graph.get("generated_at", ""),
+                "queue_final_status": queue.get("final_status", ""),
+                "task_queue_path": queue.get("queue_path", ""),
+            },
+        }
+
+    @staticmethod
+    def _learning_depth_by_node(nodes: list[dict[str, Any]], edges: list[dict[str, Any]], root_node_id: str) -> dict[str, int]:
+        child_map: dict[str, list[str]] = {}
+        for edge in edges:
+            if str(edge.get("edge_type", "CONTAINS")) != "CONTAINS":
+                continue
+            child_map.setdefault(str(edge.get("from_node_id", "")), []).append(str(edge.get("to_node_id", "")))
+        depth_by_id = {root_node_id: 0} if root_node_id else {}
+        queue_ids = [root_node_id] if root_node_id else []
+        while queue_ids:
+            current = queue_ids.pop(0)
+            for child_id in child_map.get(current, []):
+                if child_id in depth_by_id:
+                    continue
+                depth_by_id[child_id] = depth_by_id.get(current, 0) + 1
+                queue_ids.append(child_id)
+        for node in nodes:
+            node_id = str(node.get("node_id", ""))
+            if node_id and node_id not in depth_by_id:
+                depth_by_id[node_id] = 1
+        return depth_by_id
+
+    @staticmethod
+    def _learning_queue_by_node(queue: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for task in queue.get("tasks", []):
+            if not isinstance(task, dict):
+                continue
+            node_id = str(task.get("target_node_id") or task.get("structure_node_id") or "").strip()
+            if node_id:
+                grouped.setdefault(node_id, []).append(task)
+        return grouped
+
+    @staticmethod
+    def _learning_node_sort_key(node: dict[str, Any], depth_by_id: dict[str, int]) -> tuple[int, int, str]:
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        raw_order = metadata.get("learning_order") or node.get("learning_order")
+        try:
+            order = int(raw_order)
+        except (TypeError, ValueError):
+            order = 999
+        type_order = {"section": 0, "subtopic": 1, "index": 2, "article": 3}.get(str(node.get("node_type", "")), 4)
+        return (depth_by_id.get(str(node.get("node_id", "")), 1), order, f"{type_order}:{node.get('title', '')}")
+
+    @staticmethod
+    def _learning_stage_for_node(node: dict[str, Any], depth_by_id: dict[str, int], max_depth: int) -> str:
+        node_type = str(node.get("node_type", ""))
+        depth = depth_by_id.get(str(node.get("node_id", "")), 1)
+        if node_type in {"section", "subtopic", "index"} or depth <= 1:
+            return "stage-2"
+        if depth <= max(2, max_depth // 2):
+            return "stage-3"
+        return "stage-4"
+
+    @staticmethod
+    def _learning_topic_entry(
+        node: dict[str, Any],
+        depth_by_id: dict[str, int],
+        queue_by_node: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        node_id = str(node.get("node_id", ""))
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        tasks = queue_by_node.get(node_id, [])
+        evidence = [
+            {
+                "task_id": str(task.get("task_id", "")),
+                "claim_or_gap": str(task.get("claim_or_gap", "")),
+                "selected_link": str(task.get("selected_link", "")),
+                "source_kind": str(task.get("source_kind", "")),
+                "status": str(task.get("status", "")),
+            }
+            for task in tasks[:3]
+        ]
+        evidence_status = "ready" if any(item.get("selected_link") or item.get("status") in {"completed", "verified"} for item in evidence) else "pending"
+        return {
+            "node_id": node_id,
+            "title": str(node.get("title", "")),
+            "node_type": str(node.get("node_type", "")),
+            "subdomain": str(metadata.get("subdomain", "")),
+            "relative_path": str(node.get("relative_path", "")),
+            "learning_role": str(metadata.get("learning_role") or node.get("doc_type") or "知识点"),
+            "depth": depth_by_id.get(node_id, 1),
+            "evidence_status": evidence_status,
+            "evidence": evidence,
+        }
+
+    @staticmethod
+    def _learning_focus_subdomains(topics: list[dict[str, Any]], request_context: RequestContext) -> list[str]:
+        subdomains = [str(topic.get("subdomain", "")).strip() for topic in topics if str(topic.get("subdomain", "")).strip()]
+        if subdomains:
+            return list(dict.fromkeys(subdomains))[:5]
+        return request_context.subdomains[:5]
+
+    @staticmethod
+    def _learning_estimated_effort(stage_index: int, topic_count: int) -> str:
+        base_hours = [2, 6, 10, 14, 18][min(stage_index - 1, 4)]
+        return f"{base_hours + max(0, topic_count - 3) * 2} 小时左右"
+
+    @staticmethod
+    def _learning_practice_for_stage(stage_index: int, domain: str) -> str:
+        practices = {
+            1: f"用自己的话画出 {domain} 的一页领域地图，并标注最不确定的 3 个概念。",
+            2: "为每个核心子领域写一段定义、一个例子和一个前置知识说明。",
+            3: "选择两个相邻知识点，基于证据比较它们的适用场景、限制和常见误解。",
+            4: "完成一个跨子领域小项目或案例复盘，把用到的节点和证据链接回图谱。",
+            5: "独立扩展一个叶子节点，补证据、做质量判断，并更新个人学习复盘。",
+        }
+        return practices.get(stage_index, "完成阶段复盘并补齐证据缺口。")
+
+    @staticmethod
+    def _learning_checkpoint_for_stage(stage_index: int, domain: str) -> str:
+        checkpoints = {
+            1: "能说明这个领域是什么、不是什么，以及为什么要按当前图谱顺序学习。",
+            2: "能解释核心术语和子领域之间的包含/前置关系。",
+            3: "能引用证据说明关键方法的边界，而不是只背结论。",
+            4: "能把多个知识点组合成解决问题的路径。",
+            5: f"能围绕 {domain} 设计学习路线、审查证据质量，并指导他人入门。",
+        }
+        return checkpoints.get(stage_index, "能完成阶段目标并说明证据依据。")
+
+    def generate_report(self, task_id: str) -> dict[str, Any] | None:
+        frozen_payload = self._frozen_store.load(task_id)
+        if frozen_payload is None:
+            return None
+        frozen_record = FrozenVersionRecord(**frozen_payload)
+        report = self._report_service.build_report(frozen_record)
+        self._audit_logger.log(
+            task_id,
+            "report_generated",
+            {"version": frozen_record.version, "source": "frozen_version"},
+        )
+        return report.to_dict()
+
+    def fill_evidence(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") == "verified":
+            return stored
+        fill_state = self._build_evidence_fill_state(task_id, stored)
+        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", "")})
+        with token_tracking_context(task_id):
+            final_state = self._workflow.fill_evidence(fill_state)
+        return self._persist_and_serialize(final_state, "evidence_fill_completed")
+
+    def start_evidence_fill(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") == "verified":
+            return stored
+        fill_state = self._build_evidence_fill_state(task_id, stored)
+        fill_state["updated_at"] = now_iso()
+        fill_state.pop("finished_at", None)
+        with self._task_lock:
+            self._tasks[task_id] = fill_state
+        payload = self._serialize_state(fill_state)
+        self._state_store.save(task_id, payload)
+        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", ""), "mode": "async"})
+        Thread(target=self._run_evidence_fill_task, args=(fill_state,), daemon=True).start()
+        return self._attach_runtime_observability(payload)
+
+    def _build_evidence_fill_state(self, task_id: str, stored: dict[str, Any]) -> WorkflowState:
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot start evidence filling.")
+        if stored.get("task_status") != "graph_ready":
+            raise ValueError("knowledge graph is not ready for evidence filling yet; finish graph generation first.")
+        queue = stored.get("task_queue_snapshot") or {}
+        if not queue.get("tasks"):
+            raise ValueError("knowledge graph has no evidence tasks to fill.")
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content="用户点击查询填充，开始联网补充 Neo4j 知识图谱证据。",
+                metadata={"trigger": "manual_evidence_fill"},
+            )
+        )
+        event = WorkflowStepEvent(
+            step_id="evidence_link_query",
+            label="查询填充已启动",
+            status="active",
+            timestamp=now_iso(),
+            details={"trigger": "manual_evidence_fill"},
+        )
+        fill_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": int(stored.get("round_number", 1)),
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "passed"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_queue_path": stored.get("task_queue_path", ""),
+            "task_queue_snapshot": queue,
+            "agent_outputs": self._deserialize_agent_outputs(stored.get("agent_outputs", {})),
+            "task_status": "running",
+            "current_step": "evidence_link_query",
+            "current_action": "查询填充已启动，正在为 Neo4j 知识图谱补充可信证据链接。",
+            "started_at": stored.get("started_at") or now_iso(),
+            "workflow_events": [*stored.get("workflow_events", []), event.to_dict()],
+        }
+        return fill_state
+
+    def _run_evidence_fill_task(self, initial_state: WorkflowState) -> None:
+        task_id = initial_state["task_id"]
+        try:
+            with token_tracking_context(task_id):
+                final_state = self._workflow.fill_evidence(initial_state)
+        except _TaskCancelled:
+            return
+        except Exception as exc:
+            if self._is_cancelled(task_id):
+                return
+            failed_state = dict(initial_state)
+            failed_state["task_status"] = "failed"
+            failed_state["finished_at"] = now_iso()
+            failed_state["updated_at"] = failed_state["finished_at"]
+            with self._task_lock:
+                self._tasks[task_id] = failed_state
+            payload = self._serialize_state(failed_state)
+            self._state_store.save(task_id, payload)
+            self._audit_logger.log(task_id, "evidence_fill_failed", {"error": str(exc)})
+            return
+        if self._is_cancelled(task_id):
+            return
+        self._persist_and_serialize(final_state, "evidence_fill_completed")
+
+    def complete_documents(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be completed into full documents.")
+        self._ensure_framework_ready_for_document_completion(stored)
+        if str(stored.get("full_document_status", "")) == "generated":
+            return stored
+
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        evidence_sync = self._sync_document_completion_evidence_to_graph(request_context, stored.get("task_queue_snapshot") or {})
+        result = self._writer.complete_framework_documents(
+            request_context,
+            round_number=int(stored.get("round_number", 1)),
+            queue=stored.get("task_queue_snapshot") or {},
+        )
+        self._mark_completed_documents_on_graph(request_context, result)
+        now = now_iso()
+        event = WorkflowStepEvent(
+            step_id="document_completion",
+            label="补全文档",
+            status="completed",
+            timestamp=now,
+            details=result,
+        )
+        evidence_event = WorkflowStepEvent(
+            step_id="evidence_link_recorded",
+            label="图谱证据写入",
+            status="completed",
+            timestamp=now,
+            details=evidence_sync,
+        )
+        stored["request_context"] = request_context.to_dict()
+        stored["completion_mode"] = "framework"
+        stored["document_completion_status"] = "generated"
+        stored["full_document_status"] = "generated"
+        stored["document_evidence_sync"] = evidence_sync
+        stored["document_completion_result"] = result
+        stored["current_step"] = "document_completion"
+        stored["current_action"] = f"已补全 {len(result.get('completed_files', []))} 个框架文档。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(evidence_event.to_dict())
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        if isinstance(stored.get("document_artifact"), dict):
+            stored["document_artifact"]["generated_files"] = result.get("completed_files", [])
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "document_evidence_synced", evidence_sync)
+        self._audit_logger.log(task_id, "documents_completed", result)
+        self._audit_logger.log(task_id, "workflow_step", evidence_event.to_dict())
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(stored)
+
+    def _sync_document_completion_evidence_to_graph(self, request_context: RequestContext, queue: dict[str, Any]) -> dict[str, Any]:
+        tasks = [task for task in queue.get("tasks", []) if isinstance(task, dict)]
+        synced: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        graph = request_context.structure_graph if isinstance(request_context.structure_graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        for task in tasks:
+            node_id = str(task.get("target_node_id", "")).strip()
+            if not node_id:
+                skipped.append({"task_id": str(task.get("task_id", "")), "reason": "missing_target_node_id"})
+                continue
+            selected_link = str(task.get("selected_link", "")).strip()
+            extra_properties = {
+                "evidence_links": [selected_link] if selected_link else [],
+                "selected_link": selected_link,
+                "source_kind": str(task.get("source_kind", "")),
+                "reachable": bool(task.get("reachable", False)),
+                "relevance_reason": str(task.get("relevance_reason", "")),
+                "checked_at": str(task.get("checked_at", "")),
+                "claim_or_gap": str(task.get("claim_or_gap", "")),
+                "expected_evidence": task.get("expected_evidence", []),
+                "document_completion_status": "pending",
+            }
+            for node in nodes:
+                if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                    node.update(extra_properties)
+            if self._graph_client is None:
+                skipped.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "reason": "neo4j_client_unavailable"})
+                continue
+            try:
+                self._graph_client.update_structure_node_status(
+                    domain=request_context.domain,
+                    task_id=request_context.task_id,
+                    node_id=node_id,
+                    generation_state="link_verified" if str(task.get("status", "")) == "completed" else "link_failed",
+                    generated_path="",
+                    pending_task_count=0 if str(task.get("status", "")) == "completed" else 1,
+                    completed_task_count=1 if str(task.get("status", "")) == "completed" else 0,
+                    extra_properties=extra_properties,
+                )
+                synced.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "selected_link": selected_link})
+            except Exception as exc:
+                skipped.append({"task_id": str(task.get("task_id", "")), "node_id": node_id, "reason": str(exc)})
+        return {
+            "status": "completed",
+            "synced_tasks": synced,
+            "skipped_tasks": skipped,
+            "total_tasks": len(tasks),
+            "synced_at": now_iso(),
+        }
+
+    def _mark_completed_documents_on_graph(self, request_context: RequestContext, result: dict[str, Any]) -> None:
+        completed_paths = {str(path) for path in result.get("completed_files", []) if str(path).strip()}
+        if not completed_paths:
+            return
+        domain_dir = self._config.save_root / sanitize_path_segment(request_context.domain, "domain")
+        graph = request_context.structure_graph if isinstance(request_context.structure_graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+        for blueprint in request_context.knowledge_blueprint:
+            relative_path = str(blueprint.get("relative_path", "")).strip()
+            if not relative_path:
+                continue
+            generated_path = (domain_dir / relative_path).as_posix()
+            if generated_path not in completed_paths:
+                continue
+            requirements = blueprint.get("completion_requirements", {})
+            node_id = str(requirements.get("structure_node_id", "")) if isinstance(requirements, dict) else ""
+            for node in nodes:
+                if isinstance(node, dict) and str(node.get("node_id", "")) == node_id:
+                    node["generation_state"] = "documented"
+                    node["self_generation_state"] = "documented"
+                    node["document_completion_status"] = "generated"
+                    node["generated_path"] = generated_path
+                    node["is_generated"] = True
+                    node["is_completed"] = True
+                    node["completed_at"] = now_iso()
+            if self._graph_client is not None and node_id:
+                with suppress(Exception):
+                    self._graph_client.update_structure_node_status(
+                        domain=request_context.domain,
+                        task_id=request_context.task_id,
+                        node_id=node_id,
+                        generation_state="documented",
+                        generated_path=generated_path,
+                        extra_properties={"document_completion_status": "generated"},
+                    )
+
+    @staticmethod
+    def _ensure_framework_ready_for_document_completion(stored: dict[str, Any]) -> None:
+        if (stored.get("post_storage_result") or {}).get("status") != "passed":
+            raise ValueError("knowledge framework is not fully governed yet; finish framework generation and quality checks first.")
+        if stored.get("task_status") != "verified":
+            raise ValueError("knowledge framework is not verified yet; finish the framework workflow first.")
+        queue = stored.get("task_queue_snapshot") or {}
+        incomplete = [
+            str(task.get("task_id", ""))
+            for task in queue.get("tasks", [])
+            if str(task.get("status", "")) != "completed"
+        ]
+        if incomplete:
+            raise ValueError(f"knowledge framework still has unfinished evidence tasks: {', '.join(incomplete[:5])}")
+        graph = stored.get("structure_graph") or (stored.get("request_context") or {}).get("structure_graph") or {}
+        if not isinstance(graph, dict) or not graph.get("nodes"):
+            raise ValueError("knowledge framework graph is unavailable; regenerate the framework first.")
+
+    def resume_task(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            self._audit_logger.log(
+                task_id,
+                "task_resume_skipped",
+                {"reason": "task_already_running", "status": stored.get("task_status", ""), "current_step": stored.get("current_step", "")},
+            )
+            return stored
+        with self._task_lock:
+            self._cancelled_task_ids.discard(task_id)
+
+        if self._can_continue_after_structure_repair(stored):
+            return self._continue_after_structure_repair(task_id, stored)
+
+        round_number = int(stored.get("round_number", 1))
+        if round_number >= self._config.max_rounds:
+            stored["task_status"] = "max_rounds_reached"
+            self._state_store.save(task_id, stored)
+            self._audit_logger.log(
+                task_id,
+                "max_rounds_reached",
+                {"round": round_number, "max_rounds": self._config.max_rounds},
+            )
+            return stored
+
+        if stored.get("task_status") in {"research_required", "repair_required"}:
+            return self._resume_evidence_fill(task_id, stored, next_round=round_number + 1)
+
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        previous_status = str(stored.get("task_status", "unknown"))
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content=f"任务因 {previous_status} 进入恢复执行。",
+                metadata={"resume_from_status": previous_status, "next_round": round_number + 1},
+            )
+        )
+        resumed_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": round_number + 1,
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "pending"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "task_status": "resumed",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_resumed",
+            {"from_status": previous_status, "round": round_number + 1},
+        )
+        with token_tracking_context(task_id):
+            final_state = self._workflow.run(resumed_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    @staticmethod
+    def _can_continue_after_structure_repair(stored: dict[str, Any]) -> bool:
+        if stored.get("task_status") != "repair_required":
+            return False
+        if stored.get("current_step") not in {"structure_review", "structure_repair"}:
+            return False
+        request_context = stored.get("request_context") or {}
+        if not request_context.get("knowledge_blueprint"):
+            return False
+        structure_graph = request_context.get("structure_graph") or stored.get("structure_graph") or {}
+        return isinstance(structure_graph, dict) and bool(structure_graph.get("nodes"))
+
+    def _continue_after_structure_repair(self, task_id: str, stored: dict[str, Any]) -> dict[str, Any]:
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        previous_status = str(stored.get("task_status", "unknown"))
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content="任务从 repair_required 的知识架构修复流继续执行，复用当前已修补图谱补全文档上下文与证据链接。",
+                metadata={"resume_from_status": previous_status, "resume_mode": "continue_after_structure_repair"},
+            )
+        )
+        resumed_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": int(stored.get("round_number", 1)),
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": "continued",
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "workflow_events": stored.get("workflow_events", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_status": "resumed",
+            "current_step": "structure_repair",
+            "current_action": "从 repair_required 接续执行。",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_resumed",
+            {"from_status": previous_status, "round": resumed_state["round_number"], "resume_mode": "continue_after_structure_repair"},
+        )
+        with token_tracking_context(task_id):
+            final_state = self._workflow.continue_after_structure_repair(resumed_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def _resume_evidence_fill(self, task_id: str, stored: dict[str, Any], *, next_round: int) -> dict[str, Any]:
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        previous_status = str(stored.get("task_status", "unknown"))
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content=f"任务因 {previous_status} 进入证据填充恢复执行。",
+                metadata={"resume_from_status": previous_status, "next_round": next_round},
+            )
+        )
+        resumed_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": next_round,
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "passed"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "workflow_events": stored.get("workflow_events", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_queue_path": stored.get("task_queue_path", ""),
+            "task_queue_snapshot": stored.get("task_queue_snapshot", {}),
+            "agent_outputs": self._deserialize_agent_outputs(stored.get("agent_outputs", {})),
+            "task_status": "resumed",
+            "current_step": "evidence_link_query",
+            "current_action": "从证据填充回流继续执行。",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_resumed",
+            {"from_status": previous_status, "round": next_round, "resume_mode": "evidence_fill"},
+        )
+        with token_tracking_context(task_id):
+            final_state = self._workflow.fill_evidence(resumed_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
+        task_id = state["task_id"]
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
+        self._finalize_successful_plan_statuses(state)
+        if not state.get("started_at"):
+            state["started_at"] = now_iso()
+        if self._is_terminal_status(state.get("task_status")) and not state.get("finished_at"):
+            state["finished_at"] = now_iso()
+        state["updated_at"] = now_iso()
+        with self._task_lock:
+            self._tasks[task_id] = state
+        payload = self._serialize_state(state)
+        self._freeze_version_if_eligible(task_id, payload)
+        self._attach_runtime_observability(payload)
+        self._state_store.save(task_id, payload)
+        self._log_agent_execution(task_id, payload)
+        self._audit_logger.log(
+            task_id,
+            audit_event,
+            {
+                "status": payload.get("task_status"),
+                "round": payload.get("round_number"),
+            },
+        )
+        return payload
+
+    def _record_token_usage(self, record: TokenUsageRecord) -> None:
+        if self._is_cancelled(record.task_id):
+            return
+        self._audit_logger.log(record.task_id, "token_usage_recorded", record.to_dict())
+
+    def _log_llm_event(self, payload: dict[str, Any]) -> None:
+        from knowledgeforge.server.runtime.token_usage import current_token_task_id
+
+        task_id = str(payload.get("task_id") or current_token_task_id() or "")
+        if not task_id:
+            return
+        if self._is_cancelled(task_id):
+            return
+        enriched_payload = dict(payload)
+        task_snapshot = self.get_task(task_id)
+        if task_snapshot is not None:
+            generation = task_snapshot.get("generation_progress", {}) or {}
+            if generation:
+                enriched_payload.setdefault("current_file", generation.get("current_file", ""))
+                enriched_payload.setdefault("completed_files", generation.get("completed_files", 0))
+                enriched_payload.setdefault("total_files", generation.get("total_files", 0))
+        status = str(payload.get("status", "unknown"))
+        event = {
+            "started": "llm_call_started",
+            "completed": "llm_call_completed",
+            "failed": "llm_call_failed",
+        }.get(status, "llm_call_event")
+        self._audit_logger.log(task_id, event, enriched_payload)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "LLM",
+                "event": event,
+                "timestamp": now_iso(),
+                "node": "OpenAICompatibleClient",
+                "details": enriched_payload,
+            },
+        )
+
+    def _attach_runtime_observability(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self._refresh_task_queue_snapshot_from_path(payload)
+        self._attach_execution_log(payload)
+        self._attach_task_timing(payload)
+        task_id = str(payload.get("task_id") or payload.get("session_id") or "")
+        if task_id:
+            payload["token_usage"] = summarize_token_usage(self._audit_logger.read(task_id))
+        return payload
+
+    def _attach_task_timing(self, payload: dict[str, Any]) -> None:
+        if not payload.get("task_id"):
+            return
+        started_at = str(payload.get("started_at") or payload.get("created_at") or payload.get("updated_at") or "")
+        finished_at = str(payload.get("finished_at") or "")
+        reference_at = finished_at or now_iso()
+        elapsed_seconds = self._elapsed_seconds(started_at, reference_at)
+        payload["task_timing"] = {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "elapsed_seconds": elapsed_seconds,
+            "is_running": self._is_running_status(payload.get("task_status", "")),
+        }
+
+    @staticmethod
+    def _build_queue_summary(queue: dict[str, Any]) -> dict[str, Any]:
+        tasks = queue.get("tasks", []) if isinstance(queue, dict) else []
+        counts = {
+            "total": len(tasks),
+            "pending": 0,
+            "running": 0,
+            "completed": 0,
+            "insufficient": 0,
+            "blocked": 0,
+        }
+        current_task = None
+        for task in tasks:
+            status = str(task.get("status", "pending"))
+            if status in counts:
+                counts[status] += 1
+            if current_task is None and status == "running":
+                current_task = {
+                    "task_id": task.get("task_id"),
+                    "task_type": task.get("task_type"),
+                    "target_file_path": task.get("target_file_path"),
+                    "target_section": task.get("target_section"),
+                    "query_text": task.get("query_text"),
+                    "attempts": task.get("attempts"),
+                    "round_number": task.get("round_number"),
+                }
+        return {
+            "final_status": queue.get("final_status") if isinstance(queue, dict) else "",
+            "current_round": queue.get("current_round") if isinstance(queue, dict) else 1,
+            "generation_status": queue.get("generation_status", {}) if isinstance(queue, dict) else {},
+            "counts": counts,
+            "current_task": current_task or {},
+            "round_summaries": queue.get("round_summaries", []) if isinstance(queue, dict) else [],
+        }
+
+    @staticmethod
+    def _build_log_summary(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        llm_events = [entry for entry in logs if str(entry.get("event", "")).startswith("llm_call_")]
+        failed_events = [
+            entry
+            for entry in logs
+            if "failed" in str(entry.get("event", "")).lower() or str(entry.get("details", {}).get("status", "")).lower() in {"failed", "blocked"}
+        ]
+        last_event = logs[-1] if logs else {}
+        return {
+            "total_events": len(logs),
+            "workflow_steps": len([entry for entry in logs if entry.get("event") == "workflow_step"]),
+            "llm_event_count": len(llm_events),
+            "failed_event_count": len(failed_events),
+            "last_event": {
+                "event": last_event.get("event", ""),
+                "timestamp": last_event.get("timestamp", ""),
+            },
+        }
+
+    @staticmethod
+    def _build_llm_activity(logs: list[dict[str, Any]]) -> dict[str, Any]:
+        llm_events = [entry for entry in logs if str(entry.get("event", "")).startswith("llm_call_")]
+        latest = llm_events[-1] if llm_events else {}
+        in_flight = 0
+        request_state: dict[str, str] = {}
+        for entry in llm_events:
+            details = entry.get("details", {}) or {}
+            request_id = str(details.get("request_id", ""))
+            if not request_id:
+                continue
+            request_state[request_id] = str(details.get("status", ""))
+        for status in request_state.values():
+            if status == "started":
+                in_flight += 1
+        return {
+            "in_flight_requests": in_flight,
+            "latest_event": latest,
+            "recent_events": llm_events[-5:],
+        }
+
+    @staticmethod
+    def _collect_recent_errors(logs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        recent_errors: list[dict[str, Any]] = []
+        for entry in reversed(logs):
+            event = str(entry.get("event", ""))
+            details = entry.get("details", {}) or {}
+            error = str(details.get("error", "")).strip()
+            if "failed" not in event and not error:
+                continue
+            recent_errors.append(
+                {
+                    "event": event,
+                    "timestamp": entry.get("timestamp", ""),
+                    "error": error,
+                    "agent": details.get("agent", ""),
+                    "operation": details.get("operation", ""),
+                }
+            )
+            if len(recent_errors) >= 5:
+                break
+        return list(reversed(recent_errors))
+
+    @staticmethod
+    def _refresh_task_queue_snapshot_from_path(payload: dict[str, Any]) -> None:
+        queue_path = str(payload.get("task_queue_path") or "").strip()
+        if not queue_path:
+            return
+        path = Path(queue_path)
+        if not path.exists():
+            return
+        try:
+            queue = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        payload["task_queue_snapshot"] = queue
+        if isinstance(queue.get("generation_status"), dict):
+            payload["generation_progress"] = queue["generation_status"]
+
+    @staticmethod
+    def _finalize_successful_plan_statuses(state: WorkflowState) -> None:
+        if state.get("task_status") != "verified":
+            return
+        for plan in state.get("agent_plans", {}).values():
+            plan.status = "approved"
+            for item in plan.plan_items:
+                item.status = "completed"
+
+    def _attach_execution_log(self, payload: dict[str, Any]) -> dict[str, Any]:
+        execution_log = payload.setdefault("execution_log", [])
+        agent_outputs = payload.get("agent_outputs", {})
+        for agent_name, output in agent_outputs.items():
+            for entry in output.get("execution_log", []):
+                record = {
+                    "agent": agent_name,
+                    "event": str(entry.get("event", "agent_execution_event")),
+                    "timestamp": entry.get("timestamp"),
+                    "node": entry.get("node"),
+                    "details": entry.get("details", {}),
+                }
+                if record not in execution_log:
+                    execution_log.append(record)
+        return payload
+
+    def _log_agent_execution(self, task_id: str, payload: dict[str, Any]) -> None:
+        for entry in payload.get("execution_log", []):
+            event = str(entry.get("event", "agent_execution_event"))
+            if event.startswith("query_") and event != "query_engine_fallback_result":
+                continue
+            if event.startswith("media_"):
+                continue
+            details = dict(entry.get("details", {}))
+            details["agent"] = entry.get("agent")
+            details["node"] = entry.get("node")
+            details["event_timestamp"] = entry.get("timestamp")
+            self._audit_logger.log(task_id, event, details)
+
+    def _log_realtime_query_event(self, task_id: str, entry: dict[str, Any]) -> None:
+        details = dict(entry.get("details", {}))
+        details["agent"] = "QueryEngine"
+        details["node"] = entry.get("node")
+        details["event_timestamp"] = entry.get("timestamp")
+        event = str(entry.get("event", "query_execution_event"))
+        self._audit_logger.log(task_id, event, details)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "QueryEngine",
+                "event": event,
+                "timestamp": entry.get("timestamp"),
+                "node": entry.get("node"),
+                "details": entry.get("details", {}),
+            },
+        )
+
+    def _log_realtime_media_event(self, task_id: str, entry: dict[str, Any]) -> None:
+        details = dict(entry.get("details", {}))
+        details["agent"] = "MediaEngine"
+        details["node"] = entry.get("node")
+        details["event_timestamp"] = entry.get("timestamp")
+        event = str(entry.get("event", "media_execution_event"))
+        self._audit_logger.log(task_id, event, details)
+        self._refresh_running_task_snapshot(
+            task_id,
+            {
+                "agent": "MediaEngine",
+                "event": event,
+                "timestamp": entry.get("timestamp"),
+                "node": entry.get("node"),
+                "details": entry.get("details", {}),
+            },
+        )
+
+    def _review_realtime_file(
+        self,
+        task_id: str,
+        candidate: RealtimeReviewCandidate,
+    ) -> RealtimeReviewResult:
+        task_snapshot = self.get_task(task_id) or {}
+        if (task_snapshot.get("request_context") or {}).get("completion_mode", "framework") == "framework":
+            result = RealtimeReviewResult(status="skipped", reason="默认主链路不生成本地知识 Markdown；证据先保留在运行态队列，补全文档前再写入 Neo4j。")
+            self._audit_logger.log(
+                task_id,
+                "realtime_file_review_skipped",
+                {
+                    "agent": candidate.agent,
+                    "round": candidate.round_number,
+                    "plan_item_id": candidate.plan_item_id,
+                    "reason": result.reason,
+                },
+            )
+            return result
+        result = self._realtime_file_reviewer.review_and_save(candidate)
+        self._audit_logger.log(
+            task_id,
+            "realtime_file_reviewed",
+            {
+                "agent": candidate.agent,
+                "round": candidate.round_number,
+                "plan_item_id": candidate.plan_item_id,
+                "query": candidate.query,
+                "source_type": candidate.source_type,
+                "platform_type": candidate.platform_type,
+                **result.to_dict(),
+            },
+        )
+        return result
+
+    def _log_workflow_step_event(self, task_id: str, event: WorkflowStepEvent) -> None:
+        payload = event.to_dict()
+        self._audit_logger.log(task_id, "workflow_step", payload)
+        with self._task_lock:
+            state = self._tasks.get(task_id)
+            if state is None:
+                stored = self._state_store.load(task_id)
+                if stored is None:
+                    return
+                events = stored.setdefault("workflow_events", [])
+                if payload not in events:
+                    events.append(payload)
+                stored["current_step"] = event.step_id
+                stored["current_action"] = event.label
+                stored["updated_at"] = now_iso()
+                self._state_store.save(task_id, stored)
+                return
+            events = state.setdefault("workflow_events", [])
+            if event not in events:
+                events.append(event)
+            state["current_step"] = event.step_id
+            state["current_action"] = event.label
+            state["updated_at"] = now_iso()
+            self._state_store.save(task_id, self._serialize_state(state))
+
+    def _backfill_audit_logs_from_task(
+        self,
+        task_id: str,
+        task: dict[str, Any],
+        audit_logs: list[dict[str, Any]],
+    ) -> None:
+        existing = {
+            self._audit_dedupe_key(entry.get("event"), entry.get("details", {}))
+            for entry in audit_logs
+        }
+        for entry in task.get("execution_log", []):
+            event = str(entry.get("event", "agent_execution_event"))
+            if event.startswith("llm_call_"):
+                continue
+            details = dict(entry.get("details", {}))
+            details["agent"] = entry.get("agent")
+            details["node"] = entry.get("node")
+            details["event_timestamp"] = entry.get("timestamp")
+            key = self._audit_dedupe_key(event, details)
+            if key in existing:
+                continue
+            self._audit_logger.log(task_id, event, details)
+            existing.add(key)
+
+    @staticmethod
+    def _audit_dedupe_key(event: object, details: dict[str, Any]) -> tuple[str, str, str, str]:
+        event_name = str(event or "")
+        event_timestamp = str(details.get("event_timestamp") or "")
+        node = str(details.get("node") or "")
+        stable_details = {
+            key: value
+            for key, value in details.items()
+            if key not in {"agent", "node", "event_timestamp"}
+        }
+        return (event_name, event_timestamp, node, str(sorted(stable_details.items())))
+
+    def _refresh_running_task_snapshot(self, task_id: str, entry: dict[str, Any]) -> None:
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
+        with self._task_lock:
+            if task_id in self._cancelled_task_ids:
+                raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
+            state = self._tasks.get(task_id)
+            if state is None:
+                stored = self._state_store.load(task_id)
+                if stored is None or not self._is_running_status(stored.get("task_status", "")):
+                    return
+                execution_log = stored.setdefault("execution_log", [])
+                if entry not in execution_log:
+                    execution_log.append(entry)
+                stored["current_action"] = self._describe_realtime_action(entry)
+                stored["updated_at"] = now_iso()
+                self._state_store.save(task_id, stored)
+                return
+
+            execution_log = state.setdefault("execution_log", [])
+            if entry not in execution_log:
+                execution_log.append(entry)
+            state["current_action"] = self._describe_realtime_action(entry)
+            state["updated_at"] = now_iso()
+            payload = self._serialize_state(state)
+            self._state_store.save(task_id, payload)
+
+    def _persist_running_state_update(self, task_id: str, state: WorkflowState) -> None:
+        if self._is_cancelled(task_id):
+            raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
+        with self._task_lock:
+            if task_id in self._cancelled_task_ids:
+                raise _TaskCancelled(f"task {task_id} was stopped by system initialization.")
+            state["updated_at"] = now_iso()
+            self._tasks[task_id] = state
+            self._state_store.save(task_id, self._serialize_state(state))
+
+    def _is_cancelled(self, task_id: str) -> bool:
+        with self._task_lock:
+            return task_id in self._cancelled_task_ids
+
+    @staticmethod
+    def _describe_realtime_action(entry: dict[str, Any]) -> str:
+        details = entry.get("details", {})
+        event = entry.get("event", "")
+        if event == "llm_call_started":
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用开始：{details.get('operation', '')} 第 {details.get('attempt', 1)}/{details.get('max_attempts', 1)} 次"
+        if event == "llm_call_completed":
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用完成：{details.get('operation', '')}"
+        if event == "llm_call_failed":
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}LLM 调用失败：{details.get('operation', '')}"
+        if event == "file_generation_started":
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}正在生成文件：{details.get('file_path', '')}"
+        if event == "file_generation_completed":
+            prefix = _format_generation_prefix(details)
+            return f"{prefix}文件生成完成：{details.get('file_path', '')}"
+        if event == "queue_task_started":
+            return f"正在执行队列任务：{details.get('task_id', '')}"
+        if event == "queue_task_completed":
+            return f"队列任务已完成：{details.get('task_id', '')}"
+        if event == "queue_round_validation_started":
+            return "正在进行本轮完整性验证"
+        if event == "queue_round_validation_completed":
+            return "本轮完整性验证已完成"
+        if event == "evidence_fill_started":
+            return "正在统一回填依据到知识文件"
+        if event == "evidence_fill_completed":
+            return "知识文件依据回填完成"
+        if event == "query_plan_created":
+            return f"QueryEngine 已生成 {details.get('question_count', 0)} 个查询计划项"
+        if event == "query_plan_item_started":
+            return f"QueryEngine 正在查询：{details.get('question', '')}"
+        if event == "query_search_executed":
+            return f"QueryEngine 已执行搜索：{details.get('query', '')}"
+        if event == "query_question_completed":
+            return f"QueryEngine 完成查询项：{details.get('question', '')}"
+        if event == "query_documents_fetched":
+            return f"QueryEngine 已抓取 {details.get('document_count', 0)} 篇候选文档"
+        if event == "query_embeddings_completed":
+            return "QueryEngine 已完成候选文档向量化"
+        if event == "query_realtime_file_reviewed":
+            return f"QueryEngine 实时文件审查完成：{len(details.get('saved_paths', []))} 个文件"
+        if event == "query_realtime_file_failed":
+            return f"QueryEngine 实时文件保存失败：{details.get('error', '')}"
+        if event == "media_plan_item_started":
+            return f"MediaEngine 正在查询：{details.get('query', '')}"
+        if event == "media_search_executed":
+            return f"MediaEngine 已执行搜索：{details.get('query', '')}"
+        if event == "media_documents_fetched":
+            return f"MediaEngine 已抓取 {details.get('document_count', 0)} 篇候选文档"
+        if event == "media_realtime_file_reviewed":
+            return f"MediaEngine 实时文件审查完成：{len(details.get('saved_paths', []))} 个文件"
+        if event == "media_realtime_file_failed":
+            return f"MediaEngine 实时文件保存失败：{details.get('error', '')}"
+        return str(event)
+
+    def _freeze_version_if_eligible(self, task_id: str, payload: dict[str, Any]) -> None:
+        post_storage = payload.get("post_storage_result") or {}
+        version_record = post_storage.get("version_record")
+        if not version_record or not version_record.get("frozen"):
+            return
+        request_context = payload["request_context"]
+        agent_outputs = payload.get("agent_outputs", {})
+        frozen_record = FrozenVersionRecord(
+            task_id=task_id,
+            document_id=version_record["document_id"],
+            version=version_record["version"],
+            frozen_at=version_record["frozen_at"],
+            file_paths=version_record["file_paths"],
+            graph_nodes=version_record["graph_nodes"],
+            knowledge_objects=version_record["knowledge_objects"],
+            source_snapshot=[
+                {
+                    "agent": name,
+                    "sources": output.get("sources", []),
+                    "summary": output.get("summary", ""),
+                }
+                for name, output in agent_outputs.items()
+            ]
+            + [
+                {
+                    "agent": "request_context",
+                    "sources": [],
+                    "summary": f"{request_context['domain']} / {', '.join(request_context['subdomains'])}",
+                }
+            ],
+            report_eligible=version_record["report_eligible"],
+        )
+        self._frozen_store.save(task_id, frozen_record.to_dict())
+        self._audit_logger.log(
+            task_id,
+            "version_frozen",
+            {"version": frozen_record.version, "document_id": frozen_record.document_id},
+        )
+
+    def _serialize_state(self, state: WorkflowState) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        for key, value in state.items():
+            payload[key] = self._serialize_value(value)
+        return payload
+
+    def _serialize_value(self, value: Any) -> Any:
+        if is_dataclass(value):
+            return asdict(value)
+        if isinstance(value, list):
+            return [self._serialize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: self._serialize_value(item) for key, item in value.items()}
+        return value
+
+    @staticmethod
+    def _summarize_state(payload: dict[str, Any]) -> dict[str, Any]:
+        request_context = payload.get("request_context") or {}
+        post_storage = payload.get("post_storage_result") or {}
+        version_record = post_storage.get("version_record") or {}
+        document_artifact = payload.get("document_artifact") or {}
+        return {
+            "task_id": payload.get("task_id", ""),
+            "task_status": payload.get("task_status", "unknown"),
+            "domain": request_context.get("domain", ""),
+            "normalized_domain": request_context.get("normalized_domain", ""),
+            "subdomains": request_context.get("subdomains", []),
+            "round_number": payload.get("round_number", 1),
+            "started_at": payload.get("started_at", ""),
+            "finished_at": payload.get("finished_at", ""),
+            "document_path": document_artifact.get("path", ""),
+            "completion_mode": request_context.get("completion_mode", "framework"),
+            "full_document_status": payload.get("full_document_status", ""),
+            "version": version_record.get("version", ""),
+            "report_eligible": version_record.get("report_eligible", False),
+            "updated_at": version_record.get("updated_at") or version_record.get("frozen_at") or now_iso(),
+        }
+
+    @staticmethod
+    def _deserialize_request_context(payload: dict[str, Any]) -> RequestContext:
+        return RequestContext(**payload)
+
+    @staticmethod
+    def _deserialize_messages(payload: list[dict[str, Any]]) -> list[AgentMessage]:
+        return [AgentMessage(**item) for item in payload]
+
+    @staticmethod
+    def _deserialize_engine_plans(payload: dict[str, Any]) -> dict[str, EnginePlan]:
+        plans: dict[str, EnginePlan] = {}
+        for agent_name, plan_payload in payload.items():
+            if isinstance(plan_payload, EnginePlan):
+                plans[agent_name] = plan_payload
+                continue
+            if not isinstance(plan_payload, dict):
+                continue
+            items = [
+                EnginePlanItem(**item)
+                for item in plan_payload.get("plan_items", [])
+                if isinstance(item, dict)
+            ]
+            plan_data = dict(plan_payload)
+            plan_data["plan_items"] = items
+            plans[agent_name] = EnginePlan(**plan_data)
+        return plans
+
+    @staticmethod
+    def _deserialize_agent_outputs(payload: dict[str, Any]) -> dict[str, EngineRunResult]:
+        outputs: dict[str, EngineRunResult] = {}
+        for agent_name, output_payload in (payload or {}).items():
+            if isinstance(output_payload, EngineRunResult):
+                outputs[agent_name] = output_payload
+                continue
+            if not isinstance(output_payload, dict):
+                continue
+            output_data = dict(output_payload)
+            sources = [
+                source if isinstance(source, SourceRecord) else SourceRecord(**source)
+                for source in output_data.get("sources", [])
+                if isinstance(source, (SourceRecord, dict))
+            ]
+            output_data["sources"] = sources
+            outputs[agent_name] = EngineRunResult(**output_data)
+        return outputs
+
+    @staticmethod
+    def _is_running_status(status: object) -> bool:
+        return str(status) in {"running", "resumed", "supplementing", "filled"}
+
+    @staticmethod
+    def _is_terminal_status(status: object) -> bool:
+        return str(status) in {
+            "verified",
+            "graph_ready",
+            "research_required",
+            "repair_required",
+            "supplement_required",
+            "max_rounds_reached",
+            "failed",
+            "plan_failed",
+        }
+
+    @staticmethod
+    def _elapsed_seconds(started_at: str, reference_at: str) -> int:
+        if not started_at or not reference_at:
+            return 0
+        try:
+            started = datetime.fromisoformat(started_at)
+            reference = datetime.fromisoformat(reference_at)
+        except ValueError:
+            return 0
+        return max(0, int((reference - started).total_seconds()))
+
+
+class _NoopQueryCrawler:
+    def search(self, **kwargs):
+        from knowledgeforge.agent.QueryEngine.state.state import SearchHit
+
+        query = str(kwargs.get("query", "offline query"))
+        source_type = str(kwargs.get("source_type", "reference"))
+        return [
+            SearchHit(
+                title=f"Offline reference for {query}",
+                url=f"https://example.com/offline?q={query.replace(' ', '+')}",
+                snippet=f"Offline fixture covering {query}.",
+                source_type=source_type,
+                score=1.0,
+            )
+        ]
+
+    def fetch_documents(self, hits, *, max_documents: int = 6):
+        from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument
+
+        return [
+            CrawledDocument(
+                title=hit.title,
+                url=hit.url,
+                snippet=hit.snippet,
+                content=f"{hit.title}. {hit.snippet}",
+                source_type=hit.source_type,
+                publisher=hit.publisher,
+                score=hit.score,
+            )
+            for hit in hits[:max_documents]
+        ]
+
+
+class _NoopMediaCrawler:
+    def search(self, **kwargs):
+        return []
+
+    def fetch_documents(self, hits, *, max_documents: int = 8):
+        return []

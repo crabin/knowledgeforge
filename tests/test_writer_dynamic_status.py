@@ -3,8 +3,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.models import (
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.models import (
     CompletenessResult,
     EnginePlan,
     EnginePlanItem,
@@ -12,7 +12,7 @@ from knowledgeforge.models import (
     RequestContext,
     SourceRecord,
 )
-from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.server.storage.markdown_writer import MarkdownKnowledgeWriter
 
 
 def _make_config() -> AppConfig:

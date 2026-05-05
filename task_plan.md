@@ -348,3 +348,13 @@
 - Intake 收口阶段需额外满足“创建与追加都返回完整 intake session、confirm 返回 `{ intake_session, task }`、非知识采集 intent 不允许直接启动任务”。
 - Token 记录模块需额外满足“每次 tracked LLM / Embedding 调用写入可归属 task/session 的 token 使用审计，任务日志接口返回实时汇总，前端用左下角可收起悬浮窗展示发送、接收、总计和调用次数；provider usage 缺失时必须估算并标记来源”。
 - 生成与查询队列状态需额外满足“`knowledge_task_queue.json`、运行中 task snapshot、`/tasks/{task_id}` 与 `/tasks/{task_id}/plan` 对同一活动队列保持一致；轮次验证不允许产生无下一步任务的空转循环；治理失败必须按 `research_flow` / `repair_flow` 映射任务终态”。
+
+## 2026-05-05 后端代码结构重构
+- 目标：让 `knowledgeforge/` 一级目录只保留 `agent/`、`server/`、`web/`，把 Flask 后端及其配置、编排、运行态、存储、图谱、质量、版本、LLM 等后端支撑模块全部收拢到 `knowledgeforge/server/`。
+- 约束：保留 `knowledgeforge/agent/MediaEngine|InsightEngine|QueryEngine` 结构；不引入 ChromaDB 或新存储后端；不改变 Neo4j 图谱优先主链路、查询填充、补全文档后置动作。
+- 执行计划：
+  - [complete] 盘点当前顶层后端模块和导入关系。
+  - [complete] 移动后端模块到 `knowledgeforge/server/`，保留职责目录名并新增结构说明。
+  - [complete] 批量更新代码、测试和脚本导入路径。
+  - [complete] 运行编译、前端语法检查和 pytest 回归。
+  - [complete] 更新 `progress.md`、`findings.md` 并检查 git 状态，按仓库规则提交。

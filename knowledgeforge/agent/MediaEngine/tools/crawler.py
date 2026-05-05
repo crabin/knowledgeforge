@@ -17,8 +17,8 @@ from knowledgeforge.agent.QueryEngine.tools.crawler import (
     resolve_bing_redirect_url,
 )
 from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant
-from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
-from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
+from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIAdapter
 
 
 class MediaPerspectiveCrawler:

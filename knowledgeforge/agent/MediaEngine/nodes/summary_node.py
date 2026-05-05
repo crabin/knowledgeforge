@@ -6,7 +6,7 @@ from collections import Counter
 from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
 from knowledgeforge.agent.MediaEngine.prompts.prompts import MEDIA_SUMMARY_SYSTEM_PROMPT
 from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
 
 
 class MediaSummaryNode(BaseMediaNode):

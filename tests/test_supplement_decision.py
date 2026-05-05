@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.evaluation.completeness import CompletenessEvaluator
-from knowledgeforge.evaluation.supplement_decision import SupplementDecisionPlanner
-from knowledgeforge.models import (
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.evaluation.completeness import CompletenessEvaluator
+from knowledgeforge.server.evaluation.supplement_decision import SupplementDecisionPlanner
+from knowledgeforge.server.models import (
     CompletenessResult,
     DocumentArtifact,
     EngineRunResult,
@@ -17,9 +17,9 @@ from knowledgeforge.models import (
     StructuredExtractionResult,
     VersionRecord,
 )
-from knowledgeforge.orchestrator.graph import KnowledgeGraphWorkflow
-from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
-from knowledgeforge.utils.paths import ensure_directory, sanitize_path_segment
+from knowledgeforge.server.orchestrator.graph import KnowledgeGraphWorkflow
+from knowledgeforge.server.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.server.utils.paths import ensure_directory, sanitize_path_segment
 
 
 class FakeSupplementChatClient:

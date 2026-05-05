@@ -13,8 +13,8 @@ from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import build_su
 from knowledgeforge.agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
 from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, score_url
 from knowledgeforge.agent.QueryEngine.utils.text_processing import extract_main_text
-from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
-from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
+from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIAdapter
 
 
 SEARCH_PROVIDERS: list[tuple[str, str]] = [

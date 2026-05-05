@@ -11,7 +11,7 @@ from typing import Any
 
 from neo4j import GraphDatabase
 
-from knowledgeforge.config import AppConfig
+from knowledgeforge.server.config import AppConfig
 
 
 def main() -> int:

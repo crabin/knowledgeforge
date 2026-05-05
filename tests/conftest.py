@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
 
 
 @pytest.fixture(autouse=True)

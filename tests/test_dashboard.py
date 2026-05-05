@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 from knowledgeforge.server import create_app
-from knowledgeforge.config import AppConfig
-from knowledgeforge.graph.client import Neo4jGraphClient
-from knowledgeforge.models import RequestContext
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.graph.client import Neo4jGraphClient
+from knowledgeforge.server.models import RequestContext
 
 
 def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:

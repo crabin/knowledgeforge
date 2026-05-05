@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 
 from knowledgeforge.agent.base import BaseEngine
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
-from knowledgeforge.utils.knowledge_tree import plan_path_for_role
-from knowledgeforge.utils.paths import sanitize_path_segment
-from knowledgeforge.utils.time import now_iso
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.models import EnginePlan, EnginePlanItem, EngineRunResult, RequestContext, SourceRecord
+from knowledgeforge.server.utils.knowledge_tree import plan_path_for_role
+from knowledgeforge.server.utils.paths import sanitize_path_segment
+from knowledgeforge.server.utils.time import now_iso
 
 
 INSIGHT_PLAN_SYSTEM_PROMPT = """

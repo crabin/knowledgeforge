@@ -6,8 +6,8 @@ import time
 from knowledgeforge.agent.InsightEngine.agent import InsightEngine
 from knowledgeforge.agent.MediaEngine.agent import MediaEngine
 from knowledgeforge.agent.QueryEngine.agent import QueryEngine
-from knowledgeforge.models import EnginePlan, EnginePlanItem, RequestContext
-from knowledgeforge.storage.realtime_reviewer import RealtimeReviewResult
+from knowledgeforge.server.models import EnginePlan, EnginePlanItem, RequestContext
+from knowledgeforge.server.storage.realtime_reviewer import RealtimeReviewResult
 
 
 class FakePlanChatClient:

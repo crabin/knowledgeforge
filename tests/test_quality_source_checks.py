@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 
-from knowledgeforge.models import (
+from knowledgeforge.server.models import (
     DocumentArtifact,
     EngineRunResult,
     GraphSyncResult,
@@ -10,7 +10,7 @@ from knowledgeforge.models import (
     SourceRecord,
     StructuredExtractionResult,
 )
-from knowledgeforge.quality.checker import QualityChecker
+from knowledgeforge.server.quality.checker import QualityChecker
 
 
 def _make_artifact(content: str) -> DocumentArtifact:

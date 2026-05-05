@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from knowledgeforge.graph.client import Neo4jGraphClient
+from knowledgeforge.server.graph.client import Neo4jGraphClient
 
 
 class _FakeTx:

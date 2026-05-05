@@ -5,7 +5,7 @@ import json
 from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from knowledgeforge.agent.QueryEngine.prompts.prompts import SUMMARY_SYSTEM_PROMPT
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
 
 
 class QuerySummaryNode(BaseQueryNode):

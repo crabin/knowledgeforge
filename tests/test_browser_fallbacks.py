@@ -5,8 +5,8 @@ from urllib.parse import urlparse
 
 from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-from knowledgeforge.tools.agent_browser_cli import AgentBrowserCLI
-from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIFetchResult
+from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
+from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIFetchResult
 
 
 def test_agent_browser_marks_itself_unhealthy_after_timeout(monkeypatch) -> None:

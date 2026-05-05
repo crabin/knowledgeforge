@@ -6,7 +6,7 @@ from knowledgeforge.agent.MediaEngine.nodes.base_node import BaseMediaNode
 from knowledgeforge.agent.MediaEngine.nodes.search_node import MediaSearchNode
 from knowledgeforge.agent.MediaEngine.prompts.prompts import MEDIA_REFLECTION_SYSTEM_PROMPT
 from knowledgeforge.agent.MediaEngine.state.state import MediaEngineState, MediaReflectionPlan
-from knowledgeforge.llms.openai_compatible import OpenAICompatibleChatClient
+from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
 
 
 class MediaReflectionNode(BaseMediaNode):

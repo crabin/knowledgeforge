@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from knowledgeforge.config import AppConfig
-from knowledgeforge.intake.context_builder import ContextBuilder
-from knowledgeforge.storage.markdown_writer import MarkdownKnowledgeWriter
-from knowledgeforge.utils.file_contract import parse_contract_block
-from knowledgeforge.utils.structure_graph import (
+from knowledgeforge.server.config import AppConfig
+from knowledgeforge.server.intake.context_builder import ContextBuilder
+from knowledgeforge.server.storage.markdown_writer import MarkdownKnowledgeWriter
+from knowledgeforge.server.utils.file_contract import parse_contract_block
+from knowledgeforge.server.utils.structure_graph import (
     build_fallback_structure_graph,
     derive_context_from_structure_graph,
     normalize_structure_graph_payload,
