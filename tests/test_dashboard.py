@@ -6,6 +6,7 @@ from pathlib import Path
 from knowledgeforge.server import create_app
 from knowledgeforge.config import AppConfig
 from knowledgeforge.graph.client import Neo4jGraphClient
+from knowledgeforge.models import RequestContext
 
 
 def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
@@ -236,6 +237,141 @@ def test_task_graph_endpoint_returns_neo4j_snapshot(tmp_path: Path, monkeypatch)
     assert payload["limits"] == {"nodes": 300, "edges": 600}
     assert payload["graph"]["nodes"][0]["type"] == "Domain"
     assert payload["graph"]["edges"][0]["type"] == "HAS_ARTICLE"
+
+
+def test_expand_graph_leaf_node_adds_children_and_refreshes_snapshot(tmp_path: Path, monkeypatch) -> None:
+    task_root = tmp_path / "runtime" / "tasks"
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=task_root,
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    structure_graph = {
+        "root_node_id": "domain-root",
+        "source_intent": "知识工程",
+        "nodes": [
+            {
+                "node_id": "domain-root",
+                "title": "知识工程 Overview",
+                "node_type": "domain",
+                "relative_path": "README.md",
+                "doc_type": "summary",
+                "owner_engine_candidates": ["InsightEngine"],
+                "required_query_tasks": 0,
+            },
+            {
+                "node_id": "leaf-1",
+                "title": "状态持久化",
+                "node_type": "article",
+                "parent_node_id": "domain-root",
+                "relative_path": "状态持久化/overview.md",
+                "doc_type": "article",
+                "owner_engine_candidates": ["QueryEngine"],
+                "required_query_tasks": 1,
+            },
+        ],
+        "edges": [{"from_node_id": "domain-root", "edge_type": "CONTAINS", "to_node_id": "leaf-1"}],
+    }
+    context = RequestContext(
+        domain="知识工程",
+        subdomains=["工作流编排"],
+        time_window="",
+        focus_points=["状态恢复"],
+        constraints=[],
+        initial_strategy=[],
+        original_input="知识工程",
+        normalized_domain="知识工程",
+        confirmed=True,
+        task_id="task-expand",
+        structure_graph=structure_graph,
+    )
+    task_root.mkdir(parents=True, exist_ok=True)
+    task_root.joinpath("task-expand.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-expand",
+                "request_context": context.to_dict(),
+                "structure_graph": structure_graph,
+                "task_status": "verified",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    synced_graphs: list[dict] = []
+
+    def fake_sync(self, *, domain: str, task_id: str, structure_graph: dict):
+        assert domain == "知识工程"
+        assert task_id == "task-expand"
+        synced_graphs.append(structure_graph)
+
+    monkeypatch.setattr(Neo4jGraphClient, "sync_structure_graph", fake_sync)
+    client = app.test_client()
+
+    response = client.post("/tasks/task-expand/graph/nodes/expand", json={"node_id": "leaf-1"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "expanded"
+    assert payload["node_id"] == "leaf-1"
+    assert len(payload["added_nodes"]) == 3
+    assert all(node["parent_node_id"] == "leaf-1" for node in payload["added_nodes"])
+    assert payload["graph_snapshot"]["nodes"]
+    assert payload["structure_graph_sync"]["status"] == "passed"
+    assert synced_graphs
+    stored = json.loads(task_root.joinpath("task-expand.json").read_text(encoding="utf-8"))
+    assert stored["graph_event"]["event_type"] == "graph_node_expanded"
+    assert any(node["parent_node_id"] in {"leaf-1", "leaf_1"} for node in stored["structure_graph"]["nodes"])
+
+
+def test_expand_graph_node_rejects_existing_child_without_force(tmp_path: Path, monkeypatch) -> None:
+    task_root = tmp_path / "runtime" / "tasks"
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=task_root,
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    structure_graph = {
+        "root_node_id": "domain-root",
+        "nodes": [
+            {"node_id": "domain-root", "title": "知识工程", "node_type": "domain", "relative_path": "README.md"},
+            {"node_id": "parent", "title": "父节点", "node_type": "subtopic", "parent_node_id": "domain-root", "relative_path": "parent/README.md"},
+            {"node_id": "child", "title": "子节点", "node_type": "article", "parent_node_id": "parent", "relative_path": "parent/child.md"},
+        ],
+        "edges": [
+            {"from_node_id": "domain-root", "edge_type": "CONTAINS", "to_node_id": "parent"},
+            {"from_node_id": "parent", "edge_type": "CONTAINS", "to_node_id": "child"},
+        ],
+    }
+    context = RequestContext(
+        domain="知识工程",
+        subdomains=["工作流编排"],
+        time_window="",
+        focus_points=[],
+        constraints=[],
+        initial_strategy=[],
+        confirmed=True,
+        task_id="task-expand",
+        structure_graph=structure_graph,
+    )
+    task_root.mkdir(parents=True, exist_ok=True)
+    task_root.joinpath("task-expand.json").write_text(
+        json.dumps({"task_id": "task-expand", "request_context": context.to_dict(), "structure_graph": structure_graph, "task_status": "verified"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Neo4jGraphClient, "sync_structure_graph", lambda *args, **kwargs: None)
+    client = app.test_client()
+
+    response = client.post("/tasks/task-expand/graph/nodes/expand", json={"node_id": "parent"})
+
+    assert response.status_code == 400
+    assert "already has child branches" in response.get_json()["error"]
 
 
 def test_task_graph_endpoint_hides_neo4j_connection_errors(tmp_path: Path, monkeypatch) -> None:

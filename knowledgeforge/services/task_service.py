@@ -60,7 +60,8 @@ from knowledgeforge.storage.realtime_reviewer import (
     RealtimeReviewResult,
 )
 from knowledgeforge.tools.crawl4ai_adapter import Crawl4AIAdapter
-from knowledgeforge.utils.paths import sanitize_path_segment
+from knowledgeforge.utils.paths import sanitize_path_segment, slugify_filename
+from knowledgeforge.utils.structure_graph import derive_context_from_structure_graph, normalize_structure_graph_payload
 from knowledgeforge.utils.time import now_iso
 from knowledgeforge.versioning.recorder import VersionRecorder
 
@@ -833,6 +834,348 @@ class TaskService:
             "graph": graph,
             "limits": limits,
         }
+
+    def expand_graph_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot be expanded; wait for the current workflow to finish.")
+
+        node_id = str(payload.get("node_id") or payload.get("knowledge_id") or "").strip()
+        if not node_id:
+            raise ValueError("`node_id` is required.")
+        force = bool(payload.get("force", False))
+
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        graph = self._task_structure_graph(stored, request_context)
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        selected_node = next((node for node in nodes if str(node.get("node_id", "")) == node_id), None)
+        if selected_node is None:
+            raise ValueError(f"graph node not found: {node_id}")
+        child_edges = [
+            edge
+            for edge in graph.get("edges", [])
+            if isinstance(edge, dict)
+            and str(edge.get("from_node_id", "")) == node_id
+            and str(edge.get("edge_type", "CONTAINS")) == "CONTAINS"
+        ]
+        if child_edges and not force:
+            raise ValueError("selected node already has child branches; pass `force=true` to expand it anyway.")
+
+        related_context = self._graph_node_related_context(request_context, graph, node_id)
+        expansion = self._generate_graph_node_expansion(
+            request_context=request_context,
+            graph=graph,
+            selected_node=selected_node,
+            related_context=related_context,
+            payload=payload,
+        )
+        merged_graph, added_nodes, added_edges = self._merge_graph_node_expansion(
+            graph=graph,
+            parent_node=selected_node,
+            expansion=expansion,
+        )
+        if not added_nodes:
+            raise ValueError("node expansion did not produce any new knowledge points.")
+
+        normalized = normalize_structure_graph_payload(
+            payload=merged_graph,
+            domain=request_context.domain,
+            subdomains=request_context.subdomains,
+            focus_points=request_context.focus_points,
+            source_intent=request_context.original_input or request_context.domain,
+        )
+        request_context.structure_graph = normalized.to_dict()
+        derived = derive_context_from_structure_graph(graph=normalized, domain=request_context.domain)
+        request_context.knowledge_modules = derived["knowledge_modules"]
+        request_context.core_topics = derived["core_topics"]
+        request_context.navigation_targets = derived["navigation_targets"]
+        request_context.knowledge_blueprint = derived["knowledge_blueprint"]
+        request_context.required_files = derived["required_files"]
+        request_context.structure_mode = derived["structure_mode"]
+
+        sync_result: dict[str, Any]
+        try:
+            self._graph_client.sync_structure_graph(
+                domain=request_context.domain,
+                task_id=task_id,
+                structure_graph=request_context.structure_graph,
+            )
+            sync_result = {"status": "passed", "synced_nodes": len(request_context.structure_graph.get("nodes", []))}
+        except Exception as exc:
+            sync_result = {"status": "failed", "error": self._sanitize_graph_error(str(exc))}
+
+        now = now_iso()
+        graph_snapshot = KnowledgeGraphWorkflow._local_graph_snapshot(request_context)
+        event = WorkflowStepEvent(
+            step_id="graph_node_expansion",
+            label="图谱节点扩展",
+            status="completed",
+            timestamp=now,
+            details={
+                "node_id": node_id,
+                "added_node_ids": [str(node.get("node_id", "")) for node in added_nodes],
+                "added_edge_count": len(added_edges),
+                "sync": sync_result,
+            },
+        )
+        stored["request_context"] = request_context.to_dict()
+        stored["structure_graph"] = request_context.structure_graph
+        stored["structure_graph_sync"] = sync_result
+        stored["graph_snapshot"] = graph_snapshot
+        stored["graph_event"] = {
+            "event_type": "graph_node_expanded",
+            "node_id": node_id,
+            "added_node_ids": [str(node.get("node_id", "")) for node in added_nodes],
+            "timestamp": now,
+        }
+        stored["current_step"] = "graph_node_expansion"
+        stored["current_action"] = f"已为 {selected_node.get('title', node_id)} 扩展 {len(added_nodes)} 个知识点。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "graph_node_expanded", event.details)
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(
+            {
+                "task_id": task_id,
+                "status": "expanded",
+                "node_id": node_id,
+                "added_nodes": added_nodes,
+                "added_edges": added_edges,
+                "related_context": related_context,
+                "structure_graph_sync": sync_result,
+                "graph_snapshot": graph_snapshot,
+                "task": stored,
+            }
+        )
+
+    @staticmethod
+    def _task_structure_graph(stored: dict[str, Any], request_context: RequestContext) -> dict[str, Any]:
+        graph = stored.get("structure_graph") or request_context.structure_graph or (stored.get("request_context") or {}).get("structure_graph") or {}
+        return json.loads(json.dumps(graph, ensure_ascii=False)) if isinstance(graph, dict) else {"nodes": [], "edges": []}
+
+    def _graph_node_related_context(self, request_context: RequestContext, graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+        try:
+            payload = self._graph_client.structure_review_context(
+                domain=request_context.domain,
+                task_id=request_context.task_id,
+                knowledge_id=node_id,
+            )
+            if payload.get("nodes") or payload.get("edges"):
+                return {
+                    "status": "ok",
+                    "source": "neo4j",
+                    "domain": request_context.domain,
+                    "task_id": request_context.task_id,
+                    "knowledge_id": node_id,
+                    "nodes": payload.get("nodes", []),
+                    "edges": payload.get("edges", []),
+                }
+        except Exception as exc:
+            return {
+                **self._local_graph_node_related_context(request_context, graph, node_id),
+                "neo4j_lookup": {"status": "failed", "error": self._sanitize_graph_error(str(exc))},
+            }
+        return self._local_graph_node_related_context(request_context, graph, node_id)
+
+    @staticmethod
+    def _local_graph_node_related_context(request_context: RequestContext, graph: dict[str, Any], node_id: str) -> dict[str, Any]:
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        related_ids = {node_id}
+        for edge in edges:
+            source = str(edge.get("from_node_id", ""))
+            target = str(edge.get("to_node_id", ""))
+            if source == node_id and target:
+                related_ids.add(target)
+            if target == node_id and source:
+                related_ids.add(source)
+        return {
+            "status": "local",
+            "source": "local_structure_graph",
+            "domain": request_context.domain,
+            "task_id": request_context.task_id,
+            "knowledge_id": node_id,
+            "nodes": [node for node in nodes if str(node.get("node_id", "")) in related_ids],
+            "edges": [
+                edge
+                for edge in edges
+                if str(edge.get("from_node_id", "")) in related_ids and str(edge.get("to_node_id", "")) in related_ids
+            ],
+        }
+
+    def _generate_graph_node_expansion(
+        self,
+        *,
+        request_context: RequestContext,
+        graph: dict[str, Any],
+        selected_node: dict[str, Any],
+        related_context: dict[str, Any],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        chat_client = getattr(self._workflow, "_generation_chat_client", None)
+        expansion_focus = str(payload.get("focus") or payload.get("instruction") or "").strip()
+        if chat_client is not None:
+            try:
+                result = chat_client.complete_json(
+                    system_prompt=(
+                        "你是 KnowledgeForge 图谱节点增量扩展器。"
+                        "请只围绕用户点击的叶子知识节点继续细分知识点，输出严格 JSON。"
+                        "JSON 必须包含 nodes 和 edges。新增 nodes 必须包含 title、node_type、relative_path、doc_type、owner_engine_candidates、required_query_tasks。"
+                        "新增节点应以 clicked_node 为父级，node_type 通常为 article；edge_type 使用 CONTAINS，可补充 RELATED_TO。"
+                        "不要生成 Markdown 正文，不要重复已有相邻节点。"
+                    ),
+                    user_prompt=json.dumps(
+                        {
+                            "domain": request_context.domain,
+                            "clicked_node": selected_node,
+                            "related_context": related_context,
+                            "existing_structure_graph": graph,
+                            "expansion_focus": expansion_focus,
+                            "output_language": request_context.output_language,
+                            "requirements": [
+                                "优先生成 3 到 6 个可继续追溯证据的子知识点",
+                                "参考关联节点，避免与包含关系或平行关系重复",
+                                "为每个子知识点给出简短 description 和 metadata.learning_role",
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                if isinstance(result, dict) and isinstance(result.get("nodes"), list) and result.get("nodes"):
+                    return result
+            except Exception as exc:
+                self._audit_logger.log(
+                    request_context.task_id,
+                    "graph_node_expansion_llm_failed",
+                    {"node_id": selected_node.get("node_id", ""), "error": str(exc)},
+                )
+        return self._fallback_graph_node_expansion(selected_node=selected_node, focus=expansion_focus)
+
+    @staticmethod
+    def _fallback_graph_node_expansion(*, selected_node: dict[str, Any], focus: str) -> dict[str, Any]:
+        title = str(selected_node.get("title") or "知识点").strip()
+        parent_path = str(selected_node.get("relative_path") or "").strip()
+        if parent_path.endswith(".md"):
+            parent_dir = parent_path.rsplit("/", 1)[0] if "/" in parent_path else slugify_filename(title, "expanded-topic")
+        else:
+            parent_dir = parent_path.strip("/") or slugify_filename(title, "expanded-topic")
+        suffixes = ["核心概念", "关键方法", "实践与边界"]
+        if focus:
+            suffixes[0] = focus
+        nodes = []
+        edges = []
+        parent_id = str(selected_node.get("node_id", ""))
+        parent_slug = slugify_filename(title, "expanded-topic")
+        for index, suffix in enumerate(suffixes, start=1):
+            child_title = f"{title}：{suffix}"
+            child_id = f"{parent_id}-exp-{index}" if parent_id else f"{parent_slug}-exp-{index}"
+            child_slug = slugify_filename(suffix, f"part-{index}")
+            nodes.append(
+                {
+                    "node_id": child_id,
+                    "title": child_title,
+                    "node_type": "article",
+                    "parent_node_id": parent_id,
+                    "relative_path": f"{parent_dir}/{child_slug}.md",
+                    "description": "由图谱叶子节点增量扩展生成的基础知识点。",
+                    "doc_type": "article",
+                    "owner_engine_candidates": ["QueryEngine", "InsightEngine"],
+                    "required_query_tasks": 1,
+                    "metadata": {"expanded_from_node_id": parent_id, "learning_role": "细分知识点"},
+                }
+            )
+            edges.append({"from_node_id": parent_id, "edge_type": "CONTAINS", "to_node_id": child_id})
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _merge_graph_node_expansion(
+        *,
+        graph: dict[str, Any],
+        parent_node: dict[str, Any],
+        expansion: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+        merged = json.loads(json.dumps(graph, ensure_ascii=False))
+        nodes = merged.setdefault("nodes", [])
+        edges = merged.setdefault("edges", [])
+        parent_id = str(parent_node.get("node_id", ""))
+        existing_ids = {str(node.get("node_id", "")) for node in nodes if isinstance(node, dict)}
+        existing_titles = {str(node.get("title", "")).strip().lower() for node in nodes if isinstance(node, dict)}
+        added_nodes: list[dict[str, Any]] = []
+        raw_nodes = [node for node in expansion.get("nodes", []) if isinstance(node, dict)]
+        for index, raw_node in enumerate(raw_nodes, start=1):
+            title = str(raw_node.get("title") or f"{parent_node.get('title', '知识点')} 扩展 {index}").strip()
+            if title.lower() in existing_titles:
+                continue
+            node_id = str(raw_node.get("node_id") or raw_node.get("id") or "").strip()
+            if not node_id or node_id in existing_ids:
+                node_id = f"{parent_id}-exp-{index}"
+                while node_id in existing_ids:
+                    index += 1
+                    node_id = f"{parent_id}-exp-{index}"
+            parent_path = str(parent_node.get("relative_path") or "").strip()
+            parent_dir = parent_path.rsplit("/", 1)[0] if parent_path.endswith(".md") and "/" in parent_path else parent_path.replace(".md", "")
+            if not parent_dir:
+                parent_dir = slugify_filename(str(parent_node.get("title", "")), "expanded-topic")
+            relative_path = str(raw_node.get("relative_path") or "").strip()
+            if not relative_path:
+                relative_path = f"{parent_dir}/{slugify_filename(title, f'expansion-{index}')}.md"
+            node = {
+                **raw_node,
+                "node_id": node_id,
+                "title": title,
+                "node_type": str(raw_node.get("node_type") or "article"),
+                "parent_node_id": str(raw_node.get("parent_node_id") or parent_id),
+                "relative_path": relative_path,
+                "doc_type": str(raw_node.get("doc_type") or "article"),
+                "owner_engine_candidates": raw_node.get("owner_engine_candidates") or ["QueryEngine", "InsightEngine"],
+                "required_query_tasks": int(raw_node.get("required_query_tasks", 1) or 1),
+                "generation_state": "planned",
+                "is_generated": False,
+                "is_completed": False,
+                "document_completion_status": "not_requested",
+            }
+            node.setdefault("metadata", {})
+            if isinstance(node["metadata"], dict):
+                node["metadata"].setdefault("expanded_from_node_id", parent_id)
+            nodes.append(node)
+            existing_ids.add(node_id)
+            existing_titles.add(title.lower())
+            added_nodes.append(node)
+
+        existing_edge_keys = {
+            (str(edge.get("from_node_id", "")), str(edge.get("edge_type", "CONTAINS")), str(edge.get("to_node_id", "")))
+            for edge in edges
+            if isinstance(edge, dict)
+        }
+        added_edges: list[dict[str, Any]] = []
+        raw_edges = [edge for edge in expansion.get("edges", []) if isinstance(edge, dict)]
+        if not raw_edges:
+            raw_edges = [
+                {"from_node_id": parent_id, "edge_type": "CONTAINS", "to_node_id": str(node.get("node_id", ""))}
+                for node in added_nodes
+            ]
+        added_node_ids = {str(node.get("node_id", "")) for node in added_nodes}
+        for raw_edge in raw_edges:
+            source = str(raw_edge.get("from_node_id") or raw_edge.get("source") or parent_id)
+            target = str(raw_edge.get("to_node_id") or raw_edge.get("target") or "")
+            if target not in added_node_ids and source != parent_id:
+                continue
+            edge_type = str(raw_edge.get("edge_type") or raw_edge.get("type") or "CONTAINS")
+            key = (source, edge_type, target)
+            if not source or not target or key in existing_edge_keys:
+                continue
+            edge = {"from_node_id": source, "edge_type": edge_type, "to_node_id": target}
+            edges.append(edge)
+            existing_edge_keys.add(key)
+            added_edges.append(edge)
+        merged["generated_at"] = now_iso()
+        return merged, added_nodes, added_edges
 
     def generate_report(self, task_id: str) -> dict[str, Any] | None:
         frozen_payload = self._frozen_store.load(task_id)

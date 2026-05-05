@@ -667,6 +667,33 @@ h3 {
   line-height: 1.35;
 }
 
+.neo4j-node-actions {
+  display: flex;
+  align-items: center;
+}
+
+.neo4j-expand-node {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid rgba(31, 92, 82, 0.28);
+  border-radius: 7px;
+  background: #e8f4f0;
+  color: #173b35;
+  font-size: 0.82rem;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.neo4j-expand-node:hover,
+.neo4j-expand-node:focus-visible {
+  background: #d7eee7;
+}
+
+.neo4j-expand-node:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
 .neo4j-inspector-relations {
   display: grid;
   gap: 7px;

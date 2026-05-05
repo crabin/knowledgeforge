@@ -722,6 +722,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     payload,
     previousPayload,
   });
+  bindNeo4jGraphInteractions(graph, payload, previousPayload);
 }
 
 function summarizeNeo4jNodeStates(nodes) {
@@ -1132,7 +1133,10 @@ function renderNeo4jMapNode(item, isNew, isSelected, isConnected) {
 function renderNeo4jNodeInspector(node, nodes, edges) {
   if (!node) return '<aside class="neo4j-node-inspector"><div class="neo4j-edge-empty">暂无可查看节点</div></aside>';
   const adjacent = edges.filter((edge) => edge.source === node.id || edge.target === node.id).slice(0, 10);
+  const childCount = edges.filter((edge) => edge.source === node.id && (edge.properties?.type === "CONTAINS" || edge.type === "STRUCTURE_EDGE")).length;
   const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  const logicalNodeId = getNeo4jLogicalId(node);
+  const canExpand = isNeo4jStructureNode(node);
   return `
     <aside class="neo4j-node-inspector" aria-label="选中节点详情">
       <div class="neo4j-inspector-head">
@@ -1146,11 +1150,59 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
         ${renderNeo4jNodeField("已完成证据", node.properties?.completed_task_count)}
         ${renderNeo4jNodeField("Task", node.properties?.task_id)}
       </dl>
+      ${canExpand ? `<div class="neo4j-node-actions">
+        <button class="neo4j-expand-node" type="button" data-expand-node-id="${escapeHtml(logicalNodeId)}"${childCount ? ' title="该节点已有子分支，将作为强制扩展继续追加。"' : ""}>
+          扩展知识点
+        </button>
+      </div>` : ""}
       <div class="neo4j-inspector-relations">
         <h3>相邻关系</h3>
         ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
       </div>
     </aside>`;
+}
+
+function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
+  if (!neo4jGraphContainer) return;
+  neo4jGraphContainer.querySelectorAll("[data-neo4j-node-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.neo4jSelectedNodeId = button.dataset.neo4jNodeId || "";
+      renderNeo4jGraphHtml(graph, payload, previousPayload);
+    });
+  });
+  const expandButton = neo4jGraphContainer.querySelector("[data-expand-node-id]");
+  if (!expandButton) return;
+  expandButton.addEventListener("click", async () => {
+    const taskId = getTaskIdFromPayload(state.lastPayload) || payload.task_id;
+    const nodeId = expandButton.dataset.expandNodeId || "";
+    if (!taskId || !nodeId) return;
+    setBusy(expandButton, true);
+    expandButton.textContent = "扩展中...";
+    try {
+      const result = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/nodes/expand`, {
+        method: "POST",
+        body: JSON.stringify({ node_id: nodeId, force: true }),
+      });
+      showPayload(mergeTaskPayload(result.task || result));
+      renderNeo4jGraphSnapshot({
+        task_id: taskId,
+        status: "local",
+        domain: result.task?.request_context?.domain || payload.domain || "",
+        graph: result.graph_snapshot,
+        refreshed_at: result.task?.updated_at || new Date().toISOString(),
+      }, state.neo4jGraphSnapshot);
+      state.neo4jGraphSnapshot = {
+        task_id: taskId,
+        status: "local",
+        graph: result.graph_snapshot,
+      };
+      scheduleNeo4jGraphRefresh(taskId, { force: true });
+    } catch (error) {
+      showError(error);
+    } finally {
+      setBusy(expandButton, false);
+    }
+  });
 }
 
 function renderNeo4jNodeField(label, value) {

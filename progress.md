@@ -1,5 +1,15 @@
 # Progress
 
+## 2026-05-05 图谱叶子节点增量扩展接口
+
+- 开始实现点击 Neo4j 图谱叶子节点后继续扩展知识点的后端接口。
+- 已确认核心约束：读取被点击节点的一跳关联上下文，拼接给 LLM；结果合并到任务 `structure_graph`，同步 Neo4j，并返回可供前端立即刷新的图谱快照。
+- 新增 `POST /tasks/{task_id}/graph/nodes/expand`：普通调用只允许扩展叶子节点；前端按钮使用 `force=true` 可在已有子分支时继续追加。
+- 后端扩展流程会优先读取 Neo4j 关联上下文，失败时回退本地 `structure_graph`；LLM 未返回可用结构时生成 3 个基础子知识点作为 fallback。
+- 前端 Neo4j 右侧节点详情新增“扩展知识点”按钮，成功后立即用返回的 `graph_snapshot` 刷新图谱，并触发一次 Neo4j fallback 刷新。
+- 验证：`uv run ruff check knowledgeforge/services/task_service.py knowledgeforge/server/api.py tests/test_dashboard.py` 通过；`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py` 通过；`PYTHONPATH=. pytest -q tests/test_dashboard.py` 结果 `9 passed`；`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 结果 `53 passed`。
+- 本地开发服务已启动在 `http://127.0.0.1:5002`；`5001` 当时已被占用。
+
 ## 2026-05-03 流程详情浮窗可读性增强
 
 - 根据浏览器反馈降低详情浮窗的透底感：改为更实的不透明背景、更清晰边框、更重阴影和更高对比文字颜色。

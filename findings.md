@@ -31,6 +31,12 @@
 - 前端实时同步的主通道是 SSE。`/tasks/{task_id}/stream` 直接带 `graph_snapshot`、`graph_event`、`file_update`，`/tasks/{task_id}/graph` 只保留给手动刷新、Neo4j 重连和兜底展示。
 - 历史文档中“前端轮询后再拉图谱”“最后统一回填”“默认等待三路计划确认”的描述均视为旧阶段记录，不再代表当前主流程。
 
+## 2026-05-05 图谱叶子节点增量扩展发现
+- 当前后端已有 `GET /tasks/{task_id}/graph`，但没有面向单个结构节点的扩展接口；图谱点击只更新前端选中节点和右侧详情，不会触发后端工作。
+- Neo4j 侧已有 `structure_review_context(domain, task_id, knowledge_id)`，可读取当前节点及相邻结构节点/关系；本地 fallback 可以从 `structure_graph.nodes/edges` 取同样的一跳上下文。
+- 结构图谱同步已有 `sync_structure_graph`，最稳的增量实现是把 LLM 产出的子节点合并回任务本地 `structure_graph`，再复用全量结构图谱同步写 Neo4j，避免新增独立存储后端。
+- “最终节点没有细分支”的判断可先按本地结构图谱是否存在从当前节点出发的 `CONTAINS` 子边判断；有子节点时默认拒绝，除非调用方显式 `force=true`。
+
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
 - 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
 - 当前图执行顺序是生成结构图谱后先同步 Neo4j；第一轮 review 如果直接通过，会进入第二轮，中间没有再同步 Neo4j；第一轮有缺口时会在 repair 后同步。

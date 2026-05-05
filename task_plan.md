@@ -18,6 +18,11 @@
 - 后置补全文档分支：“补全文档”按钮是唯一的本地知识 Markdown 落盘入口；点击后检查 Neo4j 架构 review、证据链接和治理状态，再生成 `save/{领域}/README.md` 与知识点 Markdown。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
+- 图谱叶子节点增量扩展接口（2026-05-05）
+  - [complete] 定位现有 `/tasks/{task_id}/graph`、Neo4j 关联上下文读取、LLM 结构图谱生成和前端节点点击逻辑。
+  - [complete] 新增点击节点扩展后端接口：读取节点关联上下文，调用 LLM 生成子知识点，合并到本地 `structure_graph`，同步 Neo4j 并刷新任务快照。
+  - [complete] 前端节点详情增加“扩展知识点”动作，调用新接口后即时刷新 Neo4j 图谱。
+  - [complete] 增加回归测试和验证记录。
 - repair_required 恢复执行优化（2026-05-03）
   - [complete] 定位第二轮结构修补后仍被无条件终止为 `repair_required` 的路由与恢复入口。
   - [complete] 新增 workflow 接续入口，复用已修补图谱继续图谱补全、查询证据链接、验证、收尾与治理。
