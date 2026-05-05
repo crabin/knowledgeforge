@@ -17,6 +17,8 @@ from knowledgeforge.agent.QueryEngine.utils.ranking import (
     PREFERRED_TUTORIAL_DOMAINS,
     build_site_constrained_queries,
     detect_candidate_official_domains,
+    evidence_match_reason,
+    score_evidence_match,
 )
 from knowledgeforge.server.utils.query_normalization import normalize_query_term
 from knowledgeforge.server.llms.openai_compatible import (
@@ -27,7 +29,7 @@ from knowledgeforge.server.storage.realtime_reviewer import RealtimeReviewCandid
 from knowledgeforge.server.utils.file_contract import parse_contract_block
 from knowledgeforge.server.utils.knowledge_tree import module_labels_by_id, plan_path_for_role
 from knowledgeforge.server.runtime.task_queue import QueuedTaskSpec, RetrievalTaskQueue
-from knowledgeforge.server.utils.paths import sanitize_path_segment, slugify_filename
+from knowledgeforge.server.utils.paths import sanitize_path_segment
 from knowledgeforge.server.utils.time import now_iso
 
 QueryRealtimeFileCallback = Callable[[str, RealtimeReviewCandidate], RealtimeReviewResult]
@@ -230,6 +232,11 @@ class QuerySearchNode(BaseQueryNode):
                         expected_info=expected_info,
                         source_priority=source_priority,
                         success_criteria=success_criteria,
+                        authority_queries=self._build_authority_queries(
+                            query=query,
+                            domain=context.normalized_domain or context.domain,
+                            expected_info=expected_info,
+                        ),
                         fallback_queries=[],
                         status="planned",
                         plan_item_id=f"Q{counter}",
@@ -291,6 +298,7 @@ class QuerySearchNode(BaseQueryNode):
                         "expected_info": question.expected_info,
                         "source_priority": question.source_priority,
                         "success_criteria": question.success_criteria,
+                        "authority_queries": question.authority_queries,
                         "fallback_queries": question.fallback_queries,
                         "status": question.status,
                         "url": question.candidate_url,
@@ -325,6 +333,8 @@ class QuerySearchNode(BaseQueryNode):
             question = task_result.question
             question_hits = task_result.hits
             for attempt in task_result.attempts:
+                selected_hits = [hit for hit in attempt.hits if self._question_satisfied([hit])]
+                rejected_hits = [hit for hit in attempt.hits if not self._question_satisfied([hit])]
                 state.search_history.append(
                     {
                         "question": question.question,
@@ -336,6 +346,29 @@ class QuerySearchNode(BaseQueryNode):
                         "error": attempt.error,
                         "url": question.candidate_url,
                         "subdomain": question.subdomain,
+                        "providers": sorted(
+                            {
+                                str(getattr(hit, "provider", ""))
+                                for hit in attempt.hits
+                                if getattr(hit, "provider", "")
+                            }
+                        ),
+                        "selected": [
+                            {
+                                "url": getattr(hit, "url", ""),
+                                "score": getattr(hit, "score", 0),
+                                "reason": getattr(hit, "rank_reason", ""),
+                            }
+                            for hit in selected_hits[:3]
+                        ],
+                        "rejected": [
+                            {
+                                "url": getattr(hit, "url", ""),
+                                "score": getattr(hit, "score", 0),
+                                "reason": getattr(hit, "rank_reason", "") or "score_below_threshold",
+                            }
+                            for hit in rejected_hits[:3]
+                        ],
                     }
                 )
                 event_name = "query_search_failed" if attempt.status == "failed" else "query_search_executed"
@@ -360,6 +393,14 @@ class QuerySearchNode(BaseQueryNode):
             question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
             if question.status == "completed":
                 question.completed_at = now_iso()
+                selected_hit = max(question_hits, key=lambda hit: getattr(hit, "score", 0), default=None)
+                if selected_hit is not None:
+                    question.candidate_url = getattr(selected_hit, "url", question.candidate_url)
+                    question.article_title = getattr(selected_hit, "title", question.article_title)
+                    question.publisher = getattr(selected_hit, "publisher", question.publisher)
+                    question.candidate_score = float(getattr(selected_hit, "score", 0.0))
+                    question.provider = str(getattr(selected_hit, "provider", ""))
+                    question.evidence_match_reason = str(getattr(selected_hit, "rank_reason", ""))
             self._record_event(
                 state,
                 "query_question_completed",
@@ -385,12 +426,13 @@ class QuerySearchNode(BaseQueryNode):
                 hits=question_hits,
             )
         deduped_hits = self._dedupe_hits(all_hits)
-        state.search_hits = deduped_hits
+        evidence_hits = [hit for hit in deduped_hits if self._question_satisfied([hit])]
+        state.search_hits = evidence_hits
         state.candidate_official_domains = self._merge_candidate_domains(
             state,
-            detect_candidate_official_domains(state.request_context.domain, deduped_hits),
+            detect_candidate_official_domains(state.request_context.domain, evidence_hits),
         )
-        state.crawled_documents = self._crawler.fetch_documents(deduped_hits, max_documents=8)
+        state.crawled_documents = self._crawler.fetch_documents(evidence_hits, max_documents=8)
         question_by_url = {question.candidate_url: question for question in plan_questions if question.candidate_url}
         for document in state.crawled_documents:
             matched_question = question_by_url.get(document.url)
@@ -405,16 +447,10 @@ class QuerySearchNode(BaseQueryNode):
             "query_documents_fetched",
             {
                 "hit_count": len(deduped_hits),
+                "evidence_hit_count": len(evidence_hits),
                 "document_count": len(state.crawled_documents),
             },
         )
-        wiki_doc = (
-            self._crawler.fetch_wikipedia_supplement(state.normalized_domain or state.request_context.domain)
-            if hasattr(self._crawler, "fetch_wikipedia_supplement") and hasattr(self._crawler, "_wiki")
-            else None
-        )
-        if wiki_doc and all(doc.url != wiki_doc.url for doc in state.crawled_documents):
-            state.crawled_documents.append(wiki_doc)
 
         if embedding_client is not None and state.crawled_documents:
             try:
@@ -528,6 +564,11 @@ class QuerySearchNode(BaseQueryNode):
                         for value in item.get("fallback_queries", [])
                         if str(value).strip()
                     ],
+                    authority_queries=[
+                        str(value).strip()
+                        for value in item.get("authority_queries", [])
+                        if str(value).strip()
+                    ],
                     status="planned",
                     subdomain=str(item.get("subdomain", "")).strip()
                     or (state.request_context.subdomains[0] if state.request_context.subdomains else "通用"),
@@ -563,6 +604,7 @@ class QuerySearchNode(BaseQueryNode):
                 max_results=3 if source_type == "official" else 2,
                 domain_phrases=domain_phrases,
             )
+            hits = self._rank_question_hits(template, template.google_query, hits)
             if not hits:
                 questions.append(
                     SearchQuestion(
@@ -572,6 +614,7 @@ class QuerySearchNode(BaseQueryNode):
                         expected_info=list(template.expected_info),
                         source_priority=list(template.source_priority),
                         success_criteria=list(template.success_criteria),
+                        authority_queries=list(template.authority_queries),
                         fallback_queries=list(template.fallback_queries),
                         status="planned",
                         subdomain=template.subdomain,
@@ -603,6 +646,7 @@ class QuerySearchNode(BaseQueryNode):
                     expected_info=list(template.expected_info),
                     source_priority=list(template.source_priority),
                     success_criteria=list(template.success_criteria),
+                    authority_queries=list(template.authority_queries),
                     fallback_queries=list(template.fallback_queries),
                     status="planned",
                     subdomain=template.subdomain,
@@ -610,11 +654,14 @@ class QuerySearchNode(BaseQueryNode):
                     doc_role=template.doc_role,
                     module_id=template.module_id,
                     module_label=template.module_label,
-                    article_title=hit.title,
-                    candidate_url=url,
-                    publisher=getattr(hit, "publisher", ""),
-                    source_kind=source_type,
-                    planned_path=self._planned_article_path(
+                        article_title=hit.title,
+                        candidate_url=url,
+                        publisher=getattr(hit, "publisher", ""),
+                        source_kind=source_type,
+                        candidate_score=float(getattr(hit, "score", 0.0)),
+                        provider=str(getattr(hit, "provider", "")),
+                        evidence_match_reason=str(getattr(hit, "rank_reason", "")),
+                        planned_path=self._planned_article_path(
                         state,
                         subdomain=template.subdomain,
                         title=hit.title,
@@ -679,6 +726,11 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 success_criteria=["命中相关官方或权威来源"],
                 fallback_queries=[],
+                authority_queries=self._build_authority_queries(
+                    query=query,
+                    domain=state.normalized_domain or state.request_context.domain,
+                    expected_info=["官方定义", "权威说明", "关键事实"],
+                ),
                 subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
                 module_id="core_topics",
                 module_label="Core Topics",
@@ -695,6 +747,11 @@ class QuerySearchNode(BaseQueryNode):
                 source_priority=["tutorial", "technical blog", "reference guide"],
                 success_criteria=["命中相关教程或技术参考"],
                 fallback_queries=self._expand_preferred_queries([query])[1:],
+                authority_queries=self._build_authority_queries(
+                    query=query,
+                    domain=state.normalized_domain or state.request_context.domain,
+                    expected_info=["教程示例", "实践步骤", "注意事项"],
+                ),
                 subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
                 module_id="core_topics",
                 module_label="Core Topics",
@@ -727,6 +784,7 @@ class QuerySearchNode(BaseQueryNode):
                     expected_info=["补齐官方或权威证据"],
                     source_priority=["official documentation", "standard", "vendor docs"],
                     success_criteria=["补检索命中相关官方或权威来源"],
+                    authority_queries=[],
                     fallback_queries=[],
                     subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.core_topics[0] if state.request_context.core_topics else "通用"),
                     module_id=insufficient_questions[0].module_id if insufficient_questions else "core_topics",
@@ -744,6 +802,7 @@ class QuerySearchNode(BaseQueryNode):
                     expected_info=["补齐教程、案例或最佳实践证据"],
                     source_priority=["tutorial", "technical blog", "reference guide"],
                     success_criteria=["补检索命中相关实践资料"],
+                    authority_queries=[],
                     fallback_queries=[],
                     subdomain=insufficient_questions[0].subdomain if insufficient_questions else (state.request_context.core_topics[0] if state.request_context.core_topics else "通用"),
                     module_id=insufficient_questions[0].module_id if insufficient_questions else "core_topics",
@@ -760,6 +819,12 @@ class QuerySearchNode(BaseQueryNode):
                 question.plan_item_id = f"Q{index}"
             if not question.search_targets:
                 question.search_targets = list(question.expected_info)
+            if not question.authority_queries:
+                question.authority_queries = QuerySearchNode._build_authority_queries(
+                    query=question.google_query,
+                    domain=question.subdomain or question.question,
+                    expected_info=question.expected_info,
+                )
             if not question.module_label:
                 question.module_label = module_labels_by_id().get(question.module_id, "Core Topics")
 
@@ -773,10 +838,14 @@ class QuerySearchNode(BaseQueryNode):
             "expected_info": question.expected_info,
             "source_priority": question.source_priority,
             "success_criteria": question.success_criteria,
+            "authority_queries": question.authority_queries,
             "fallback_queries": question.fallback_queries,
             "status": status or question.status,
             "completed_at": question.completed_at,
             "url": question.candidate_url,
+            "provider": question.provider,
+            "candidate_score": question.candidate_score,
+            "evidence_match_reason": question.evidence_match_reason,
             "subdomain": question.subdomain,
             "module_id": question.module_id,
             "module_label": question.module_label,
@@ -797,7 +866,7 @@ class QuerySearchNode(BaseQueryNode):
 
     @staticmethod
     def _question_satisfied(hits) -> bool:
-        return any(getattr(hit, "score", 0) > 0 for hit in hits)
+        return any(getattr(hit, "score", 0) >= 2.0 for hit in hits)
 
     def _run_question_task(
         self,
@@ -830,7 +899,10 @@ class QuerySearchNode(BaseQueryNode):
                 hits=question_hits,
                 attempts=attempts,
             )
-        for index, query in enumerate(self._dedupe_terms([question.google_query, *question.fallback_queries])):
+        executable_queries = self._dedupe_terms(
+            [question.google_query, *question.authority_queries, *question.fallback_queries]
+        )
+        for index, query in enumerate(executable_queries):
             if index > 0 and self._question_satisfied(question_hits):
                 break
             try:
@@ -870,7 +942,9 @@ class QuerySearchNode(BaseQueryNode):
                 url=question.candidate_url,
                 snippet=question.question,
                 source_type=source_type,
-                score=1.0,
+                score=question.candidate_score,
+                provider=question.provider or "approved_plan",
+                rank_reason=question.evidence_match_reason or "用户已确认的候选链接。",
             )
         ]
 
@@ -884,23 +958,54 @@ class QuerySearchNode(BaseQueryNode):
         domain_phrases: list[str],
     ):
         if source_type == "official":
-            return self._search(
-                query=query,
-                source_type="official",
-                official_domains=state.candidate_official_domains
-                or (state.search_plan.official_domains if state.search_plan else []),
-                preferred_domains=[],
-                max_results=4,
-                domain_phrases=domain_phrases,
+            return self._rank_question_hits(
+                question,
+                query,
+                self._search(
+                    query=query,
+                    source_type="official",
+                    official_domains=state.candidate_official_domains
+                    or (state.search_plan.official_domains if state.search_plan else []),
+                    preferred_domains=[],
+                    max_results=4,
+                    domain_phrases=domain_phrases,
+                ),
             )
-        return self._search(
-            query=query,
-            source_type="tutorial",
-            official_domains=state.search_plan.official_domains if state.search_plan else [],
-            preferred_domains=self._preferred_domains(),
-            max_results=3,
-            domain_phrases=domain_phrases,
+        return self._rank_question_hits(
+            question,
+            query,
+            self._search(
+                query=query,
+                source_type="tutorial",
+                official_domains=state.search_plan.official_domains if state.search_plan else [],
+                preferred_domains=self._preferred_domains(),
+                max_results=3,
+                domain_phrases=domain_phrases,
+            ),
         )
+
+    @staticmethod
+    def _rank_question_hits(question: SearchQuestion, query: str, hits):
+        ranked = []
+        for hit in hits:
+            match_score = score_evidence_match(
+                title=getattr(hit, "title", ""),
+                snippet=getattr(hit, "snippet", ""),
+                url=getattr(hit, "url", ""),
+                expected_info=question.expected_info,
+                success_criteria=question.success_criteria,
+                query=query,
+            )
+            hit.score = float(getattr(hit, "score", 0.0)) + match_score
+            hit.rank_reason = evidence_match_reason(
+                title=getattr(hit, "title", ""),
+                snippet=getattr(hit, "snippet", ""),
+                expected_info=question.expected_info,
+                success_criteria=question.success_criteria,
+            )
+            ranked.append(hit)
+        ranked.sort(key=lambda item: getattr(item, "score", 0), reverse=True)
+        return ranked
 
     def _normalize_domain(self, state: QueryEngineState) -> None:
         if state.normalized_domain:
@@ -937,6 +1042,20 @@ class QuerySearchNode(BaseQueryNode):
     @staticmethod
     def _preferred_domains() -> list[str]:
         return [*PREFERRED_TUTORIAL_DOMAINS, *PREFERRED_TECH_REFERENCE_DOMAINS]
+
+    @staticmethod
+    def _build_authority_queries(*, query: str, domain: str, expected_info: list[str]) -> list[str]:
+        compact_query = " ".join(query.split())
+        compact_domain = " ".join(domain.split())
+        evidence_terms = " ".join(item for item in expected_info[:2] if item).strip()
+        candidates = [
+            compact_query,
+            f"{compact_query} official documentation",
+            f"{compact_query} standard specification project homepage",
+            f"{compact_domain} {evidence_terms} official documentation".strip(),
+            f"{compact_query} paper benchmark reference",
+        ]
+        return QuerySearchNode._dedupe_terms(candidates)[1:4]
 
     def _expand_preferred_queries(self, tutorial_queries: list[str]) -> list[str]:
         expanded: list[str] = []

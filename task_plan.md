@@ -368,3 +368,13 @@
   - [complete] 批量更新代码、测试和脚本导入路径。
   - [complete] 运行编译、前端语法检查和 pytest 回归。
   - [complete] 更新 `progress.md`、`findings.md` 并检查 git 状态，按仓库规则提交。
+
+## 2026-05-06 QueryEngine Google/Bing 搜索链路优化
+- 目标：将 QueryEngine 主链路收敛为“LLM 查询改写 -> Google/Bing 检索 -> 候选精排与证据筛选 -> 不足时反思补检索”，去掉 QueryEngine 主链路中的 DuckDuckGo/Brave/supplemental source/Wikipedia API 自动注入。
+- 约束：不引入 ChromaDB、新存储后端或跨 Engine 抽象；保留现有 EngineRunResult、队列字段、Neo4j 证据写入和状态恢复行为。
+- 执行计划：
+  - [complete] 收敛 QueryEngine 搜索 provider 与候选精排逻辑。
+  - [complete] 强化 query rewriting prompt/schema 与 evidence task 执行。
+  - [complete] 更新 QueryEngine/provider/relevance/workflow 相关测试。
+  - [complete] 运行目标回归，记录验证结果。
+  - [complete] 更新 `progress.md`、`findings.md`，检查 git 状态并提交。

@@ -16,6 +16,7 @@ SEARCH_PLAN_SCHEMA = {
                     "module_id": {"type": "string"},
                     "doc_role": {"type": "string"},
                     "google_query": {"type": "string"},
+                    "authority_queries": {"type": "array", "items": {"type": "string"}},
                     "search_targets": {"type": "array", "items": {"type": "string"}},
                     "expected_info": {"type": "array", "items": {"type": "string"}},
                     "source_priority": {"type": "array", "items": {"type": "string"}},
@@ -89,16 +90,18 @@ SEARCH_PLAN_SYSTEM_PROMPT = f"""
    - subdomain：该问题对应的子领域，必须来自用户提供的子领域。
    - module_id：该问题归属的知识模块，优先使用 overview、foundations、core_topics、advanced_topics、papers、projects、tools、review。
    - doc_role：目标文档角色，优先使用 domain_overview、module_doc、topic_overview、topic_article 之一。
-   - google_query：面向 Google 风格的查询语句，但不要使用只能由 Google API 执行的特殊能力。
+                   - google_query：面向 Google 风格的查询语句，但不要使用只能由 Google API 执行的特殊能力。
+   - authority_queries：基于同一意图改写出的 2-3 条可执行补充查询，优先加入 official documentation、standard、paper、project homepage、GitHub docs 等权威限定词；这些查询会和主查询一起交给 Google/Bing。
    - search_targets：这个计划项需要查询/确认的内容列表，写成可以逐条勾选的短句。
    - expected_info：需要从搜索结果中拿到哪些信息，例如定义、官方说明、版本/时间范围、关键能力、限制、案例证据。
    - source_priority：优先来源类型，例如 official documentation、standard、vendor docs、official GitHub、tutorial。
    - success_criteria：什么结果算满足该问题。
    - fallback_queries：主查询不足时才执行的补查查询。
    - doc_type：推荐写 source、article、case、note 之一，默认优先 source / article。
-5. 计划项数量要克制，优先覆盖最关键问题；每个计划项查询完后系统会立即标记完成或不足。
-6. official_queries / tutorial_queries 保持兼容输出，应从 questions 中提取代表性查询。
-7. 只返回 JSON，不要附加解释。
+5. 查询改写参考多 query 聚合搜索：一个问题至少有主查询和权威补充查询；fallback_queries 只在主查询/权威查询不足时使用。
+6. 计划项数量要克制，优先覆盖最关键问题；每个计划项查询完后系统会立即标记完成或不足。
+7. official_queries / tutorial_queries 保持兼容输出，应从 questions 中提取代表性查询。
+8. 只返回 JSON，不要附加解释。
 
 输出 JSON Schema：
 {json.dumps(SEARCH_PLAN_SCHEMA, ensure_ascii=False, indent=2)}

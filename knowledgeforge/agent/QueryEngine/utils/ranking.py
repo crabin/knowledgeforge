@@ -32,6 +32,16 @@ HIGH_AUTHORITY_DOMAINS = (
     "ieeexplore.ieee.org",
 )
 
+LOW_QUALITY_RESULT_HINTS = (
+    "search",
+    "tag",
+    "tags",
+    "login",
+    "signup",
+    "directory",
+    "archive",
+)
+
 
 def score_url(
     url: str,
@@ -42,7 +52,7 @@ def score_url(
     netloc = urlparse(url).netloc.lower()
     score = 0.0
     if source_type == "official":
-        score += 5.0
+        score += 1.0
     if any(domain.lower() in netloc for domain in official_domains):
         score += 6.0
     if preferred_domains and any(domain.lower() in netloc for domain in preferred_domains):
@@ -54,6 +64,56 @@ def score_url(
     if any(hint in netloc for hint in TUTORIAL_HINTS):
         score += 1.0 if source_type == "tutorial" else -1.0
     return score
+
+
+def score_evidence_match(
+    *,
+    title: str,
+    snippet: str,
+    url: str,
+    expected_info: list[str],
+    success_criteria: list[str],
+    query: str,
+) -> float:
+    haystack = f"{title} {snippet} {url}".lower()
+    score = 0.0
+    for phrase in [*expected_info, *success_criteria]:
+        cleaned = " ".join(str(phrase).lower().split())
+        if cleaned and cleaned in haystack:
+            score += 1.5
+    query_tokens = [
+        token
+        for token in re.split(r"\W+", query.lower())
+        if len(token) >= 4 and token not in {"official", "documentation", "tutorial", "guide", "best", "practices"}
+    ]
+    if query_tokens:
+        matched = sum(1 for token in query_tokens if token in haystack)
+        score += min(3.0, matched / max(len(query_tokens), 1) * 3.0)
+    parsed = urlparse(url)
+    lowered_path = parsed.path.lower()
+    if any(hint in lowered_path for hint in LOW_QUALITY_RESULT_HINTS):
+        score -= 1.0
+    return score
+
+
+def evidence_match_reason(
+    *,
+    title: str,
+    snippet: str,
+    expected_info: list[str],
+    success_criteria: list[str],
+) -> str:
+    haystack = f"{title} {snippet}".lower()
+    matched = [
+        item
+        for item in [*expected_info, *success_criteria]
+        if str(item).strip() and str(item).strip().lower() in haystack
+    ]
+    if matched:
+        return "匹配预期证据：" + "、".join(str(item) for item in matched[:3])
+    if title or snippet:
+        return "标题或摘要与查询主题相关，需用作候选证据复核。"
+    return "搜索结果缺少摘要，仅保留 URL 作为候选。"
 
 
 def reliability_for_source_type(source_type: str) -> str:

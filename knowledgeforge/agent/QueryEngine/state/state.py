@@ -19,6 +19,7 @@ class SearchQuestion:
     source_priority: list[str]
     success_criteria: list[str]
     fallback_queries: list[str]
+    authority_queries: list[str] = field(default_factory=list)
     status: QuestionStatus = "planned"
     plan_item_id: str = ""
     search_targets: list[str] = field(default_factory=list)
@@ -32,6 +33,9 @@ class SearchQuestion:
     candidate_url: str = ""
     publisher: str = ""
     source_kind: str = ""
+    candidate_score: float = 0.0
+    provider: str = ""
+    evidence_match_reason: str = ""
     planned_path: str = ""
     review_status: str = ""
     skip_reason: str = ""
@@ -63,6 +67,8 @@ class SearchHit:
     snippet: str
     source_type: str
     score: float
+    provider: str = ""
+    rank_reason: str = ""
 
     @property
     def publisher(self) -> str:

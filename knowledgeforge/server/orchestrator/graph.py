@@ -1516,11 +1516,15 @@ class KnowledgeGraphWorkflow:
         source = candidates[0]
         checked_at = now_iso()
         source_kind = source.source_type or _infer_source_kind(source.url)
+        evidence_hint = source.snippet.strip() or source.title
         return {
             "url": source.url,
             "source_kind": source_kind,
             "reachable": True,
-            "relevance_reason": f"已选择 {source.publisher or source_kind} 的可信链接，用于解释目标知识点。",
+            "relevance_reason": (
+                f"已选择 {source.publisher or source_kind} 的可信链接；"
+                f"候选摘要/标题显示其可支撑目标证据：{evidence_hint[:120]}"
+            ),
             "checked_at": checked_at,
             "citation": {
                 "title": source.title,

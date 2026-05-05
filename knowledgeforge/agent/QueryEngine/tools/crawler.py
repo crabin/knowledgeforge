@@ -9,8 +9,6 @@ import httpx
 from bs4 import BeautifulSoup
 
 from knowledgeforge.agent.QueryEngine.state.state import CrawledDocument, SearchHit
-from knowledgeforge.agent.QueryEngine.tools.supplemental_sources import build_supplemental_source_targets, probe_source_url
-from knowledgeforge.agent.QueryEngine.tools.wikipedia_fetcher import WikipediaFetcher
 from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, score_url
 from knowledgeforge.agent.QueryEngine.utils.text_processing import extract_main_text
 from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
@@ -20,8 +18,6 @@ from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIAdapter
 SEARCH_PROVIDERS: list[tuple[str, str]] = [
     ("google", "https://www.google.com/search"),
     ("bing", "https://www.bing.com/search"),
-    ("duckduckgo", "https://html.duckduckgo.com/html/"),
-    ("brave", "https://search.brave.com/search"),
 ]
 
 
@@ -96,7 +92,6 @@ class DomainKnowledgeCrawler:
         self._headers = {"User-Agent": user_agent}
         self._trace = trace
         self._browser = AgentBrowserCLI(timeout=max(timeout * 2, 12.0), trace=trace)
-        self._wiki = WikipediaFetcher(timeout=max(timeout * 2, 8.0))
         self._crawl4ai = crawl4ai_adapter or Crawl4AIAdapter(enabled=False)
 
     def search(
@@ -138,43 +133,10 @@ class DomainKnowledgeCrawler:
                 self._log(f"[QUERY-SEARCH][httpx] unexpected failure {exc.__class__.__name__}: {exc}")
                 hits = []
 
-        supplemental_hits = self._discover_supplemental_hits(
-            query=query,
-            source_type=source_type,
-            official_domains=official_domains,
-            preferred_domains=preferred_domains,
-            domain_phrases=domain_phrases,
-            existing_hits=hits,
-            max_results=max_results,
-        )
         merged = OrderedDict((hit.url, hit) for hit in hits)
-        for hit in supplemental_hits:
-            merged.setdefault(hit.url, hit)
-            if len(merged) >= max_results:
-                break
         final_hits = list(merged.values())
         final_hits.sort(key=lambda item: item.score, reverse=True)
         return final_hits[:max_results]
-
-    def fetch_wikipedia_supplement(
-        self,
-        domain: str,
-        agent_name: str = "QueryEngine",
-    ) -> CrawledDocument | None:
-        result = self._wiki.fetch_summary(domain)
-        if result is None:
-            self._log(f"[QUERY-WIKI] no result for domain={domain}")
-            return None
-        self._log(f"[QUERY-WIKI] fetched title={result.title} url={result.url}")
-        return CrawledDocument(
-            title=result.title,
-            url=result.url,
-            snippet=result.summary[:300],
-            content=result.summary,
-            source_type="reference",
-            publisher=urlparse(result.url).netloc or "en.wikipedia.org",
-            score=3.0,
-        )
 
     def fetch_documents(
         self,
@@ -265,6 +227,7 @@ class DomainKnowledgeCrawler:
                 snippet=result.snippet,
                 source_type=source_type,
                 score=score_url(result.url, source_type, official_domains, preferred_domains),
+                provider="google",
             )
             for result in browser_results
         ]
@@ -283,6 +246,7 @@ class DomainKnowledgeCrawler:
         max_results: int,
         domain_phrases: list[str] | None = None,
     ) -> list[SearchHit]:
+        merged: OrderedDict[str, SearchHit] = OrderedDict()
         with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
             for provider_name, url in SEARCH_PROVIDERS:
                 hits = self._search_http_provider(
@@ -296,9 +260,12 @@ class DomainKnowledgeCrawler:
                     max_results=max_results,
                     domain_phrases=domain_phrases,
                 )
-                if hits:
-                    return hits
-        return []
+                for hit in hits:
+                    if hit.url not in merged or hit.score > merged[hit.url].score:
+                        merged[hit.url] = hit
+        ranked = list(merged.values())
+        ranked.sort(key=lambda item: item.score, reverse=True)
+        return ranked[:max_results]
 
     def _search_http_provider(
         self,
@@ -323,14 +290,10 @@ class DomainKnowledgeCrawler:
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
-        if provider_name == "duckduckgo":
-            raw_hits = self._parse_duckduckgo(soup)
-        elif provider_name == "bing":
+        if provider_name == "bing":
             raw_hits = self._parse_bing(soup)
         elif provider_name == "google":
             raw_hits = parse_google_results(soup)
-        elif provider_name == "brave":
-            raw_hits = parse_brave_results(soup)
         else:
             raw_hits = []
 
@@ -344,6 +307,7 @@ class DomainKnowledgeCrawler:
                     snippet=raw_hit["snippet"],
                     source_type=source_type,
                     score=score_url(result_url, source_type, official_domains, preferred_domains),
+                    provider=provider_name,
                 )
             )
 
@@ -359,68 +323,6 @@ class DomainKnowledgeCrawler:
         else:
             self._log(f"[QUERY-SEARCH][httpx:{provider_name}] no hits query={query}")
         return list(deduped.values())
-
-    def _discover_supplemental_hits(
-        self,
-        *,
-        query: str,
-        source_type: str,
-        official_domains: list[str],
-        preferred_domains: list[str] | None,
-        domain_phrases: list[str] | None,
-        existing_hits: list[SearchHit],
-        max_results: int,
-    ) -> list[SearchHit]:
-        if not self._should_expand_sources(existing_hits, max_results):
-            return []
-        existing_urls = {hit.url for hit in existing_hits}
-        supplemental_hits: list[SearchHit] = []
-        with httpx.Client(timeout=self._timeout, headers=self._headers, follow_redirects=True) as client:
-            for target in build_supplemental_source_targets(query):
-                if target.url in existing_urls:
-                    continue
-                probe = probe_source_url(target, client=client)
-                self._log(
-                    f"[QUERY-SEARCH][supplemental:{target.key}] "
-                    f"available={probe.available} status={probe.status_code} reason={probe.reason}"
-                )
-                if not probe.available:
-                    continue
-                hit = SearchHit(
-                    title=f"{target.label} - {query}",
-                    url=target.url,
-                    snippet=target.snippet,
-                    source_type=source_type,
-                    score=score_url(target.url, source_type, official_domains, preferred_domains)
-                    + self._supplemental_source_bonus(target.url),
-                )
-                if domain_phrases and not is_result_relevant(hit.title, hit.snippet, hit.url, domain_phrases):
-                    continue
-                supplemental_hits.append(hit)
-                if len(existing_hits) + len(supplemental_hits) >= max_results:
-                    break
-        supplemental_hits.sort(key=lambda item: item.score, reverse=True)
-        return supplemental_hits
-
-    @staticmethod
-    def _should_expand_sources(existing_hits: list[SearchHit], max_results: int) -> bool:
-        if len(existing_hits) < max_results:
-            return True
-        return any("zhihu.com/question/" in hit.url for hit in existing_hits)
-
-    @staticmethod
-    def _supplemental_source_bonus(url: str) -> float:
-        if "zh.wikipedia.org" in url:
-            return 2.0
-        if "cloud.tencent.com" in url:
-            return 1.5
-        if "runoob.com" in url:
-            return 1.25
-        if "zhihu.com/search" in url:
-            return 1.0
-        if "so.csdn.net" in url:
-            return 0.25
-        return 0.0
 
     @staticmethod
     def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:

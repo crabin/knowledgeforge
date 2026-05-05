@@ -125,6 +125,12 @@ class QueryFormattingNode(BaseQueryNode):
                 formatted.append(f"  跳过原因：{question.skip_reason}")
             if question.fallback_queries:
                 formatted.append(f"  补查查询：{'; '.join(question.fallback_queries)}")
+            if question.authority_queries:
+                formatted.append(f"  权威改写查询：{'; '.join(question.authority_queries)}")
+            if question.provider:
+                formatted.append(f"  搜索来源：{question.provider}")
+            if question.evidence_match_reason:
+                formatted.append(f"  匹配原因：{question.evidence_match_reason}")
         return formatted
 
     @staticmethod

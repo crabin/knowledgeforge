@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-06 QueryEngine Google/Bing 搜索链路优化
+
+- 将 QueryEngine 主链路搜索来源收敛为 Google/Bing，移除 DuckDuckGo、Brave、supplemental source 和 Wikipedia API 自动补充在 QueryEngine 主流程中的参与。
+- 新增 `authority_queries`、候选分数、provider 和匹配原因等内部状态；LLM 计划和 evidence task 都会生成主查询、权威改写查询和 fallback 查询。
+- 增强候选精排：结合 URL 权威性、官方域名、论文/标准/项目主页信号、查询 token 和 expected evidence 匹配度打分；低分候选只记录为 rejected，不进入最终 sources。
+- 更新 evidence link 选择说明，`relevance_reason` 现在会带上候选标题/摘要证据提示。
+- 验证：`python -m py_compile knowledgeforge/agent/QueryEngine/state/state.py knowledgeforge/agent/QueryEngine/utils/ranking.py knowledgeforge/agent/QueryEngine/tools/crawler.py knowledgeforge/agent/QueryEngine/nodes/search_node.py knowledgeforge/agent/QueryEngine/agent.py knowledgeforge/server/orchestrator/graph.py` 通过；`uv run ruff check knowledgeforge/agent/QueryEngine knowledgeforge/server/orchestrator/graph.py tests/test_query_engine.py tests/test_multi_provider_search.py tests/test_source_relevance_filter.py` 通过；`uv run pytest -q tests/test_query_engine.py tests/test_multi_provider_search.py tests/test_source_relevance_filter.py` 结果 `31 passed`；`uv run pytest -q tests/test_quality_source_checks.py tests/test_completeness_source_gate.py` 结果 `9 passed`；`uv run pytest -q tests/test_workflow.py` 结果 `46 passed`。
+
 ## 2026-05-06 前端执行耗时本地计时
 
 - 将左下角执行耗时浮窗改为前端本地秒表：任务运行 payload 到来后按本地时间每秒递增，不依赖后端每次推送更新耗时。

@@ -278,6 +278,30 @@ class EmptyCrawler(FakeCrawler):
         return []
 
 
+class LowQualityCrawler(FakeCrawler):
+    def search(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None = None,
+        max_results: int = 5,
+    ):
+        self.queries.append((source_type, query))
+        SearchHit = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"]).SearchHit
+        return [
+            SearchHit(
+                title="Unrelated search directory",
+                url="https://example.com/search",
+                snippet="Generic directory page with weak evidence.",
+                source_type=source_type,
+                score=0.0,
+                provider="google",
+            )
+        ]
+
+
 class PartialCrawler(FakeCrawler):
     def search(
         self,
@@ -492,3 +516,62 @@ def test_query_engine_reflection_supplements_only_insufficient_questions() -> No
     assert any("official guide" in query for query in official_queries)
     assert not any("best practices" in query for query in tutorial_queries[1:])
     assert any("检索结果不足或缺少权威支撑" in item for item in result.raw_material)
+
+
+def test_query_engine_evidence_task_rewrites_single_query() -> None:
+    crawler = FakeCrawler()
+    engine = QueryEngine(
+        chat_client=FakePlanFirstChatClient(),
+        embedding_client=FakeEmbeddingClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="LangGraph",
+        normalized_domain="LangGraph",
+        subdomains=["持久化"],
+        time_window="近 12 个月",
+        focus_points=["官方文档"],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    result = engine.run_evidence_task(
+        context=context,
+        round_number=1,
+        task={
+            "task_id": "T1",
+            "query_text": "LangGraph persistence",
+            "claim_or_gap": "LangGraph 持久化能力",
+            "expected_evidence": ["官方文档", "检查点"],
+            "preferred_source_types": ["official documentation", "standard"],
+            "acceptance_criteria": ["命中官方文档"],
+        },
+    )
+
+    assert any("权威改写查询：" in item and "official documentation" in item.lower() for item in result.raw_material)
+    assert any("standard specification" in item.lower() for item in result.raw_material)
+    assert result.sources
+    assert any(entry["event"] == "evidence_link_selected" for entry in result.execution_log)
+
+
+def test_query_engine_does_not_select_low_quality_results() -> None:
+    crawler = LowQualityCrawler()
+    engine = QueryEngine(
+        chat_client=FakePlanFirstChatClient(),
+        embedding_client=FakeEmbeddingClient(),
+        crawler=crawler,
+    )
+    context = RequestContext(
+        domain="UnknownTool",
+        normalized_domain="UnknownTool",
+        subdomains=["能力边界"],
+        time_window="近 12 个月",
+        focus_points=["官方文档"],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    result = engine.run(context, round_number=1)
+
+    assert all(source.publisher == "query-plan" for source in result.sources)
+    assert any("☐ Q1 [insufficient]" in item for item in result.raw_material)

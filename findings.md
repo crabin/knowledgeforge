@@ -361,3 +361,17 @@
 - `knowledgeforge/agent` 保持能力域 Engine 结构不变；Engine 现在通过 `knowledgeforge.server.*` 使用共享数据契约、LLM client、运行队列和后端工具。
 - `knowledgeforge/server/README.md` 明确了 server 子目录职责，并约束依赖方向：server 编排选择 Engine，Engine 不直接互相依赖。
 - 验证显示迁移未改变主链路行为：workflow、dashboard、QueryEngine、MediaEngine 重点回归和全量 pytest 均通过。
+
+## QueryEngine Google/Bing 搜索链路发现（2026-05-06）
+
+- 当前 QueryEngine 已具备 LLM 生成 `questions/fallback_queries`、并发执行、`insufficient` 标记和 Reflection 补检索骨架；本轮主要收敛搜索来源与精排/证据筛选。
+- `DomainKnowledgeCrawler` 当前同时使用 Google、Bing、DuckDuckGo、Brave，并在结果不足时注入 `supplemental_sources`，还会额外拉取 Wikipedia API summary；这些都需要从 QueryEngine 主链路移除。
+- `run_evidence_task` 当前把队列任务直接转成单个 `EnginePlanItem`，缺少面向单任务的 query rewriting；应在 plan 转换时生成主查询、官方/权威查询和 fallback 查询。
+- 现有队列/Neo4j 字段已经能承载 `selected_link/source_kind/reachable/relevance_reason/checked_at`，无需新增公开接口。
+
+## QueryEngine Google/Bing 搜索链路结论（2026-05-06）
+
+- QueryEngine 主链路已只从 Google/Bing 获取搜索结果；Wikipedia 仍可作为 Google/Bing 返回的候选 URL，但不再通过独立 API 自动注入。
+- 低分候选现在只保留在 search_history 的 rejected 记录中，不会进入 `crawled_documents` 或最终 `SourceRecord`，避免把弱证据伪装成可选链接。
+- Evidence task 会从单个 `query_text` 派生 primary / authority / fallback 查询；主查询已满足时会提前收口，但 raw material 会保留权威改写查询以便追溯。
+- 选中链接的 `relevance_reason` 已从泛化可信链接说明改为包含候选标题/摘要证据提示，更贴近 claim 与 expected evidence。

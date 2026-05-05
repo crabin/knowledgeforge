@@ -146,6 +146,10 @@ class QueryEngine(BaseEngine):
                         "module_label": question.module_label,
                         "publisher": question.publisher,
                         "source_kind": question.source_kind,
+                        "authority_queries": question.authority_queries,
+                        "candidate_score": question.candidate_score,
+                        "provider": question.provider,
+                        "evidence_match_reason": question.evidence_match_reason,
                         "planned_path": question.planned_path,
                         "target_file_path": question.planned_path,
                         "target_section": "证据与来源",
@@ -186,6 +190,10 @@ class QueryEngine(BaseEngine):
                 candidate_url=str(item.metadata.get("url", "")),
                 publisher=str(item.metadata.get("publisher", "")),
                 source_kind=str(item.metadata.get("source_kind", "")),
+                authority_queries=[str(value) for value in item.metadata.get("authority_queries", []) if str(value).strip()],
+                candidate_score=float(item.metadata.get("candidate_score", 2.0 if item.metadata.get("url") else 0.0) or 0.0),
+                provider=str(item.metadata.get("provider", "")),
+                evidence_match_reason=str(item.metadata.get("evidence_match_reason", "")),
                 planned_path=str(item.metadata.get("planned_path", "")),
                 review_status=str(item.metadata.get("review_status", "")),
                 skip_reason=str(item.metadata.get("skip_reason", "")),
@@ -286,19 +294,21 @@ class QueryEngine(BaseEngine):
         round_number: int,
         task: dict[str, object],
     ) -> EngineRunResult:
+        rewritten = self._rewrite_evidence_task_queries(context, task)
         plan = EnginePlan(
             agent_name=self.name,
             plan_items=[
                 EnginePlanItem(
                     plan_item_id=str(task.get("task_id", "Q1")),
                     title=str(task.get("claim_or_gap", task.get("query_text", "补充证据"))),
-                    query_or_action=str(task.get("query_text", "")),
+                    query_or_action=rewritten["primary_query"],
                     targets=[str(item) for item in task.get("expected_evidence", []) if str(item).strip()],
                     success_criteria=[str(item) for item in task.get("acceptance_criteria", []) if str(item).strip()],
-                    fallbacks=[],
+                    fallbacks=rewritten["fallback_queries"],
                     source_priority=[str(item) for item in task.get("preferred_source_types", []) if str(item).strip()],
                     status="approved",
                     metadata={
+                        "authority_queries": rewritten["authority_queries"],
                         "target_file_path": str(task.get("target_file_path", "")),
                         "planned_path": str(task.get("target_file_path", "")),
                         "target_section": str(task.get("target_section", "证据与来源")),
@@ -345,3 +355,33 @@ class QueryEngine(BaseEngine):
             ],
             artifacts=[],
         )
+
+    @staticmethod
+    def _rewrite_evidence_task_queries(context: RequestContext, task: dict[str, object]) -> dict[str, list[str] | str]:
+        query_text = str(task.get("query_text", "")).strip()
+        claim = str(task.get("claim_or_gap", "")).strip()
+        domain = context.normalized_domain or context.domain
+        expected = [str(item).strip() for item in task.get("expected_evidence", []) if str(item).strip()]
+        base = query_text or " ".join([domain, claim]).strip() or f"{domain} official documentation"
+        evidence_terms = " ".join(expected[:2]).strip()
+        candidates = [
+            base,
+            f"{domain} {claim} official documentation".strip(),
+            f"{base} standard specification project homepage",
+            f"{base} paper benchmark reference",
+            f"{domain} {evidence_terms} official documentation".strip(),
+        ]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            cleaned = " ".join(item.split())
+            key = cleaned.lower()
+            if cleaned and key not in seen:
+                seen.add(key)
+                deduped.append(cleaned)
+        primary = deduped[0] if deduped else f"{domain} official documentation"
+        return {
+            "primary_query": primary,
+            "authority_queries": deduped[1:4],
+            "fallback_queries": deduped[4:],
+        }
