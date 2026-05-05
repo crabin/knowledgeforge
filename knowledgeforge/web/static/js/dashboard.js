@@ -1374,8 +1374,9 @@ function renderNeo4jInspectorEdge(edge, selectedNode, nodes) {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const isOutgoing = edge.source === selectedNode.id;
   const peer = byId.get(isOutgoing ? edge.target : edge.source);
+  const focusNodeId = String(peer?.id || (isOutgoing ? edge.target : edge.source) || "");
   return `
-    <div class="neo4j-inspector-edge">
+    <div class="neo4j-inspector-edge${focusNodeId ? " is-clickable" : ""}"${focusNodeId ? ` data-focus-node-id="${escapeHtml(focusNodeId)}"` : ""}>
       <span>${escapeHtml(isOutgoing ? "指向" : "来自")} · ${escapeHtml(formatNeo4jEdgeType(edge.type))}</span>
       <strong>${escapeHtml(peer?.title || (isOutgoing ? edge.target : edge.source))}</strong>
     </div>`;

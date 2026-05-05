@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-05 Neo4j 相邻关系点击聚焦
+
+- 右侧“相邻关系”列表现在支持点击聚焦对应节点：点击“来自/指向”关系项会复用现有 `focusNeo4jNode(...)` 逻辑，自动选中并将左侧图谱居中到对应节点。
+- 同步补充可点击态样式，让关系项在 hover 时有更明确的交互反馈。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run pytest -q tests/test_dashboard.py tests/test_graph_client.py` 结果 `11 passed`。
+
 ## 2026-05-05 Neo4j 问题列表与红点同步
 
 - 修复问题列表残留：右侧“问题知识点”现在会按当前 Neo4j 图谱快照的 `graph.nodes` 过滤，只展示左侧图中真实存在、也能被标红的问题节点。
