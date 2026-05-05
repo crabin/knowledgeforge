@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-05 第三轮结构深化 Review
+
+- 新增第三轮 `structure_depth` 审查：在结构覆盖和执行准备度之后，专门检查倒数第二级节点是否过薄、方法族是否只挂单个叶子、叶子节点是否过宽且值得拆分。
+- 新增结构深化 review prompt、深度审查上下文和第三轮 repair 节点；第三轮修补只针对有明确价值的目标分支，修补后重新准备图谱补全文档上下文并进入 `graph_ready`。
+- 前端 review 计数与文案改为三段 Review，并保留左下角固定状态窗口显示执行耗时与 Token。
+- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`task_plan.md` 和 `findings.md`。
+- 验证：`python -m py_compile knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py` 通过；`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run ruff check knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py tests/test_workflow.py tests/test_dashboard.py` 通过；`uv run pytest -q tests/test_workflow.py tests/test_dashboard.py` 结果 `57 passed`。
+
 ## 2026-05-05 两轮 Review 职责细分
 
 - 将两轮同构架构 review 拆为 `structure_coverage` 和 `completion_readiness`：第一轮只审结构覆盖，第二轮在图谱补全文档上下文准备后审证据需求、query 任务、建议路径和治理准备度。

@@ -58,11 +58,12 @@ def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path)
     assert payload["finished_at"]
     assert payload["task_timing"]["elapsed_seconds"] >= 0
     assert payload["task_timing"]["is_running"] is False
-    assert len(payload["structure_review_rounds"]) == 2
+    assert len(payload["structure_review_rounds"]) == 3
     assert payload["structure_review_status"] == "passed"
     assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
         "structure_coverage",
         "completion_readiness",
+        "structure_depth",
     ]
     assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
     assert any(event["step_id"] == "structure_review" for event in payload["workflow_events"])
@@ -220,10 +221,11 @@ def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, m
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
-    assert [item["status"] for item in payload["structure_review_rounds"]] == ["needs_repair", "passed"]
+    assert [item["status"] for item in payload["structure_review_rounds"]] == ["needs_repair", "passed", "passed"]
     assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
         "structure_coverage",
         "completion_readiness",
+        "structure_depth",
     ]
     assert payload["structure_repair_log"]
     assert any(node["title"] == "评估指标" for node in payload["structure_graph"]["nodes"])
@@ -297,8 +299,8 @@ def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
-    assert len(review_prompts) == 2
-    assert [prompt["review_type"] for prompt in review_prompts] == ["structure_coverage", "completion_readiness"]
+    assert len(review_prompts) == 3
+    assert [prompt["review_type"] for prompt in review_prompts] == ["structure_coverage", "completion_readiness", "structure_depth"]
     assert all(prompt["knowledge_id"] for prompt in review_prompts)
     assert all(prompt["neo4j_review_context"]["status"] == "ok" for prompt in review_prompts)
     assert review_prompts[0]["neo4j_review_context"]["nodes"][0]["title"] == "Neo4j 里的结构节点"
@@ -306,6 +308,8 @@ def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path
     assert review_prompts[1]["task_queue_snapshot"]["tasks"]
     assert review_prompts[1]["knowledge_blueprint"]
     assert review_prompts[1]["previous_review_rounds"][0]["neo4j_review_context"]["status"] == "ok"
+    assert review_prompts[2]["depth_review_context"]["candidate_penultimate_nodes"]
+    assert "task_queue_snapshot" not in review_prompts[2]
     assert "approved" in sync_states
     assert "completion_ready" in sync_states
 
@@ -330,6 +334,14 @@ def test_second_round_structure_repair_continues_without_manual_resume(tmp_path:
                 "suggested_repairs": [{"type": "manual_review"}],
                 "reasoning": "准备度审查仍缺少证据需求。",
             }
+        if "结构深化审查" in system_prompt:
+            return {
+                "is_complete": True,
+                "status": "passed",
+                "missing_topics": [],
+                "suggested_repairs": [],
+                "reasoning": "倒数第二级结构已足够展开。",
+            }
         if "知识架构修补器" in system_prompt:
             return {}
         return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
@@ -350,10 +362,11 @@ def test_second_round_structure_repair_continues_without_manual_resume(tmp_path:
     assert response.status_code == 201
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
-    assert len(payload["structure_review_rounds"]) == 2
+    assert len(payload["structure_review_rounds"]) == 3
     assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
         "structure_coverage",
         "completion_readiness",
+        "structure_depth",
     ]
     assert payload["structure_review_rounds"][-1]["suggested_repairs"] == []
     assert "人工" not in payload["current_action"]
@@ -364,6 +377,86 @@ def test_second_round_structure_repair_continues_without_manual_resume(tmp_path:
     assert any(event["step_id"] == "graph_completion" for event in payload["workflow_events"])
     assert payload["document_completion_status"] == "not_requested"
     assert not list((tmp_path / "save" / "知识工程").rglob("README.md"))
+
+
+def test_third_round_depth_review_expands_thin_penultimate_nodes(tmp_path: Path, monkeypatch) -> None:
+    original_complete_json = OpenAICompatibleChatClient.complete_json
+    depth_target = {"node_id": ""}
+
+    def complete_json(self, *, system_prompt: str, user_prompt: str):
+        if "结构覆盖审查" in system_prompt or "执行准备度审查" in system_prompt:
+            return {
+                "is_complete": True,
+                "status": "passed",
+                "missing_topics": [],
+                "suggested_repairs": [],
+                "reasoning": "当前阶段审查通过。",
+            }
+        if "结构深化审查" in system_prompt:
+            prompt = json.loads(user_prompt)
+            candidate = prompt["depth_review_context"]["thin_penultimate_nodes"][0]
+            depth_target["node_id"] = candidate["node_id"]
+            return {
+                "is_complete": False,
+                "status": "needs_repair",
+                "missing_topics": ["补充分支细分方法"],
+                "suggested_repairs": [
+                    {
+                        "type": "add_nodes",
+                        "target_node_id": candidate["node_id"],
+                        "target_title": candidate["title"],
+                        "title": "补充分支细分方法",
+                    }
+                ],
+                "reasoning": "倒数第二级节点只有一个末级子节点，需要补充分支细分方法。",
+            }
+        if "知识架构修补器" in system_prompt:
+            prompt = json.loads(user_prompt)
+            graph = prompt["structure_graph"]
+            target_id = depth_target["node_id"]
+            new_node = {
+                "node_id": f"{target_id}-depth-extra",
+                "title": "补充分支细分方法",
+                "node_type": "article",
+                "parent_node_id": target_id,
+                "relative_path": "depth-review/extra.md",
+                "doc_type": "article",
+                "owner_engine_candidates": ["QueryEngine"],
+                "required_query_tasks": 1,
+            }
+            return {
+                **graph,
+                "nodes": [*graph.get("nodes", []), new_node],
+                "edges": [
+                    *graph.get("edges", []),
+                    {"from_node_id": target_id, "edge_type": "CONTAINS", "to_node_id": new_node["node_id"]},
+                ],
+            }
+        return original_complete_json(self, system_prompt=system_prompt, user_prompt=user_prompt)
+
+    monkeypatch.setattr(OpenAICompatibleChatClient, "complete_json", complete_json)
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    response = app.test_client().post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]})
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["task_status"] == "graph_ready"
+    assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
+        "structure_coverage",
+        "completion_readiness",
+        "structure_depth",
+    ]
+    assert payload["structure_review_rounds"][-1]["status"] == "needs_repair"
+    assert payload["structure_repair_log"][-1]["review_type"] == "structure_depth"
+    assert payload["structure_review_status"] == "auto_repaired"
+    assert any(node["title"] == "补充分支细分方法" for node in payload["structure_graph"]["nodes"])
 
 
 def test_resume_repair_required_continues_from_repaired_structure(tmp_path: Path, monkeypatch) -> None:

@@ -30,6 +30,9 @@ const tokenUsageOutput = document.querySelector("#token-usage-output");
 const tokenFloat = document.querySelector("#token-float");
 const tokenFloatToggle = document.querySelector("#token-float-toggle");
 const tokenFloatTotal = document.querySelector("#token-float-total");
+const taskTimingFloat = document.querySelector("#task-timing-float");
+const taskTimingFloatValue = document.querySelector("#task-timing-float-value");
+const taskTimingFloatMeta = document.querySelector("#task-timing-float-meta");
 const executionLogOutput = document.querySelector("#execution-log-output");
 const taskListOutput = document.querySelector("#task-list-output");
 const workflowMap = document.querySelector("#workflow-map");
@@ -45,7 +48,7 @@ const workflowSteps = [
   { id: "intent_recognition", order: "01", title: "意图识别", description: "识别真实领域意图并归一化缩写。" },
   { id: "structure_graph_planning", order: "02", title: "图谱生成", description: "根据用户意图生成知识架构图谱。" },
   { id: "neo4j_structure_sync", order: "03", title: "Neo4j呈现", description: "先将知识架构图谱同步到 Neo4j。" },
-  { id: "structure_review", order: "04", title: "两段Review", description: "先审结构覆盖，再审执行准备度。" },
+  { id: "structure_review", order: "04", title: "三段Review", description: "结构覆盖、执行准备度、结构深化。" },
   { id: "graph_completion", order: "05", title: "图谱补全", description: "写入补全文档所需的图谱上下文。" },
   { id: "evidence_link_query", order: "06", title: "查询填充", description: "用户触发后联网补充可信证据。" },
   { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
@@ -89,6 +92,7 @@ function showPayload(payload) {
   output.textContent = JSON.stringify(payload, null, 2);
   syncKnownIds(payload);
   renderSummary(payload);
+  renderTaskTimingFloat(payload);
   renderWorkflowMap(payload);
   renderQueuePanel(payload);
   renderLearningPlan(payload);
@@ -105,6 +109,7 @@ function showError(error) {
   };
   output.textContent = JSON.stringify(payload, null, 2);
   renderSummary(payload);
+  renderTaskTimingFloat(payload);
   renderWorkflowMap(payload);
   renderQueuePanel(payload);
   renderLearningPlan(payload);
@@ -152,10 +157,9 @@ function renderSummary(payload) {
     ["产出模式", formatCompletionMode(getNested(payload, "request_context.completion_mode") || getNested(payload, "task.request_context.completion_mode") || payload.completion_mode || payload.intake_session?.completion_mode)],
     ["补全文档", formatFullDocumentStatus(payload.document_completion_status || payload.full_document_status || payload.task?.document_completion_status || payload.task?.full_document_status)],
     ["补全文档数", summarizeDocumentCompletion(payload)],
-    ["执行耗时", summarizeTaskTiming(payload)],
     ["当前步骤", payload.current_step || payload.task?.current_step],
     ["当前动作", payload.current_action || payload.task?.current_action],
-    ["两段Review", summarizeStructureReview(payload)],
+    ["三段Review", summarizeStructureReview(payload)],
     ["生成进度", summarizeGenerationProgress(payload)],
     ["队列进度", summarizeQueueProgress(payload)],
     ["当前图谱节点", summarizeCurrentFile(payload)],
@@ -218,13 +222,14 @@ function summarizeStructureReview(payload) {
   const latest = rounds.at(-1) || {};
   const status = latest.status || (latest.is_complete ? "passed" : "needs_repair");
   const label = formatStructureReviewType(latest.review_type || (rounds.length === 1 ? "structure_coverage" : "completion_readiness"));
-  return `${rounds.length}/2 · ${label} · ${status === "passed" ? "通过" : "需修补"}`;
+  return `${rounds.length}/3 · ${label} · ${status === "passed" ? "通过" : "需修补"}`;
 }
 
 function formatStructureReviewType(type) {
   return {
     structure_coverage: "结构覆盖",
     completion_readiness: "准备度",
+    structure_depth: "结构深化",
   }[type] || "Review";
 }
 
@@ -233,7 +238,7 @@ function normalizeStructureReviewRounds(rounds) {
   const byRound = new Map();
   rounds.forEach((round, index) => {
     const roundNumber = Number(round?.round || index + 1);
-    if ([1, 2].includes(roundNumber)) byRound.set(roundNumber, round);
+    if ([1, 2, 3].includes(roundNumber)) byRound.set(roundNumber, round);
   });
   return [...byRound.entries()].sort(([left], [right]) => left - right).map(([, round]) => round);
 }
@@ -2023,6 +2028,16 @@ function summarizeTokenUsageLabel(payload) {
   const usage = payload.token_usage || payload.task?.token_usage;
   if (!usage || !usage.request_count) return "";
   return `${formatNumber(usage.total_tokens)} total / ${formatNumber(usage.request_count)} 次调用`;
+}
+
+function renderTaskTimingFloat(payload) {
+  if (!taskTimingFloat || !taskTimingFloatValue || !taskTimingFloatMeta) return;
+  const timingLabel = summarizeTaskTiming(payload);
+  const step = payload.current_step || payload.task?.current_step || "";
+  const status = payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status || "";
+  taskTimingFloatValue.textContent = timingLabel || "暂无";
+  taskTimingFloatMeta.textContent = [step, status].filter(Boolean).join(" · ") || "等待任务运行";
+  taskTimingFloat.classList.toggle("is-idle", !timingLabel);
 }
 
 function summarizeTaskTiming(payload) {

@@ -41,7 +41,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "plan-full-panel" in body
     assert "trace-grid" in body
     assert "图谱补全" in body
-    assert "两段Review" in body
+    assert "三段Review" in body
     assert "补全文档" in body
     assert "查询填充" in body
     assert "写入证据链接、来源类型和 claim 到 Neo4j。" in body
@@ -72,7 +72,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "文件已生成" not in dashboard_js
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
     assert "function normalizeStructureReviewRounds" in dashboard_js
-    assert "`${rounds.length}/2" in dashboard_js
+    assert "`${rounds.length}/3" in dashboard_js
     assert "function formatStructureReviewType" in dashboard_js
     assert "function focusNeo4jNode" in dashboard_js
     assert "data-focus-node-id" in dashboard_js

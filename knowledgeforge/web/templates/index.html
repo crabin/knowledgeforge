@@ -88,8 +88,8 @@
           </article>
           <article class="flow-step" data-step-id="structure_review" tabindex="0" aria-describedby="review-flow-detail">
             <span>04</span>
-            <h3>两段Review</h3>
-            <p>先审结构覆盖，再审执行准备度。</p>
+            <h3>三段Review</h3>
+            <p>结构覆盖、执行准备度、结构深化依次审查。</p>
             <div class="flow-step-detail" id="review-flow-detail" role="tooltip">
               <strong>触发条件</strong>
               <p>Neo4j 结构图谱已初始化，review 上下文可读取。</p>
@@ -97,6 +97,7 @@
               <ol>
                 <li>结构覆盖审查检查领域边界、层级、知识点和关系。</li>
                 <li>图谱补全文档上下文准备后，再审证据需求、查询任务和建议路径。</li>
+                <li>结构深化审查检查倒数第二级薄分支和过宽叶子。</li>
                 <li>发现缺口时自动修补并同步 Neo4j，不等待人工恢复。</li>
               </ol>
             </div>
@@ -359,15 +360,23 @@
       </section>
     </main>
 
-    <aside class="token-float collapsed" id="token-float" aria-label="Token 实时消耗">
-      <button class="token-float-toggle" type="button" id="token-float-toggle" aria-expanded="false">
-        <span>Token</span>
-        <strong id="token-float-total">0</strong>
-      </button>
-      <div id="token-usage-output" class="token-usage-grid">
-        <div class="empty-state">暂无 token 记录。</div>
-      </div>
-    </aside>
+    <div class="status-dock" aria-label="任务固定状态窗口">
+      <aside class="task-timing-float" id="task-timing-float" aria-label="执行耗时">
+        <div class="task-timing-float-label">执行耗时</div>
+        <div class="task-timing-float-value" id="task-timing-float-value">暂无</div>
+        <div class="task-timing-float-meta" id="task-timing-float-meta">等待任务运行</div>
+      </aside>
+
+      <aside class="token-float collapsed" id="token-float" aria-label="Token 实时消耗">
+        <button class="token-float-toggle" type="button" id="token-float-toggle" aria-expanded="false">
+          <span>Token</span>
+          <strong id="token-float-total">0</strong>
+        </button>
+        <div id="token-usage-output" class="token-usage-grid">
+          <div class="empty-state">暂无 token 记录。</div>
+        </div>
+      </aside>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" defer></script>
     <script src="https://unpkg.com/neovis.js@2.1.0/dist/neovis.js" defer></script>

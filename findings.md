@@ -57,6 +57,12 @@
 - 第二轮 readiness review 不应覆盖已准备好的 `completion_ready` 节点状态；它只记录准备度审查结果，必要时触发 readiness repair。
 - 第二轮 repair 后需要重新 prepare 图谱上下文，再 finalize 到 `graph_ready`，避免修补后的图谱与证据队列、Neo4j 节点字段不一致。
 
+## 2026-05-05 第三轮结构深化 Review 发现
+- 当前结构覆盖审查能判断大范围主题是否缺失，但对“倒数第二级只挂一个叶子”的薄分支不够敏感，例如方法类节点下只剩单个 article 时，图谱看似完整但不利于后续学习路径和知识补全。
+- 第三轮不应变成全量扩写器；它只审候选倒数第二级节点、单子节点方法族、过宽叶子和确有拆分价值的知识点，并要求建议绑定 `target_node_id` 或明确目标标题。
+- 第三轮 repair 的主要动作是补充目标父节点下的必要分支或拆分过宽叶子；除非 review 明确指出结构缺口，不应重新展开大规模领域树。
+- 第三轮 repair 后需要重新执行 `prepare_graph_completion_context`，让新增或拆分节点获得 `expected_evidence`、`suggested_relative_path` 和运行态 query 任务，再进入 `graph_ready`。
+
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
 - 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
 - 当前图执行顺序是生成结构图谱后先同步 Neo4j；第一轮 review 如果直接通过，会进入第二轮，中间没有再同步 Neo4j；第一轮有缺口时会在 repair 后同步。
