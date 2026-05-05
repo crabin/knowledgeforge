@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 Query 单任务模拟脚本可用性优化
+
+- 优化 `scripts/simulate_query_task.py` 调试体验：新增 `--list-queue`、`--queue-status`、`--queue-limit`，可先筛选/预览队列任务，并展示每个任务经过 QueryEngine rewrite 后的 `primary_query`。
+- 新增 `--json-only`，用于输出单个 JSON 对象，便于脚本化分析；默认不再实时打印 crawler trace，避免日志打断 JSON 段，需实时观察时可加 `--show-trace`。
+- `query_result` 新增 `diagnostics`，自动标记 Bing redirect 被选中、搜索引擎 publisher 被误判为 official 等问题，方便定位证据筛选 bug。
+- 验证：`uv run python -m py_compile scripts/simulate_query_task.py` 通过；`uv run ruff check scripts/simulate_query_task.py` 通过；`--help`、`--list-queue --queue-status pending --queue-limit 3 --json-only`、`sub_def_scope-task-1 --dry-run --json-only` 和真实单任务 `--json-only --no-embeddings` 均可正常输出。
+
 ## 2026-05-06 Query 任务查询词聚焦优化
 
 - 调整图谱补全队列的 evidence task 默认生成逻辑：`query_text` 改为“领域名 + 节点标题/证据主题”，例如 `Deep Learning 行业落地案例`，不再生成 `补充 ... 的关键依据 official documentation` 这类低价值查询。
