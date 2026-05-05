@@ -656,28 +656,61 @@ class Neo4jGraphClient:
             domain=domain,
             task_id=task_id,
         )
-        issues = []
+        issues_by_graph_id: dict[str, dict[str, Any]] = {}
         for row in rows:
             properties = _json_safe_properties(dict(row["properties"] or {}))
             labels = list(row["labels"] or [])
-            issues.append(
-                {
-                    "graph_id": str(row["graph_id"]),
+            graph_id = str(row["graph_id"])
+            relationship_types = sorted({str(item) for item in row["relationship_types"] or [] if item})
+            current_match = {
+                "matching_structure_node_id": str(row["matching_structure_node_id"] or ""),
+                "matching_structure_title": str(row["matching_structure_title"] or ""),
+                "matching_structure_type": str(row["matching_structure_type"] or ""),
+                "matching_structure_path": str(row["matching_structure_path"] or ""),
+            }
+            issue = issues_by_graph_id.get(graph_id)
+            if issue is None:
+                issue = {
+                    "graph_id": graph_id,
                     "labels": labels,
                     "type": _node_type(labels, properties),
                     "logical_id": str(properties.get("id") or properties.get("name") or properties.get("title") or ""),
                     "title": str(properties.get("title") or properties.get("name") or properties.get("id") or row["graph_id"]),
                     "path": str(properties.get("path", "")),
                     "relationship_count": int(row["relationship_count"] or 0),
-                    "relationship_types": [str(item) for item in row["relationship_types"] or []],
+                    "relationship_types": relationship_types,
                     "reason": "duplicate_non_structure_knowledge_point",
-                    "matching_structure_node_id": str(row["matching_structure_node_id"] or ""),
-                    "matching_structure_title": str(row["matching_structure_title"] or ""),
-                    "matching_structure_type": str(row["matching_structure_type"] or ""),
-                    "matching_structure_path": str(row["matching_structure_path"] or ""),
+                    **current_match,
+                    "matching_candidates": [current_match] if any(current_match.values()) else [],
                     "recommended_action": "delete_or_link",
                 }
-            )
+                issues_by_graph_id[graph_id] = issue
+                continue
+            issue["relationship_count"] = min(int(issue["relationship_count"]), int(row["relationship_count"] or 0))
+            issue["relationship_types"] = sorted(set(issue["relationship_types"]) | set(relationship_types))
+            candidates = issue.setdefault("matching_candidates", [])
+            if any(current_match.values()) and current_match not in candidates:
+                candidates.append(current_match)
+                current_best = (
+                    str(issue.get("matching_structure_title") or ""),
+                    str(issue.get("matching_structure_type") or ""),
+                    str(issue.get("matching_structure_node_id") or ""),
+                )
+                candidate_key = (
+                    current_match["matching_structure_title"],
+                    current_match["matching_structure_type"],
+                    current_match["matching_structure_node_id"],
+                )
+                if candidate_key < current_best:
+                    issue.update(current_match)
+        issues = sorted(
+            issues_by_graph_id.values(),
+            key=lambda item: (
+                int(item.get("relationship_count", 0)),
+                str(item.get("title", "")),
+                str(item.get("graph_id", "")),
+            ),
+        )
         return {"issues": issues, "count": len(issues)}
 
     @staticmethod

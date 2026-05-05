@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-05 Neo4j 问题节点去重
+
+- 修复问题知识点检查结果按“匹配结构关系”重复返回的情况：同一个噪声节点命中多个结构节点时，后端现在按 `graph_id` 聚合，只在结果里保留一条问题节点记录。
+- 聚合后会合并 `relationship_types`，并保留 `matching_candidates` 供后续扩展使用；当前列表数量会与图谱中的实际红色问题节点数量保持一致。
+- 验证：`python -m py_compile knowledgeforge/graph/client.py` 通过；`uv run pytest -q tests/test_graph_client.py tests/test_dashboard.py` 结果 `11 passed`。
+
 ## 2026-05-05 Neo4j 问题节点高亮与聚焦
 
 - 去掉 Neo4j 图谱外层容器的整体滚动，保留图谱固定展示和右侧详情栏独立滚动，避免再次出现整块图谱一起滑动。
