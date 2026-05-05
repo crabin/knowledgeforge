@@ -26,24 +26,31 @@ def main() -> int:
         load_dotenv(args.env_file, override=True)
     config = AppConfig.from_env() if args.use_env_config else AppConfig()
     base_url = args.base_url.rstrip("/")
+    api_requests: list[dict[str, Any]] = []
     task_payload = _load_task(base_url, args.task_id)
     task_id = str(task_payload.get("task_id", "")).strip()
     context = _build_context(task_payload, task_id)
     task = _select_or_build_task(task_payload, args)
+    api_requests = _describe_api_requests(base_url, args, task_id)
+    query_request = _build_query_request(context, task, args)
 
     print_json(
-        "input",
+        "api_request",
+        {
+            "requests": api_requests,
+            "note": "脚本只通过 API 读取 task/queue；单条查询在本进程内调用 QueryEngine.run_evidence_task，不会修改后端任务状态。",
+        },
+    )
+    print_json(
+        "query_request",
         {
             "task_id": task_id,
             "domain": context.domain,
-            "target_node_id": task.get("target_node_id"),
-            "query_text": task.get("query_text"),
-            "claim_or_gap": task.get("claim_or_gap"),
-            "expected_evidence": task.get("expected_evidence"),
-            "preferred_source_types": task.get("preferred_source_types"),
+            **query_request,
         },
     )
     if args.dry_run:
+        print_json("query_result", {"dry_run": True, "message": "未执行搜索；去掉 --dry-run 可查看真实查询结果。"})
         return 0
 
     trace_lines: list[str] = []
@@ -63,13 +70,15 @@ def main() -> int:
     result = engine.run_evidence_task(context=context, round_number=args.round_number, task=task)
     elapsed = time.perf_counter() - started
     selected = next((source for source in result.sources if source.url.startswith(("http://", "https://"))), None)
+    query_attempts = _extract_query_attempts(result.execution_log)
 
     print_json(
-        "result",
+        "query_result",
         {
             "elapsed_seconds": round(elapsed, 2),
             "summary": result.summary,
             "selected": selected.to_dict() if selected else None,
+            "query_attempts": query_attempts,
             "sources": [source.to_dict() for source in result.sources],
             "execution_log": result.execution_log,
             "raw_material": result.raw_material,
@@ -82,8 +91,10 @@ def main() -> int:
         output_path.write_text(
             json.dumps(
                 {
-                    "input": {"task_id": task_id, "task": task},
+                    "api_request": api_requests,
+                    "query_request": query_request,
                     "result": result.to_dict(),
+                    "query_attempts": query_attempts,
                     "trace": trace_lines,
                 },
                 ensure_ascii=False,
@@ -143,6 +154,25 @@ def _load_task(base_url: str, task_id: str) -> dict[str, Any]:
     return _get_json(f"{base_url}/tasks/{_url_quote(newest_task_id)}")
 
 
+def _describe_api_requests(base_url: str, args: argparse.Namespace, resolved_task_id: str) -> list[dict[str, Any]]:
+    if args.task_id:
+        return [
+            {
+                "method": "GET",
+                "url": f"{base_url}/tasks/{_url_quote(args.task_id)}",
+                "purpose": "读取指定任务状态和 task_queue_snapshot。",
+            }
+        ]
+    return [
+        {"method": "GET", "url": f"{base_url}/tasks", "purpose": "读取任务列表，选择最新任务。"},
+        {
+            "method": "GET",
+            "url": f"{base_url}/tasks/{_url_quote(resolved_task_id)}",
+            "purpose": "读取最新任务状态和 task_queue_snapshot。",
+        },
+    ]
+
+
 def _build_context(task_payload: dict[str, Any], task_id: str) -> RequestContext:
     raw_context = dict(task_payload.get("request_context") or {})
     raw_context.setdefault("domain", task_payload.get("domain") or task_payload.get("normalized_domain") or "Unknown")
@@ -184,6 +214,75 @@ def _select_or_build_task(task_payload: dict[str, Any], args: argparse.Namespace
     task.setdefault("acceptance_criteria", ["命中可访问链接", "能支撑目标知识点"])
     task.setdefault("status", "pending")
     return task
+
+
+def _build_query_request(context: RequestContext, task: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    rewritten = QueryEngine._rewrite_evidence_task_queries(context, task)
+    executable_queries = _dedupe_strings(
+        [
+            str(rewritten["primary_query"]),
+            *[str(item) for item in rewritten["authority_queries"]],
+            *[str(item) for item in rewritten["fallback_queries"]],
+        ]
+    )
+    return {
+        "round_number": args.round_number,
+        "target_node_id": task.get("target_node_id"),
+        "task": {
+            "task_id": task.get("task_id"),
+            "task_type": task.get("task_type", "query"),
+            "query_text": task.get("query_text"),
+            "claim_or_gap": task.get("claim_or_gap"),
+            "expected_evidence": task.get("expected_evidence"),
+            "preferred_source_types": task.get("preferred_source_types"),
+            "acceptance_criteria": task.get("acceptance_criteria"),
+            "target_node_id": task.get("target_node_id"),
+            "suggested_relative_path": task.get("suggested_relative_path"),
+            "target_file_path": task.get("target_file_path"),
+            "status": task.get("status"),
+        },
+        "rewritten_queries": rewritten,
+        "executable_queries_in_order": executable_queries,
+        "search_settings": {
+            "providers": ["google", "bing"],
+            "search_timeout_seconds": args.search_timeout,
+            "llm_timeout_seconds": args.llm_timeout,
+            "embeddings": not args.no_embeddings,
+            "max_concurrent_network_tasks": 1,
+        },
+    }
+
+
+def _extract_query_attempts(execution_log: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for entry in execution_log:
+        if entry.get("event") not in {"query_search_executed", "query_search_failed"}:
+            continue
+        details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
+        attempts.append(
+            {
+                "event": entry.get("event"),
+                "query": details.get("query"),
+                "status": details.get("status"),
+                "hits": details.get("hits"),
+                "source_type": details.get("source_type"),
+                "failure_category": details.get("failure_category"),
+                "error": details.get("error"),
+            }
+        )
+    return attempts
+
+
+def _dedupe_strings(items: list[str]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = " ".join(str(item).split())
+        key = cleaned.lower()
+        if cleaned and key not in seen:
+            seen.add(key)
+            deduped.append(cleaned)
+    return deduped
 
 
 def _get_json(url: str) -> dict[str, Any]:

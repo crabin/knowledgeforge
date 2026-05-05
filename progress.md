@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-06 单条 Query 模拟脚本输出增强
+
+- 增强 `scripts/simulate_query_task.py` 的调试输出：现在分段打印 `api_request`、`query_request` 和 `query_result`，便于定位前端单个查询卡片对应的后端读取、查询改写和实际搜索结果。
+- `query_request` 会列出 evidence task 的目标节点、原始 query、claim/expected evidence、preferred source types、QueryEngine 改写出的 primary/authority/fallback queries，以及 Google/Bing 搜索设置。
+- `query_result` 会列出耗时、选中来源、每次搜索 attempt、sources、execution_log、raw_material 和 crawler trace；`--dry-run` 会明确提示未执行搜索。
+- 用当前 `sub_def_scope-task-1` 验证发现真实执行会将 Bing redirect 的知乎结果选为 `official` 候选，后续可据此继续优化 Bing redirect 解码、来源类型判定和低权威候选拦截。
+- 验证：`uv run python -m py_compile scripts/simulate_query_task.py` 通过；`uv run ruff check scripts/simulate_query_task.py` 通过；`uv run python scripts/simulate_query_task.py --help` 通过；对当前任务执行 `--dry-run` 和真实单条查询均成功输出请求、查询和结果段。
+
 ## 2026-05-06 单条 Query 证据任务模拟脚本
 
 - 新增 `scripts/simulate_query_task.py`，用于从 `/tasks` / `/tasks/{task_id}` 读取当前队列，选择单个 `task_queue_snapshot.tasks` 项并直接调用 `QueryEngine.run_evidence_task(...)`。
