@@ -1214,6 +1214,7 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
   const childCount = edges.filter((edge) => edge.source === node.id && (edge.properties?.type === "CONTAINS" || edge.type === "STRUCTURE_EDGE")).length;
   const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
   const logicalNodeId = getNeo4jLogicalId(node);
+  const nodeEvidence = getQueueEvidenceForNode(logicalNodeId);
   const canExpand = isNeo4jStructureNode(node);
   return `
     <aside class="neo4j-node-inspector" aria-label="选中节点详情">
@@ -1224,8 +1225,8 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
       </div>
       <dl class="neo4j-node-fields">
         ${renderNeo4jNodeField("路径", path)}
-        ${renderNeo4jNodeField("待查证据", node.properties?.pending_task_count)}
-        ${renderNeo4jNodeField("已完成证据", node.properties?.completed_task_count)}
+        ${renderNeo4jEvidenceField("待查证据", nodeEvidence.pending, node.properties?.pending_task_count)}
+        ${renderNeo4jEvidenceField("已完成证据", nodeEvidence.completed, node.properties?.completed_task_count)}
         ${renderNeo4jNodeField("Task", node.properties?.task_id)}
       </dl>
       ${canExpand ? `<div class="neo4j-node-actions">
@@ -1240,6 +1241,16 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
       </div>
       ${renderNeo4jGraphIssueList(state.neo4jIssueInspection, node.id, nodes)}
     </aside>`;
+}
+
+function getQueueEvidenceForNode(logicalNodeId) {
+  const queue = state.lastPayload?.task_queue_snapshot || state.lastPayload?.task?.task_queue_snapshot || {};
+  const tasks = Array.isArray(queue.tasks) ? queue.tasks : [];
+  const matched = tasks.filter((task) => String(task.target_node_id || task.structure_node_id || "").trim() === logicalNodeId);
+  return {
+    pending: matched.filter((task) => !["completed", "verified"].includes(String(task.status || "").toLowerCase())),
+    completed: matched.filter((task) => ["completed", "verified"].includes(String(task.status || "").toLowerCase()) || String(task.selected_link || "").trim()),
+  };
 }
 
 function renderNeo4jInspectorRelationGroup(label, relations, selectedNode, nodes) {
@@ -1428,6 +1439,23 @@ function formatIssueMatch(issue) {
 function renderNeo4jNodeField(label, value) {
   if (value === undefined || value === null || value === "") return "";
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function renderNeo4jEvidenceField(label, tasks, fallbackCount) {
+  const count = tasks.length || Number(fallbackCount) || 0;
+  const items = tasks.slice(0, 4).map((task) => {
+    const title = task.claim_or_gap || task.query_text || task.task_id || "证据任务";
+    const source = task.selected_link || task.relevance_reason || task.source_kind || task.status || "";
+    return `<li><strong>${escapeHtml(title)}</strong>${source ? `<span>${escapeHtml(source)}</span>` : ""}</li>`;
+  }).join("");
+  return `
+    <div>
+      <dt>${escapeHtml(label)}</dt>
+      <dd>
+        <span>${escapeHtml(String(count))}</span>
+        ${items ? `<ul class="neo4j-evidence-list">${items}</ul>` : '<em class="neo4j-evidence-empty">暂无队列明细</em>'}
+      </dd>
+    </div>`;
 }
 
 function renderNeo4jInspectorEdge(edge, selectedNode, nodes) {
@@ -1803,7 +1831,7 @@ function renderQueuePanel(payload) {
   const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
   const counts = summarizeQueueTaskCounts(tasks);
   const runningTask = tasks.find((task) => task.status === "running");
-  const nodeTitleById = buildStructureNodeTitleMap(payload);
+  const nodeLookup = buildStructureNodeLookup(payload);
 
   if (queuePanelHint) {
     queuePanelHint.textContent = buildQueueStatusHint(queue.final_status, queue.current_round, runningTask);
@@ -1814,7 +1842,8 @@ function renderQueuePanel(payload) {
     return;
   }
 
-  const runningTarget = getQueueTargetLabel(runningTask, nodeTitleById);
+  const graphProgressTarget = getGraphProgressTarget(generation, nodeLookup);
+  const runningTarget = getQueueTargetLabel(runningTask, nodeLookup.titleById);
   const cards = [
     `<article class="plan-card active">
       <div class="plan-card-head">
@@ -1824,9 +1853,9 @@ function renderQueuePanel(payload) {
           <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 节点`)}</span>
         </div>
       </div>
-      <div class="plan-query">${escapeHtml(generation.current_file || "等待生成任务")}</div>
+      <div class="plan-query">${escapeHtml(graphProgressTarget.title)}</div>
       <div class="plan-lists">
-        <div><b>最近保存</b><ul><li>${escapeHtml(generation.last_saved_path || "暂无")}</li></ul></div>
+        <div><b>${escapeHtml(graphProgressTarget.label)}</b><ul><li>${escapeHtml(graphProgressTarget.value)}</li></ul></div>
         <div><b>当前轮次</b><ul><li>${escapeHtml(String(queue.current_round || 1))}</li></ul></div>
       </div>
     </article>`,
@@ -1870,7 +1899,7 @@ function renderQueuePanel(payload) {
     const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补充" : "待执行";
     const citations = (item.citations || []).map((citation) => `<li>${escapeHtml(citation.title || citation.url || "来源")}</li>`).join("");
     const expected = (item.expected_evidence || []).map((value) => `<li>${escapeHtml(value)}</li>`).join("");
-    const target = getQueueTargetLabel(item, nodeTitleById);
+    const target = getQueueTargetLabel(item, nodeLookup.titleById);
     cards.push(`<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
       <div class="plan-card-head">
         <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
@@ -1891,16 +1920,28 @@ function renderQueuePanel(payload) {
   queueOutput.innerHTML = cards.join("");
 }
 
-function buildStructureNodeTitleMap(payload) {
+function buildStructureNodeLookup(payload) {
   const graph = payload.structure_graph || payload.task?.structure_graph || payload.request_context?.structure_graph || {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const titleById = {};
+  const titleByPath = {};
   nodes.forEach((node) => {
     const nodeId = String(node.node_id || node.id || "").trim();
     const title = String(node.title || node.label || "").trim();
     if (nodeId && title) titleById[nodeId] = title;
+    const relativePath = String(node.relative_path || node.path || node.metadata?.relative_path || "").trim();
+    if (relativePath && title) titleByPath[relativePath] = title;
   });
-  return titleById;
+  return { titleById, titleByPath };
+}
+
+function getGraphProgressTarget(generation, nodeLookup) {
+  const currentPath = String(generation.current_file || "").trim();
+  const title = currentPath && nodeLookup.titleByPath[currentPath]
+    ? nodeLookup.titleByPath[currentPath]
+    : "等待图谱节点上下文";
+  if (currentPath) return { title, label: "建议路径", value: currentPath };
+  return { title, label: "建议路径", value: "暂无" };
 }
 
 function getQueueTargetLabel(task, titleById = {}) {

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 图谱队列与节点证据展示语义修正
+
+- 将图谱上下文进度卡从路径/保存语义改为图谱语义：主标题显示当前图谱节点标题，详情显示“建议路径”，避免在查询填充阶段误称为目标文件。
+- Neo4j 右侧节点详情现在按 `target_node_id` 从运行态队列中列出待查证据和已完成证据任务，完成项会展示 selected link / relevance reason / source kind 等简要结果。
+- 查询队列卡片继续使用“目标节点”，并去掉前端中的“目标文件”文案；真正的文件目标语义保留给后续补全文档流程。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run pytest -q tests/test_dashboard.py` 结果 `11 passed`。
+
 ## 2026-05-06 查询队列目标节点展示修正
 
 - 修复查询填充阶段队列卡片仍显示“目标文件”的问题：前端现在优先根据 `target_node_id` / `structure_node_id` 展示“目标节点”，并从当前结构图谱解析节点标题。

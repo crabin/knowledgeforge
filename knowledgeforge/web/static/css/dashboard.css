@@ -675,6 +675,35 @@ h3 {
   line-height: 1.35;
 }
 
+.neo4j-evidence-list {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.neo4j-evidence-list li {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 5px;
+  background: rgba(47, 95, 145, 0.08);
+}
+
+.neo4j-evidence-list strong,
+.neo4j-evidence-list span {
+  overflow-wrap: anywhere;
+}
+
+.neo4j-evidence-list span,
+.neo4j-evidence-empty {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .neo4j-node-actions {
   display: flex;
   align-items: center;

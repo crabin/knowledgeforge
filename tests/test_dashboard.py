@@ -78,6 +78,10 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "data-focus-node-id" in dashboard_js
     assert "getNeo4jIssueNodeIds" in dashboard_js
     assert "neo4jShowCompressedEdges: false" in dashboard_js
+    assert "function getQueueEvidenceForNode" in dashboard_js
+    assert "function getGraphProgressTarget" in dashboard_js
+    assert "目标节点" in dashboard_js
+    assert "目标文件" not in dashboard_js
     assert "data-toggle-compressed-edges" in dashboard_js
     assert "buildNeo4jCompressedEdges" in dashboard_js
     assert "neo4j-inspector-edge${focusNodeId ? \" is-clickable\" : \"\"}" in dashboard_js
@@ -100,6 +104,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert ".neo4j-inspector-edge.is-clickable" in dashboard_css
     assert ".neo4j-inspector-relation-group" in dashboard_css
     assert ".neo4j-toggle-edges" in dashboard_css
+    assert ".neo4j-evidence-list" in dashboard_css
     assert ".learning-stage-card" in dashboard_css
 
 
