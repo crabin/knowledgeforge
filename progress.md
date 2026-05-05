@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 SSE 任务状态序列化并发修复
+
+- 修复 `/tasks/{task_id}/stream` 在后台任务更新运行态 dict 时调用 `get_task()`，导致 `_serialize_state()` 抛出 `RuntimeError: dictionary changed size during iteration` 的问题。
+- `_serialize_state()` 和嵌套 dict 序列化现在先获取稳定 `items` 快照；遇到并发扩容会重试，避免 SSE headers 已发送后流式响应崩溃。
+- 补充回归测试模拟 dict 在 `items()` 期间增长，确认序列化能恢复并保留后到字段。
+- 验证：`uv run ruff check knowledgeforge/server/services/task_service.py tests/test_workflow.py` 通过；`uv run pytest -q tests/test_workflow.py::test_serialize_state_tolerates_concurrent_dict_growth tests/test_workflow.py::test_async_task_detail_includes_realtime_query_action` 结果 `2 passed`；`uv run python -m py_compile knowledgeforge/server/services/task_service.py` 通过；`uv run pytest -q tests/test_workflow.py` 结果 `47 passed`。
+
 ## 2026-05-06 QueryEngine Google/Bing 搜索链路优化
 
 - 将 QueryEngine 主链路搜索来源收敛为 Google/Bing，移除 DuckDuckGo、Brave、supplemental source 和 Wikipedia API 自动补充在 QueryEngine 主流程中的参与。

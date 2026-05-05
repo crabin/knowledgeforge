@@ -1112,6 +1112,33 @@ def test_task_logs_backfill_saved_execution_log_entries(tmp_path: Path) -> None:
     assert "query_plan_created" in saved_events
 
 
+def test_serialize_state_tolerates_concurrent_dict_growth(tmp_path: Path) -> None:
+    class GrowingDict(dict):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._raised = False
+
+        def items(self):
+            if not self._raised:
+                self._raised = True
+                self["late_update"] = "arrived"
+                raise RuntimeError("dictionary changed size during iteration")
+            return super().items()
+
+    config = AppConfig(
+        save_root=tmp_path / "save",
+        task_state_root=tmp_path / "runtime" / "tasks",
+        audit_root=tmp_path / "runtime" / "audit",
+        frozen_root=tmp_path / "runtime" / "frozen",
+    )
+    service = TaskService(config)
+    payload = service._serialize_state(GrowingDict({"task_id": "t1", "nested": GrowingDict({"a": 1})}))
+
+    assert payload["task_id"] == "t1"
+    assert payload["late_update"] == "arrived"
+    assert payload["nested"]["late_update"] == "arrived"
+
+
 def test_task_logs_do_not_backfill_duplicate_llm_events(tmp_path: Path) -> None:
     config = AppConfig(
         save_root=tmp_path / "save",

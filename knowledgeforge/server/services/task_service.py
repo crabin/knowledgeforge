@@ -2505,7 +2505,7 @@ class TaskService:
 
     def _serialize_state(self, state: WorkflowState) -> dict[str, Any]:
         payload: dict[str, Any] = {}
-        for key, value in state.items():
+        for key, value in self._stable_mapping_items(state):
             payload[key] = self._serialize_value(value)
         return payload
 
@@ -2515,8 +2515,18 @@ class TaskService:
         if isinstance(value, list):
             return [self._serialize_value(item) for item in value]
         if isinstance(value, dict):
-            return {key: self._serialize_value(item) for key, item in value.items()}
+            return {key: self._serialize_value(item) for key, item in self._stable_mapping_items(value)}
         return value
+
+    @staticmethod
+    def _stable_mapping_items(value: dict) -> tuple[tuple[Any, Any], ...]:
+        for _ in range(3):
+            try:
+                return tuple(value.items())
+            except RuntimeError as exc:
+                if "dictionary changed size during iteration" not in str(exc):
+                    raise
+        return tuple((key, value.get(key)) for key in tuple(value.keys()))
 
     @staticmethod
     def _summarize_state(payload: dict[str, Any]) -> dict[str, Any]:
