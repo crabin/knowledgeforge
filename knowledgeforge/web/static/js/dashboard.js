@@ -12,6 +12,7 @@ const state = {
   neo4jSelectedNodeId: "",
   neo4jIssueInspection: null,
   neo4jPendingFocusNodeId: "",
+  neo4jShowCompressedEdges: false,
 };
 
 const output = document.querySelector("#response-output");
@@ -689,9 +690,11 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
   const visibleEdges = buildNeo4jReadableEdges(visibleNodes, edges).filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
-  const connectedNodeIds = selectedNode ? getNeo4jConnectedNodeIds(selectedNode.id, visibleEdges) : new Set();
+  const compressedEdges = buildNeo4jCompressedEdges(visibleNodes, edges).filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
+  const renderedEdges = state.neo4jShowCompressedEdges ? [...visibleEdges, ...compressedEdges] : visibleEdges;
+  const connectedNodeIds = selectedNode ? getNeo4jConnectedNodeIds(selectedNode.id, renderedEdges) : new Set();
   const hiddenNodeCount = Math.max(0, nodes.length - visibleNodes.length);
-  const hiddenEdgeCount = Math.max(0, edges.length - visibleEdges.length);
+  const hiddenEdgeCount = compressedEdges.length;
   neo4jGraphContainer.innerHTML = `
     <div class="neo4j-html-graph neo4j-neovis-graph" data-node-count="${escapeHtml(String(nodes.length))}">
       <div class="neo4j-state-strip" aria-label="图谱状态统计">
@@ -708,6 +711,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
             <span>显示 ${escapeHtml(String(visibleNodes.length))}/${escapeHtml(String(nodes.length))} 个节点</span>
             ${hiddenNodeCount ? `<span>隐藏 ${escapeHtml(String(hiddenNodeCount))} 个低优先级节点</span>` : ""}
             ${hiddenEdgeCount ? `<span>收起 ${escapeHtml(String(hiddenEdgeCount))} 条重复或跨层关系</span>` : ""}
+            ${hiddenEdgeCount ? `<button class="neo4j-toggle-edges" type="button" data-toggle-compressed-edges>${state.neo4jShowCompressedEdges ? "收起压缩边" : "显示全部边"}</button>` : ""}
             <button class="neo4j-check-issues" type="button" data-check-graph-issues>检查知识点</button>
           </div>
           <div id="neo4j-neovis-viz" class="neo4j-neovis-viz"></div>
@@ -717,7 +721,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     </div>`;
   renderNeo4jNeovisNetwork({
     nodes: visibleNodes,
-    edges: visibleEdges,
+    edges: renderedEdges,
     selectedNodeId: selectedNode?.id || "",
     connectedNodeIds,
     issueNodeIds: visibleIssueNodeIds,
@@ -898,6 +902,17 @@ function buildNeo4jReadableEdges(nodes, edges) {
     });
   });
   return readableEdges;
+}
+
+function buildNeo4jCompressedEdges(nodes, edges) {
+  const visibleNodeIds = new Set(nodes.map((node) => node.id));
+  return edges
+    .filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
+    .map((edge) => ({
+      ...edge,
+      id: `compressed:${edge.id}`,
+      properties: { ...(edge.properties || {}), compressed: true },
+    }));
 }
 
 function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeIds, issueNodeIds, previousNodeIds, previousEdgeIds, graph, payload, previousPayload }) {
@@ -1104,20 +1119,23 @@ function shortenNeo4jVisLabel(value, maxLength) {
 }
 
 function toNeo4jVisEdge(edge, { isNew, isConnected }) {
+  const isCompressed = edge.properties?.compressed === true;
   return {
     id: edge.id,
     from: edge.source,
     to: edge.target,
-    label: isConnected ? formatNeo4jEdgeType(edge.type) : "",
+    label: isConnected && !isCompressed ? formatNeo4jEdgeType(edge.type) : "",
     title: formatNeo4jEdgeType(edge.type),
-    width: isConnected || isNew ? 2.2 : 1.2,
+    width: isCompressed ? 1.1 : isConnected || isNew ? 2.2 : 1.2,
     color: {
-      color: isConnected ? "#2f5f91" : "rgba(93, 106, 102, 0.42)",
-      highlight: "#2f5f91",
-      hover: "#2f5f91",
+      color: isCompressed ? "rgba(93, 106, 102, 0.38)" : isConnected ? "#2f5f91" : "rgba(93, 106, 102, 0.42)",
+      highlight: isCompressed ? "rgba(93, 106, 102, 0.6)" : "#2f5f91",
+      hover: isCompressed ? "rgba(93, 106, 102, 0.6)" : "#2f5f91",
       inherit: false,
     },
-    arrows: { to: { enabled: true, scaleFactor: isConnected ? 0.62 : 0.45 } },
+    dashes: isCompressed,
+    smooth: isCompressed ? { enabled: true, type: "curvedCW", roundness: 0.16 } : undefined,
+    arrows: { to: { enabled: true, scaleFactor: isCompressed ? 0.35 : isConnected ? 0.62 : 0.45 } },
   };
 }
 
@@ -1227,6 +1245,13 @@ function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
       focusNeo4jNode(item.dataset.focusNodeId || "", graph, payload, previousPayload);
     });
   });
+  const toggleEdgesButton = neo4jGraphContainer.querySelector("[data-toggle-compressed-edges]");
+  if (toggleEdgesButton) {
+    toggleEdgesButton.addEventListener("click", () => {
+      state.neo4jShowCompressedEdges = !state.neo4jShowCompressedEdges;
+      renderNeo4jGraphHtml(graph, payload, previousPayload);
+    });
+  }
   const checkIssuesButton = neo4jGraphContainer.querySelector("[data-check-graph-issues]");
   if (checkIssuesButton) {
     checkIssuesButton.addEventListener("click", async () => {

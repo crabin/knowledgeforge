@@ -704,7 +704,6 @@ h3 {
 
 .neo4j-check-issues {
   min-height: 28px;
-  margin-left: auto;
   border: 1px solid rgba(31, 92, 82, 0.24);
   border-radius: 6px;
   background: #fffdf8;
@@ -717,6 +716,18 @@ h3 {
 .neo4j-check-issues:disabled {
   cursor: progress;
   opacity: 0.68;
+}
+
+.neo4j-toggle-edges {
+  min-height: 28px;
+  margin-left: auto;
+  border: 1px solid rgba(47, 95, 145, 0.24);
+  border-radius: 6px;
+  background: #f6f9fd;
+  color: #2f5f91;
+  font-size: 0.72rem;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 .neo4j-issue-panel {

@@ -64,6 +64,9 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "function focusNeo4jNode" in dashboard_js
     assert "data-focus-node-id" in dashboard_js
     assert "getNeo4jIssueNodeIds" in dashboard_js
+    assert "neo4jShowCompressedEdges: false" in dashboard_js
+    assert "data-toggle-compressed-edges" in dashboard_js
+    assert "buildNeo4jCompressedEdges" in dashboard_js
     assert "neo4j-inspector-edge${focusNodeId ? \" is-clickable\" : \"\"}" in dashboard_js
     assert "renderNeo4jInspectorRelationGroup(\"来自\", incoming, node, nodes)" in dashboard_js
     assert "renderNeo4jInspectorRelationGroup(\"指向\", outgoing, node, nodes)" in dashboard_js
@@ -83,6 +86,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert ".neo4j-graph {" in dashboard_css
     assert ".neo4j-inspector-edge.is-clickable" in dashboard_css
     assert ".neo4j-inspector-relation-group" in dashboard_css
+    assert ".neo4j-toggle-edges" in dashboard_css
 
 
 def test_dashboard_does_not_break_status_endpoints(tmp_path: Path) -> None:
