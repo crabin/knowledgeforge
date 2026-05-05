@@ -4,20 +4,25 @@
 在不偏离项目需求、知识文档格式规范和流程执行文档的前提下，分阶段落地 KnowledgeForge 的主链路闭环，并为 Neo4j、质量检测、版本更新和后续研报分支建立稳定接口与治理骨架。
 
 ## 当前阶段
-阶段 12：Neo4j 图谱优先主链路文档已同步，当前默认产物为 Neo4j 知识架构图谱、两轮架构 review、运行态图谱级证据链接、治理状态与必需的图谱证据写入；只有本地知识 Markdown 和版本研报由后置可选动作触发
+阶段 12：Neo4j 图谱优先主链路文档已同步，当前默认产物为 Neo4j 知识架构图谱、结构覆盖审查、执行准备度审查、运行态图谱级证据链接、治理状态与必需的图谱证据写入；只有本地知识 Markdown 和版本研报由后置可选动作触发
 
 ## 当前真实代码主链路（2026-05-03）
 - 任务入口统一：`/tasks`、`/tasks/async` 与 intake 确认入口都会先做真实意图识别和领域归一化；`DL` / `ML` 等缩写会归一为规范领域名，非 `knowledge_collection` 意图会被任务接口拦截。
 - 结构先行：工作流先生成知识架构型 `structure_graph`，立即同步 Neo4j 首屏呈现，结构节点初始为 `planned`；图谱表达学习角色、顺序、关系和官方证据需求。
-- 架构 review：图谱补全前必须经过两轮 LLM review；第一轮发现缺口会自动修补图谱并回写 Neo4j，第二轮仍不完整时也直接自动修补并同步 Neo4j，然后继续图谱补全，不再等待用户恢复。
+- 两段 review：图谱先经过 `structure_coverage` 审查结构覆盖，修补后准备补全文档上下文，再经过 `completion_readiness` 审查证据需求、query 任务、建议路径和治理准备度；第二段仍不完整时也直接自动修补并同步 Neo4j，然后继续主链路，不再等待用户恢复。
 - repair flow 接续：`repair_required` 的架构审查旧任务检查点仍可由 `/tasks/{task_id}/resume` 兼容恢复；新任务的第二轮结构修补不再停在该检查点。
 - 图谱补全文档上下文：按 review 通过后的结构图谱推导 `knowledge_blueprint`，把知识定位、学习路径、证据需求、建议路径和 `document_completion_status` 写入 Neo4j；默认不生成 README、基础知识 Markdown 或完整知识 Markdown。
 - 证据链接记录：`query_evidence_links` 每完成一条链接任务，先更新运行态队列和任务 SSE payload；治理质检后 `record_evidence_to_graph` 必须把 `selected_link/source_kind/reachable/relevance_reason/checked_at/claim_or_gap` 等证据字段写入 Neo4j。
-- 父级不再自动聚合：架构阶段完整性只看两轮 review 结果，文档补全阶段如需进度聚合另行实现。
+- 父级不再自动聚合：架构阶段完整性和执行准备度只看两段 review 结果，文档补全阶段如需进度聚合另行实现。
 - 前端实时同步：`/tasks/{task_id}/stream` 直接携带 `graph_snapshot`、`graph_event`、`file_update`；前端优先使用 SSE 图谱快照渲染，`/tasks/{task_id}/graph` 与手动刷新只作为 fallback。
 - 后置补全文档分支：“补全文档”按钮是唯一的本地知识 Markdown 落盘入口；点击后检查 Neo4j 架构 review、证据链接和治理状态，再生成 `save/{领域}/README.md` 与知识点 Markdown。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
+- 两轮 Review 职责细分（2026-05-05）
+  - [complete] 将第一轮 review 固定为结构覆盖审查，专注领域边界、层级、知识点覆盖、节点粒度和关系完整性。
+  - [complete] 将图谱补全文档上下文准备前移到第二轮 review 之前，让第二轮审查真实的证据需求、query 任务、建议路径和文档上下文。
+  - [complete] 将第二轮 review 固定为执行准备度审查，并保留第二轮自动修补后继续主链路的行为。
+  - [complete] 更新前端 review 文案、回归测试、项目需求和流程执行文档。
 - 图谱驱动学习计划生成（2026-05-05）
   - [complete] 定位任务图谱、证据队列、Neo4j 快照和前端操作区的接入点。
   - [complete] 新增后端学习计划生成服务方法与 API，消费结构节点、学习顺序、前置关系、证据状态和路径信息。

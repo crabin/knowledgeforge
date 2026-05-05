@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-05 两轮 Review 职责细分
+
+- 将两轮同构架构 review 拆为 `structure_coverage` 和 `completion_readiness`：第一轮只审结构覆盖，第二轮在图谱补全文档上下文准备后审证据需求、query 任务、建议路径和治理准备度。
+- 将原图谱补全节点拆为 `prepare_graph_completion_context` 与 `finalize_graph_for_completion`；第二轮 readiness 修补后会重新 prepare，再进入 `graph_ready`，避免队列和 Neo4j 节点上下文陈旧。
+- 前端流程文案从“架构Review”更新为“两段Review”，摘要中展示结构覆盖 / 准备度阶段。
+- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`task_plan.md` 和 `findings.md`。
+- 验证：`python -m py_compile knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py` 通过；`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run ruff check knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py tests/test_workflow.py tests/test_dashboard.py` 通过；`uv run pytest -q tests/test_workflow.py tests/test_dashboard.py` 结果 `56 passed`。
+
 ## 2026-05-05 图谱驱动学习计划生成
 
 - 新增 `POST /tasks/{task_id}/learning-plan`，基于结构图谱、节点层级、学习顺序、细分领域、证据队列和路径上下文生成由浅入深到精通的学习计划。

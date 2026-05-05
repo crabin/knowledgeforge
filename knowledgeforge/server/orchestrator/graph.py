@@ -26,11 +26,12 @@ from knowledgeforge.server.orchestrator.state import WorkflowState
 from knowledgeforge.server.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.server.prompts.knowledge_file_generation import (
     PROMPT_PROFILE_VERSION,
+    build_completion_readiness_review_system_prompt,
     build_generation_system_prompt,
     build_prompt_spec,
-    build_structure_repair_system_prompt,
+    build_structure_coverage_review_system_prompt,
     build_structure_graph_system_prompt,
-    build_structure_review_system_prompt,
+    build_structure_repair_system_prompt,
     build_validation_system_prompt,
 )
 from knowledgeforge.server.runtime.domain_task_queue_store import DomainTaskQueueStore
@@ -160,7 +161,8 @@ class KnowledgeGraphWorkflow:
                 "current_action": "已接续 repair flow，将基于当前修补后的知识架构继续补全图谱上下文与证据链接。",
             },
         )
-        self._enrich_graph_for_completion(state)
+        self._prepare_graph_completion_context(state)
+        self._finalize_graph_for_completion(state)
         while True:
             self._run_query_queue(state)
             self._validate_round(state)
@@ -208,7 +210,8 @@ class KnowledgeGraphWorkflow:
         graph.add_node("review_structure_round_2", self._review_structure_round_2)
         graph.add_node("repair_structure_graph_round_2", self._repair_structure_graph_round_2)
         graph.add_node("finalize_structure_review_failure", self._finalize_structure_review_failure)
-        graph.add_node("enrich_graph_for_completion", self._enrich_graph_for_completion)
+        graph.add_node("prepare_graph_completion_context", self._prepare_graph_completion_context)
+        graph.add_node("finalize_graph_for_completion", self._finalize_graph_for_completion)
         graph.add_node("query_evidence_links", self._run_query_queue)
         graph.add_node("validate_round", self._validate_round)
         graph.add_node("record_evidence_to_graph", self._record_evidence_to_graph)
@@ -221,16 +224,24 @@ class KnowledgeGraphWorkflow:
             self._route_after_structure_review,
             {
                 "repair_structure_graph_round_1": "repair_structure_graph_round_1",
-                "review_structure_round_2": "review_structure_round_2",
+                "prepare_graph_completion_context": "prepare_graph_completion_context",
             },
         )
-        graph.add_edge("repair_structure_graph_round_1", "review_structure_round_2")
+        graph.add_edge("repair_structure_graph_round_1", "prepare_graph_completion_context")
+        graph.add_conditional_edges(
+            "prepare_graph_completion_context",
+            self._route_after_graph_completion_context,
+            {
+                "review_structure_round_2": "review_structure_round_2",
+                "finalize_graph_for_completion": "finalize_graph_for_completion",
+            },
+        )
         graph.add_conditional_edges(
             "review_structure_round_2",
             self._route_after_final_structure_review,
             {
                 "repair_structure_graph_round_2": "repair_structure_graph_round_2",
-                "enrich_graph_for_completion": "enrich_graph_for_completion",
+                "finalize_graph_for_completion": "finalize_graph_for_completion",
                 "finalize_structure_review_failure": "finalize_structure_review_failure",
             },
         )
@@ -238,11 +249,11 @@ class KnowledgeGraphWorkflow:
             "repair_structure_graph_round_2",
             self._route_after_final_structure_repair,
             {
-                "enrich_graph_for_completion": "enrich_graph_for_completion",
+                "prepare_graph_completion_context": "prepare_graph_completion_context",
                 "finalize_structure_review_failure": "finalize_structure_review_failure",
             },
         )
-        graph.add_edge("enrich_graph_for_completion", END)
+        graph.add_edge("finalize_graph_for_completion", END)
         graph.add_edge("query_evidence_links", "validate_round")
         graph.add_conditional_edges(
             "validate_round",
@@ -358,14 +369,24 @@ class KnowledgeGraphWorkflow:
 
     def _review_structure_round(self, state: WorkflowState, round_number: int) -> dict[str, Any]:
         context = state["request_context"]
-        self._emit_workflow_event(state, "structure_review", f"第 {round_number} 轮知识架构审查", "active", {"round": round_number})
-        self._set_all_structure_nodes_status(context, "reviewing")
+        review_type = self._structure_review_type(round_number)
+        review_label = self._structure_review_label(review_type)
+        self._emit_workflow_event(
+            state,
+            "structure_review",
+            f"{review_label}开始",
+            "active",
+            {"round": round_number, "review_type": review_type},
+        )
+        if review_type == "structure_coverage":
+            self._set_all_structure_nodes_status(context, "reviewing")
         review = self._run_structure_review(state, context, round_number)
         review["round"] = round_number
+        review["review_type"] = review_type
         review["reviewed_at"] = now_iso()
         rounds = self._merge_structure_review_round(state.get("structure_review_rounds", []), review)
         status = "passed" if review.get("is_complete") else "needs_repair"
-        if status == "passed":
+        if status == "passed" and review_type == "structure_coverage":
             self._set_all_structure_nodes_status(context, "approved")
         review_sync_after = self._sync_structure_graph_after_review(state, context)
         review["neo4j_sync_after_review"] = review_sync_after
@@ -380,6 +401,7 @@ class KnowledgeGraphWorkflow:
                 "event_type": "structure_review_completed",
                 "node_id": (context.structure_graph or {}).get("root_node_id", ""),
                 "status": status,
+                "review_type": review_type,
                 "path": "",
                 "timestamp": now_iso(),
             },
@@ -391,11 +413,19 @@ class KnowledgeGraphWorkflow:
         self._emit_workflow_event(
             state,
             "structure_review",
-            f"第 {round_number} 轮知识架构审查{'通过' if status == 'passed' else '发现缺口'}",
+            f"{review_label}{'通过' if status == 'passed' else '发现缺口'}",
             "completed" if status == "passed" else "blocked",
             review,
         )
         return updates
+
+    @staticmethod
+    def _structure_review_type(round_number: int) -> str:
+        return "structure_coverage" if round_number == 1 else "completion_readiness"
+
+    @staticmethod
+    def _structure_review_label(review_type: str) -> str:
+        return "结构覆盖审查" if review_type == "structure_coverage" else "执行准备度审查"
 
     @staticmethod
     def _merge_structure_review_round(rounds: list[dict[str, Any]], review: dict[str, Any]) -> list[dict[str, Any]]:
@@ -423,7 +453,15 @@ class KnowledgeGraphWorkflow:
     def _repair_structure_graph(self, state: WorkflowState, round_number: int) -> dict[str, Any]:
         context = state["request_context"]
         review = (state.get("structure_review_rounds") or [{}])[-1]
-        self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构自动修补", "active", {"round": round_number})
+        review_type = str(review.get("review_type") or self._structure_review_type(round_number))
+        repair_label = "结构覆盖修补" if review_type == "structure_coverage" else "执行准备度修补"
+        self._emit_workflow_event(
+            state,
+            "structure_repair",
+            f"{repair_label}开始",
+            "active",
+            {"round": round_number, "review_type": review_type},
+        )
         self._set_all_structure_nodes_status(context, "repairing")
         repaired_graph, applied_changes = self._run_structure_repair(context, review)
         context.structure_graph = repaired_graph
@@ -458,6 +496,7 @@ class KnowledgeGraphWorkflow:
         sync_result = self._sync_structure_graph_for_generation(state["task_id"], context)
         repair_entry = {
             "round": round_number,
+            "review_type": review_type,
             "applied_changes": applied_changes,
             "synced_to_neo4j": sync_result,
             "repaired_at": now_iso(),
@@ -467,24 +506,31 @@ class KnowledgeGraphWorkflow:
             "structure_graph": context.structure_graph,
             "structure_graph_sync": sync_result,
             "structure_review_status": review_status,
+            "readiness_repair_completed": round_number >= 2,
             "structure_repair_log": [*state.get("structure_repair_log", []), repair_entry],
             "graph_snapshot": self._local_graph_snapshot(context),
             "graph_event": {
                 "event_type": "structure_graph_repaired",
                 "node_id": context.structure_graph.get("root_node_id", ""),
                 "status": "repairing",
+                "review_type": review_type,
                 "path": "",
                 "timestamp": now_iso(),
             },
             "task_status": "running",
             "current_step": "structure_repair",
-            "current_action": f"第 {round_number} 轮知识架构已自动修补并同步 Neo4j，应用 {len(applied_changes)} 项变更。",
+            "current_action": f"{repair_label}已自动完成并同步 Neo4j，应用 {len(applied_changes)} 项变更。",
         }
         self._commit_state(state, updates)
-        self._emit_workflow_event(state, "structure_repair", f"第 {round_number} 轮知识架构已自动修补", "completed", repair_entry)
+        self._emit_workflow_event(state, "structure_repair", f"{repair_label}已完成", "completed", repair_entry)
         return updates
 
     def _enrich_graph_for_completion(self, state: WorkflowState) -> dict[str, Any]:
+        updates = self._prepare_graph_completion_context(state)
+        final_updates = self._finalize_graph_for_completion(state)
+        return {**updates, **final_updates}
+
+    def _prepare_graph_completion_context(self, state: WorkflowState) -> dict[str, Any]:
         context = state["request_context"]
         context.prompt_profile_version = PROMPT_PROFILE_VERSION
         if not context.knowledge_blueprint:
@@ -585,21 +631,37 @@ class KnowledgeGraphWorkflow:
         queue["final_status"] = "generated"
         queue_path = self._queue_store.save(domain_dir, queue)
         updates = {
+            "request_context": context,
+            "structure_graph": context.structure_graph,
+            "graph_snapshot": self._local_graph_snapshot(context),
             "knowledge_file_states": [],
             "generation_progress": queue["generation_status"],
             "task_queue_path": queue_path.as_posix(),
             "task_queue_snapshot": queue,
             "task_status": "running",
             "current_step": "graph_completion",
+            "current_action": "图谱补全文档上下文已准备，准备执行可查询与可治理准备度审查。",
+            "document_completion_status": state.get("document_completion_status", "not_requested"),
+            "full_document_status": state.get("full_document_status", "not_requested"),
+            "readiness_repair_completed": state.get("readiness_repair_completed", False),
+        }
+        self._commit_state(state, updates)
+        return updates
+
+    def _finalize_graph_for_completion(self, state: WorkflowState) -> dict[str, Any]:
+        queue = state.get("task_queue_snapshot") or {}
+        updates = {
+            "task_status": "graph_ready",
+            "current_step": "graph_completion",
             "current_action": "Neo4j 知识图谱已生成，等待点击“查询填充”联网补充证据。",
             "document_completion_status": state.get("document_completion_status", "not_requested"),
             "full_document_status": state.get("full_document_status", "not_requested"),
+            "generation_progress": state.get("generation_progress", queue.get("generation_status", {})),
             "messages": [
                 *state.get("messages", []),
                 AgentMessage(role="assistant", content="Neo4j 知识图谱已生成，下一步可点击“查询填充”补充可信证据链接。"),
             ],
         }
-        updates["task_status"] = "graph_ready"
         self._commit_state(state, updates)
         return updates
 
@@ -1451,6 +1513,7 @@ class KnowledgeGraphWorkflow:
     def _run_structure_review(self, state: WorkflowState, context: RequestContext, round_number: int) -> dict[str, Any]:
         chat_client = self._generation_chat_client or getattr(self._insight_engine, "_chat_client", None)
         knowledge_id = self._current_review_knowledge_id(context)
+        review_type = self._structure_review_type(round_number)
         neo4j_context = self._structure_review_context_from_neo4j(
             state=state,
             task_id=state["task_id"],
@@ -1458,36 +1521,55 @@ class KnowledgeGraphWorkflow:
             knowledge_id=knowledge_id,
         )
         previous_reviews = state.get("structure_review_rounds", [])
+        system_prompt = (
+            build_structure_coverage_review_system_prompt()
+            if review_type == "structure_coverage"
+            else build_completion_readiness_review_system_prompt()
+        )
+        review_payload: dict[str, Any] = {
+            "domain": context.domain,
+            "round": round_number,
+            "review_type": review_type,
+            "knowledge_id": knowledge_id,
+            "neo4j_review_context": neo4j_context,
+            "structure_graph": context.structure_graph,
+            "subdomains": context.subdomains,
+            "focus_points": context.focus_points,
+            "previous_review_rounds": previous_reviews,
+        }
+        if review_type == "structure_coverage":
+            review_payload["instruction"] = (
+                "基于当前知识 ID 的 Neo4j 相关节点/关系、本地结构图谱和上一轮 review 记录进行结构覆盖查漏补缺。"
+                "只输出 LLM 可继续自动补全的结构修补建议。"
+            )
+        else:
+            review_payload.update(
+                {
+                    "knowledge_blueprint": context.knowledge_blueprint,
+                    "task_queue_snapshot": state.get("task_queue_snapshot", {}),
+                    "generation_progress": state.get("generation_progress", {}),
+                    "instruction": (
+                        "基于已准备的图谱补全文档上下文、证据队列、建议路径和 Neo4j 节点状态进行执行准备度审查。"
+                        "优先输出证据需求、query 任务、路径、学习目标、来源优先级或 flow 分类相关的修补建议。"
+                    ),
+                }
+            )
         if chat_client is not None:
             try:
                 payload = chat_client.complete_json(
-                    system_prompt=build_structure_review_system_prompt(),
-                    user_prompt=json.dumps(
-                        {
-                            "domain": context.domain,
-                            "round": round_number,
-                            "knowledge_id": knowledge_id,
-                            "neo4j_review_context": neo4j_context,
-                            "structure_graph": context.structure_graph,
-                            "subdomains": context.subdomains,
-                            "focus_points": context.focus_points,
-                            "previous_review_rounds": previous_reviews,
-                            "instruction": (
-                                "基于当前知识 ID 的 Neo4j 相关节点/关系、本地结构图谱和上一轮 review 记录进行查漏补缺。"
-                                "只输出 LLM 可继续自动补全的结构修补建议。"
-                            ),
-                        },
-                        ensure_ascii=False,
-                    ),
+                    system_prompt=system_prompt,
+                    user_prompt=json.dumps(review_payload, ensure_ascii=False),
                 )
                 if payload:
                     review = self._normalize_structure_review(payload)
+                    review["review_type"] = review_type
                     review["knowledge_id"] = knowledge_id
                     review["neo4j_review_context"] = neo4j_context
                     return review
             except Exception as exc:
                 logger.warning("Structure review round %s failed for %s: %s", round_number, context.domain, exc)
         review = self._fallback_structure_review(context)
+        review["review_type"] = review_type
         review["knowledge_id"] = knowledge_id
         review["neo4j_review_context"] = neo4j_context
         return review
@@ -1515,13 +1597,25 @@ class KnowledgeGraphWorkflow:
             normalized_repairs = [] if _is_manual_review_suggestion(suggested_repairs) else [str(suggested_repairs)]
         else:
             normalized_repairs = []
-        return {
+        normalized = {
             "is_complete": is_complete,
             "status": "passed" if is_complete else "needs_repair",
             "missing_topics": missing_topics,
             "suggested_repairs": normalized_repairs,
             "reasoning": str(payload.get("reasoning", "")).strip() or ("知识架构审查通过。" if is_complete else "知识架构仍存在缺口。"),
         }
+        for key in (
+            "findings",
+            "readiness_score",
+            "missing_evidence_requirements",
+            "weak_query_targets",
+            "path_conflicts",
+            "document_context_gaps",
+            "source_priority_requirements",
+        ):
+            if key in payload:
+                normalized[key] = payload[key]
+        return normalized
 
     def _structure_review_context_from_neo4j(self, *, state: WorkflowState, task_id: str, context: RequestContext, knowledge_id: str) -> dict[str, Any]:
         if not knowledge_id:
@@ -1881,15 +1975,24 @@ class KnowledgeGraphWorkflow:
 
     @staticmethod
     def _route_after_structure_review(state: WorkflowState) -> str:
-        return "review_structure_round_2" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_1"
+        return "prepare_graph_completion_context" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_1"
+
+    @staticmethod
+    def _route_after_graph_completion_context(state: WorkflowState) -> str:
+        repair_log = state.get("structure_repair_log") or []
+        has_readiness_repair = any(
+            isinstance(item, dict) and (item.get("round") == 2 or item.get("review_type") == "completion_readiness")
+            for item in repair_log
+        )
+        return "finalize_graph_for_completion" if state.get("readiness_repair_completed") or has_readiness_repair else "review_structure_round_2"
 
     @staticmethod
     def _route_after_final_structure_review(state: WorkflowState) -> str:
-        return "enrich_graph_for_completion" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_2"
+        return "finalize_graph_for_completion" if state.get("structure_review_status") == "passed" else "repair_structure_graph_round_2"
 
     @staticmethod
     def _route_after_final_structure_repair(state: WorkflowState) -> str:
-        return "enrich_graph_for_completion"
+        return "prepare_graph_completion_context"
 
     def _finalize_structure_review_failure(self, state: WorkflowState) -> dict[str, Any]:
         review = (state.get("structure_review_rounds") or [{}])[-1]

@@ -24,7 +24,7 @@
 | 知识文档 Markdown 规范视为关键数据合同 | 它同时支撑本地存储、抽取、Neo4j 映射、质量检测与版本管理 |
 
 ## 2026-05-03 真实代码流程对齐结论
-- 当前真实主流程文档口径已从旧的“三路计划确认后并行采集，再统一写文档”演进为“意图识别 → 结构图谱 → Neo4j 任务图 → 两轮架构 review → 图谱补全 → 图谱级证据队列 → 单条证据写入 Neo4j → 治理质检 → 等待补全文档 / 可选研报”。
+- 当前真实主流程文档口径已从旧的“三路计划确认后并行采集，再统一写文档”演进为“意图识别 → 结构图谱 → Neo4j 任务图 → 结构覆盖审查 → 图谱上下文准备 → 执行准备度审查 → 图谱级证据队列 → 单条证据写入 Neo4j → 治理质检 → 等待补全文档 / 可选研报”。
 - `/tasks`、`/tasks/async` 与 intake confirm 已统一经过 `IntakeClarifier` 风格的归一化逻辑，`request_context` 会保留 `original_input`、`normalized_domain` 和 `confirmed=true`；概念解释类输入不能绕过 intake 直接创建知识库任务。
 - Neo4j 结构节点现在承担任务状态职责：`planned`、`generating`、`generated`、`evidence_pending`、`evidence_running`、`completed`、`failed` 是主状态流转；`is_generated`、`is_completed`、`generated_path`、证据计数与父节点 ID 是前端和治理层共享字段。
 - 证据回填不再等待所有队列完成。每个 query task 完成后应立即更新运行态队列、Neo4j 图谱节点和 SSE payload；Markdown contract 只在补全文档动作生成本地文档后参与一致性检查。
@@ -50,6 +50,12 @@
 - 可直接消费 `structure_graph.nodes/edges`、`request_context.knowledge_blueprint/navigation_targets` 和 `task_queue_snapshot.tasks`，从节点类型、父子层级、`metadata.learning_order`、证据完成状态和 `selected_link` 生成由浅入深的计划。
 - 当前任务状态 JSON 可以保存 `learning_plan`，这属于运行态/任务产物，不是本地知识 Markdown；因此不违反“默认不落知识文档”的约束。
 - 前端最小接入点是任务操作区新增按钮，结果区新增独立面板；Neo4j 节点详情可以继续保持图谱操作，不强塞学习计划生成逻辑。
+
+## 2026-05-05 两轮 Review 职责细分发现
+- 原两轮 review 使用同一 prompt 和输入结构，第二轮只是重复架构查漏，无法审查 `expected_evidence`、query 任务、建议路径和补全文档上下文是否可执行。
+- 现有 `enrich_graph_for_completion` 已能生成 `expected_evidence`、`suggested_relative_path`、`document_completion_status` 和运行态证据队列；把这部分拆为 `prepare_graph_completion_context` 并前移到第二轮前，可以让第二轮审查真实 readiness。
+- 第二轮 readiness review 不应覆盖已准备好的 `completion_ready` 节点状态；它只记录准备度审查结果，必要时触发 readiness repair。
+- 第二轮 repair 后需要重新 prepare 图谱上下文，再 finalize 到 `graph_ready`，避免修补后的图谱与证据队列、Neo4j 节点字段不一致。
 
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
 - 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
@@ -88,7 +94,7 @@
 - 第一批实施按“前半段主链路做实、后半段关键骨架接上”的方式推进。
 - 完整性评估为独立评估节点；Neo4j 失败采用 `graph_sync_pending` 异步补偿；版本冻结点在质量通过且文件图谱一致之后。
 - 核心模块边界固定为 Web Interface、Orchestrator、Context Builder、三大 Engine、Completeness Evaluator、Knowledge Document Writer、Post-Storage Pipeline、Report Branch。
-- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 两轮架构 review → 图谱补全 → 证据队列执行 → 后置治理 → 等待补全文档 / 可选研报”；“图谱证据写入”是补全文档前置动作，不在默认链路执行。
+- 当前任务数据流固定为“输入 → 真实意图识别 → 结构图谱规划 → Neo4j 任务图同步 → 结构覆盖审查 → 图谱上下文准备 → 执行准备度审查 → 证据队列执行 → 后置治理 → 等待补全文档 / 可选研报”；“图谱证据写入”是补全文档前置动作，不在默认链路执行。
 - 回流规则固定为 repair_flow 与 research_flow 两类，禁止仅返回模糊失败。
 - 质量状态固定为 `passed` / `repair_required` / `research_required`；达到最大轮次、补偿或最小新增阈值时转入 `needs_human_review`。
 

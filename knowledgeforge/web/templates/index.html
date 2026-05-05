@@ -88,16 +88,16 @@
           </article>
           <article class="flow-step" data-step-id="structure_review" tabindex="0" aria-describedby="review-flow-detail">
             <span>04</span>
-            <h3>架构Review</h3>
-            <p>执行两轮自动审查与修补。</p>
+            <h3>两段Review</h3>
+            <p>先审结构覆盖，再审执行准备度。</p>
             <div class="flow-step-detail" id="review-flow-detail" role="tooltip">
               <strong>触发条件</strong>
               <p>Neo4j 结构图谱已初始化，review 上下文可读取。</p>
               <strong>执行步骤</strong>
               <ol>
-                <li>结合 Neo4j 上下文检查结构完整性。</li>
-                <li>发现缺口时自动修补图谱并同步 Neo4j。</li>
-                <li>第二轮仍有缺口时继续自动修补，不等待人工恢复。</li>
+                <li>结构覆盖审查检查领域边界、层级、知识点和关系。</li>
+                <li>图谱补全文档上下文准备后，再审证据需求、查询任务和建议路径。</li>
+                <li>发现缺口时自动修补并同步 Neo4j，不等待人工恢复。</li>
               </ol>
             </div>
           </article>

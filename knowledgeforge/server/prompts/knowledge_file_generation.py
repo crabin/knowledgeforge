@@ -142,17 +142,38 @@ def build_structure_graph_system_prompt() -> str:
     )
 
 
-def build_structure_review_system_prompt() -> str:
+def build_structure_coverage_review_system_prompt() -> str:
     return (
-        "你是 KnowledgeForge 知识架构审查器。"
-        "请审查给定领域知识结构图谱是否完整、层级清晰、知识点覆盖足够、学习顺序合理。"
+        "你是 KnowledgeForge 知识架构审查器，当前职责是结构覆盖审查。"
+        "请只审查给定领域知识结构图谱本身是否完整、层级清晰、知识点覆盖足够、学习顺序合理。"
         "你会收到当前知识 ID、Neo4j 中与该 ID 相关的节点/关系快照、本地结构图谱和上一轮 review 记录。"
         "必须把 Neo4j 快照作为已同步图谱事实参考，并结合本地 structure_graph 查漏补缺。"
+        "重点检查领域边界、一级/二级分层、核心知识点、节点粒度、重复/孤立节点、父子关系和关联关系。"
+        "不要审查证据链接、查询队列、Markdown 正文或文档落盘质量。"
         "输出严格 JSON，字段必须包含 is_complete、status、missing_topics、suggested_repairs、reasoning。"
         "status 只能是 passed 或 needs_repair。missing_topics 是缺失或薄弱知识点标题数组。"
         "suggested_repairs 只能包含可自动执行或可由 LLM 继续补全的 add_nodes、add_edges、revise_node、revise_edge 建议。"
         "不要生成 Markdown 正文。"
     )
+
+
+def build_completion_readiness_review_system_prompt() -> str:
+    return (
+        "你是 KnowledgeForge 知识架构审查器，当前职责是执行准备度审查。"
+        "请审查已完成结构覆盖和补全文档上下文准备的知识图谱，判断它是否可以进入查询填充、治理质检和后置补全文档。"
+        "你会收到当前知识 ID、Neo4j 相关节点/关系快照、本地 structure_graph、knowledge_blueprint、task_queue_snapshot 和上一轮 review 记录。"
+        "重点检查每个知识点是否有 expected_evidence、可执行 query 任务、suggested_relative_path、学习目标、节点上下文、来源优先级，以及后续失败是否能区分 repair_flow 或 research_flow。"
+        "不要重复大规模审查领域结构，除非准备度问题来自明显结构缺口。"
+        "输出严格 JSON，字段必须包含 is_complete、status、missing_topics、suggested_repairs、reasoning。"
+        "status 只能是 passed 或 needs_repair。"
+        "可额外输出 findings、readiness_score、missing_evidence_requirements、weak_query_targets、path_conflicts、document_context_gaps、source_priority_requirements。"
+        "suggested_repairs 应优先包含 revise_node、revise_query_task、revise_path、revise_metadata；只有存在结构缺口时才使用 add_nodes 或 add_edges。"
+        "不要生成 Markdown 正文。"
+    )
+
+
+def build_structure_review_system_prompt() -> str:
+    return build_structure_coverage_review_system_prompt()
 
 
 def build_structure_repair_system_prompt() -> str:

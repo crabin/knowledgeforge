@@ -60,6 +60,10 @@ def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path)
     assert payload["task_timing"]["is_running"] is False
     assert len(payload["structure_review_rounds"]) == 2
     assert payload["structure_review_status"] == "passed"
+    assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
+        "structure_coverage",
+        "completion_readiness",
+    ]
     assert any(event["step_id"] == "structure_graph_ready" for event in payload["workflow_events"])
     assert any(event["step_id"] == "structure_review" for event in payload["workflow_events"])
     assert any(event["step_id"] == "graph_completion" for event in payload["workflow_events"])
@@ -179,22 +183,22 @@ def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, m
     review_calls = {"count": 0}
 
     def complete_json(self, *, system_prompt: str, user_prompt: str):
-        if "知识架构审查器" in system_prompt:
+        if "结构覆盖审查" in system_prompt:
             review_calls["count"] += 1
-            if review_calls["count"] == 1:
-                return {
-                    "is_complete": False,
-                    "status": "needs_repair",
-                    "missing_topics": ["评估指标"],
-                    "suggested_repairs": [{"type": "add_node", "title": "评估指标"}],
-                    "reasoning": "缺少评估指标知识点。",
-                }
+            return {
+                "is_complete": False,
+                "status": "needs_repair",
+                "missing_topics": ["评估指标"],
+                "suggested_repairs": [{"type": "add_node", "title": "评估指标"}],
+                "reasoning": "缺少评估指标知识点。",
+            }
+        if "执行准备度审查" in system_prompt:
             return {
                 "is_complete": True,
                 "status": "passed",
                 "missing_topics": [],
                 "suggested_repairs": [],
-                "reasoning": "修补后结构完整。",
+                "reasoning": "修补后结构已具备查询填充准备度。",
             }
         if "知识架构修补器" in system_prompt:
             return {}
@@ -217,6 +221,10 @@ def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, m
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
     assert [item["status"] for item in payload["structure_review_rounds"]] == ["needs_repair", "passed"]
+    assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
+        "structure_coverage",
+        "completion_readiness",
+    ]
     assert payload["structure_repair_log"]
     assert any(node["title"] == "评估指标" for node in payload["structure_graph"]["nodes"])
     assert any(
@@ -290,24 +298,37 @@ def test_structure_review_uses_neo4j_context_and_syncs_each_round(tmp_path: Path
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
     assert len(review_prompts) == 2
+    assert [prompt["review_type"] for prompt in review_prompts] == ["structure_coverage", "completion_readiness"]
     assert all(prompt["knowledge_id"] for prompt in review_prompts)
     assert all(prompt["neo4j_review_context"]["status"] == "ok" for prompt in review_prompts)
     assert review_prompts[0]["neo4j_review_context"]["nodes"][0]["title"] == "Neo4j 里的结构节点"
+    assert "task_queue_snapshot" not in review_prompts[0]
+    assert review_prompts[1]["task_queue_snapshot"]["tasks"]
+    assert review_prompts[1]["knowledge_blueprint"]
     assert review_prompts[1]["previous_review_rounds"][0]["neo4j_review_context"]["status"] == "ok"
-    assert sync_states.count("approved") >= 2
+    assert "approved" in sync_states
+    assert "completion_ready" in sync_states
 
 
 def test_second_round_structure_repair_continues_without_manual_resume(tmp_path: Path, monkeypatch) -> None:
     original_complete_json = OpenAICompatibleChatClient.complete_json
 
     def complete_json(self, *, system_prompt: str, user_prompt: str):
-        if "知识架构审查器" in system_prompt:
+        if "结构覆盖审查" in system_prompt:
+            return {
+                "is_complete": True,
+                "status": "passed",
+                "missing_topics": [],
+                "suggested_repairs": [],
+                "reasoning": "结构覆盖已通过。",
+            }
+        if "执行准备度审查" in system_prompt:
             return {
                 "is_complete": False,
                 "status": "needs_repair",
-                "missing_topics": ["核心边界"],
+                "missing_topics": ["证据需求"],
                 "suggested_repairs": [{"type": "manual_review"}],
-                "reasoning": "两轮后仍缺少核心边界。",
+                "reasoning": "准备度审查仍缺少证据需求。",
             }
         if "知识架构修补器" in system_prompt:
             return {}
@@ -330,6 +351,10 @@ def test_second_round_structure_repair_continues_without_manual_resume(tmp_path:
     payload = response.get_json()
     assert payload["task_status"] == "graph_ready"
     assert len(payload["structure_review_rounds"]) == 2
+    assert [item["review_type"] for item in payload["structure_review_rounds"]] == [
+        "structure_coverage",
+        "completion_readiness",
+    ]
     assert payload["structure_review_rounds"][-1]["suggested_repairs"] == []
     assert "人工" not in payload["current_action"]
     assert payload["current_step"] != "structure_review"
