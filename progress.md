@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-05 Neo4j 图谱详情栏独立滚动
+
+- 优化 Neo4j 实时知识图谱展示：桌面布局中图谱区域保持稳定高度，左侧 Neovis 画布填满容器且不随右侧详情内容滚动。
+- 右侧节点详情 / 检查结果栏改为独立纵向滚动，避免问题列表过长时拖动整个图谱面板。
+- 窄屏单列布局保留自然高度，并给详情栏设置独立最大高度，避免移动端内容挤压图谱。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`PYTHONPATH=. pytest -q tests/test_dashboard.py` 结果 `10 passed`。
+
 ## 2026-05-05 图谱叶子节点增量扩展接口
 
 - 开始实现点击 Neo4j 图谱叶子节点后继续扩展知识点的后端接口。
