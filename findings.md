@@ -45,6 +45,12 @@
 - 查询填充不能用长同步 HTTP 请求，否则浏览器会等接口结束才更新 summary、流程图和队列卡片；应先持久化 `running/evidence_link_query` 并返回 202，再由后台线程执行证据填充，前端立刻接入 SSE。
 - 图谱补全阶段的 `generation_progress` 实际表达的是图谱上下文 / 证据任务准备进度，不代表 Markdown 文件已生成；前端文案应避免“LLM 生成进度”“文件已生成”。
 
+## 2026-05-05 图谱驱动学习计划生成发现
+- 学习计划应作为 Neo4j/结构图谱的衍生产物，而不是默认主链路的新阶段；否则会打乱“graph_ready 后等待用户动作”的流程语义。
+- 可直接消费 `structure_graph.nodes/edges`、`request_context.knowledge_blueprint/navigation_targets` 和 `task_queue_snapshot.tasks`，从节点类型、父子层级、`metadata.learning_order`、证据完成状态和 `selected_link` 生成由浅入深的计划。
+- 当前任务状态 JSON 可以保存 `learning_plan`，这属于运行态/任务产物，不是本地知识 Markdown；因此不违反“默认不落知识文档”的约束。
+- 前端最小接入点是任务操作区新增按钮，结果区新增独立面板；Neo4j 节点详情可以继续保持图谱操作，不强塞学习计划生成逻辑。
+
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
 - 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
 - 当前图执行顺序是生成结构图谱后先同步 Neo4j；第一轮 review 如果直接通过，会进入第二轮，中间没有再同步 Neo4j；第一轮有缺口时会在 repair 后同步。

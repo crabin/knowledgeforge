@@ -1262,6 +1262,289 @@ class TaskService:
         merged["generated_at"] = now_iso()
         return merged, added_nodes, added_edges
 
+    def generate_learning_plan(self, task_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot generate a learning plan; wait for the current workflow to finish.")
+
+        payload = payload or {}
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        graph = self._task_structure_graph(stored, request_context)
+        if not graph.get("nodes"):
+            raise ValueError("knowledge graph is not ready for learning plan generation.")
+
+        plan = self._build_learning_plan_from_graph(
+            task_id=task_id,
+            request_context=request_context,
+            graph=graph,
+            queue=stored.get("task_queue_snapshot") or {},
+            profile=str(payload.get("profile") or "default"),
+        )
+        now = plan["generated_at"]
+        event = WorkflowStepEvent(
+            step_id="learning_plan_generation",
+            label="生成学习计划",
+            status="completed",
+            timestamp=now,
+            details={
+                "stage_count": len(plan.get("stages", [])),
+                "topic_count": plan.get("graph_summary", {}).get("topic_count", 0),
+                "evidence_ready_count": plan.get("evidence_summary", {}).get("ready_count", 0),
+            },
+        )
+        stored["learning_plan"] = plan
+        stored["current_step"] = "learning_plan_generation"
+        stored["current_action"] = f"已生成 {request_context.domain} 的由浅入深学习计划。"
+        stored["updated_at"] = now
+        stored.setdefault("workflow_events", []).append(event.to_dict())
+        with self._task_lock:
+            self._tasks[task_id] = stored
+        self._state_store.save(task_id, stored)
+        self._audit_logger.log(task_id, "learning_plan_generated", event.details)
+        self._audit_logger.log(task_id, "workflow_step", event.to_dict())
+        return self._attach_runtime_observability(
+            {
+                "task_id": task_id,
+                "domain": request_context.domain,
+                "status": "generated",
+                "learning_plan": plan,
+                "task": stored,
+            }
+        )
+
+    def _build_learning_plan_from_graph(
+        self,
+        *,
+        task_id: str,
+        request_context: RequestContext,
+        graph: dict[str, Any],
+        queue: dict[str, Any],
+        profile: str,
+    ) -> dict[str, Any]:
+        nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict)]
+        edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+        root_node_id = str(graph.get("root_node_id") or "")
+        if not root_node_id:
+            root_node_id = next((str(node.get("node_id", "")) for node in nodes if str(node.get("node_type", "")) == "domain"), "")
+        depth_by_id = self._learning_depth_by_node(nodes, edges, root_node_id)
+        queue_by_node = self._learning_queue_by_node(queue)
+        ordered_topics = sorted(
+            [node for node in nodes if str(node.get("node_type", "")) != "domain"],
+            key=lambda node: self._learning_node_sort_key(node, depth_by_id),
+        )
+        stage_defs = [
+            ("stage-1", "入门定位", "beginner", "先建立领域地图、基本术语和学习边界。"),
+            ("stage-2", "基础能力", "foundation", "掌握核心子领域的基础概念、前置关系和标准证据。"),
+            ("stage-3", "进阶结构", "intermediate", "串联关键方法、机制、实践边界和相邻知识点。"),
+            ("stage-4", "综合应用", "advanced", "围绕真实问题组织跨子领域练习，开始形成可迁移判断。"),
+            ("stage-5", "精通沉淀", "mastery", "复盘证据、构建个人知识图谱，并能独立评估争议与缺口。"),
+        ]
+        buckets: dict[str, list[dict[str, Any]]] = {stage_id: [] for stage_id, *_ in stage_defs}
+        max_depth = max(depth_by_id.values(), default=1)
+        for node in ordered_topics:
+            stage_id = self._learning_stage_for_node(node, depth_by_id, max_depth)
+            buckets[stage_id].append(node)
+
+        stages: list[dict[str, Any]] = []
+        for stage_index, (stage_id, title, level, objective) in enumerate(stage_defs, start=1):
+            stage_nodes = buckets[stage_id]
+            if not stage_nodes and stage_id not in {"stage-1", "stage-5"}:
+                continue
+            topics = [self._learning_topic_entry(node, depth_by_id, queue_by_node) for node in stage_nodes[:8]]
+            if stage_id == "stage-1" and not topics:
+                topics = [
+                    {
+                        "node_id": root_node_id,
+                        "title": f"{request_context.domain} 领域总览",
+                        "node_type": "domain",
+                        "subdomain": "",
+                        "relative_path": "README.md",
+                        "learning_role": "领域总览",
+                        "depth": 0,
+                        "evidence_status": "pending",
+                        "evidence": [],
+                    }
+                ]
+            if stage_id == "stage-5" and not topics:
+                topics = [self._learning_topic_entry(node, depth_by_id, queue_by_node) for node in ordered_topics[-5:]]
+            stages.append(
+                {
+                    "stage_id": stage_id,
+                    "order": stage_index,
+                    "title": title,
+                    "level": level,
+                    "objective": objective,
+                    "estimated_effort": self._learning_estimated_effort(stage_index, len(topics)),
+                    "focus_subdomains": self._learning_focus_subdomains(topics, request_context),
+                    "topics": topics,
+                    "practice": self._learning_practice_for_stage(stage_index, request_context.domain),
+                    "checkpoint": self._learning_checkpoint_for_stage(stage_index, request_context.domain),
+                }
+            )
+
+        ready_count = 0
+        pending_count = 0
+        for tasks in queue_by_node.values():
+            if any(str(task.get("selected_link", "")).strip() or str(task.get("status", "")).lower() in {"completed", "verified"} for task in tasks):
+                ready_count += 1
+            else:
+                pending_count += 1
+        return {
+            "task_id": task_id,
+            "domain": request_context.domain,
+            "profile": profile,
+            "generated_at": now_iso(),
+            "source": "structure_graph_and_evidence_queue",
+            "mastery_target": f"能够围绕 {request_context.domain} 独立解释知识结构、验证证据、解决综合问题并持续维护个人知识图谱。",
+            "graph_summary": {
+                "topic_count": len(ordered_topics),
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "max_depth": max_depth,
+            },
+            "evidence_summary": {
+                "ready_count": ready_count,
+                "pending_count": pending_count,
+                "note": "已填充证据会作为优先阅读材料；未填充证据的主题应先完成查询填充或人工补证。",
+            },
+            "stages": stages,
+            "milestones": [
+                {"title": "能画出领域结构图", "after_stage": "stage-1"},
+                {"title": "能解释核心子领域和前置关系", "after_stage": "stage-2"},
+                {"title": "能基于证据比较方法与边界", "after_stage": "stage-3"},
+                {"title": "能完成跨主题项目或案例复盘", "after_stage": "stage-4"},
+                {"title": "能维护和扩展自己的知识图谱", "after_stage": "stage-5"},
+            ],
+            "source_traceability": {
+                "structure_graph_generated_at": graph.get("generated_at", ""),
+                "queue_final_status": queue.get("final_status", ""),
+                "task_queue_path": queue.get("queue_path", ""),
+            },
+        }
+
+    @staticmethod
+    def _learning_depth_by_node(nodes: list[dict[str, Any]], edges: list[dict[str, Any]], root_node_id: str) -> dict[str, int]:
+        child_map: dict[str, list[str]] = {}
+        for edge in edges:
+            if str(edge.get("edge_type", "CONTAINS")) != "CONTAINS":
+                continue
+            child_map.setdefault(str(edge.get("from_node_id", "")), []).append(str(edge.get("to_node_id", "")))
+        depth_by_id = {root_node_id: 0} if root_node_id else {}
+        queue_ids = [root_node_id] if root_node_id else []
+        while queue_ids:
+            current = queue_ids.pop(0)
+            for child_id in child_map.get(current, []):
+                if child_id in depth_by_id:
+                    continue
+                depth_by_id[child_id] = depth_by_id.get(current, 0) + 1
+                queue_ids.append(child_id)
+        for node in nodes:
+            node_id = str(node.get("node_id", ""))
+            if node_id and node_id not in depth_by_id:
+                depth_by_id[node_id] = 1
+        return depth_by_id
+
+    @staticmethod
+    def _learning_queue_by_node(queue: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for task in queue.get("tasks", []):
+            if not isinstance(task, dict):
+                continue
+            node_id = str(task.get("target_node_id") or task.get("structure_node_id") or "").strip()
+            if node_id:
+                grouped.setdefault(node_id, []).append(task)
+        return grouped
+
+    @staticmethod
+    def _learning_node_sort_key(node: dict[str, Any], depth_by_id: dict[str, int]) -> tuple[int, int, str]:
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        raw_order = metadata.get("learning_order") or node.get("learning_order")
+        try:
+            order = int(raw_order)
+        except (TypeError, ValueError):
+            order = 999
+        type_order = {"section": 0, "subtopic": 1, "index": 2, "article": 3}.get(str(node.get("node_type", "")), 4)
+        return (depth_by_id.get(str(node.get("node_id", "")), 1), order, f"{type_order}:{node.get('title', '')}")
+
+    @staticmethod
+    def _learning_stage_for_node(node: dict[str, Any], depth_by_id: dict[str, int], max_depth: int) -> str:
+        node_type = str(node.get("node_type", ""))
+        depth = depth_by_id.get(str(node.get("node_id", "")), 1)
+        if node_type in {"section", "subtopic", "index"} or depth <= 1:
+            return "stage-2"
+        if depth <= max(2, max_depth // 2):
+            return "stage-3"
+        return "stage-4"
+
+    @staticmethod
+    def _learning_topic_entry(
+        node: dict[str, Any],
+        depth_by_id: dict[str, int],
+        queue_by_node: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        node_id = str(node.get("node_id", ""))
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        tasks = queue_by_node.get(node_id, [])
+        evidence = [
+            {
+                "task_id": str(task.get("task_id", "")),
+                "claim_or_gap": str(task.get("claim_or_gap", "")),
+                "selected_link": str(task.get("selected_link", "")),
+                "source_kind": str(task.get("source_kind", "")),
+                "status": str(task.get("status", "")),
+            }
+            for task in tasks[:3]
+        ]
+        evidence_status = "ready" if any(item.get("selected_link") or item.get("status") in {"completed", "verified"} for item in evidence) else "pending"
+        return {
+            "node_id": node_id,
+            "title": str(node.get("title", "")),
+            "node_type": str(node.get("node_type", "")),
+            "subdomain": str(metadata.get("subdomain", "")),
+            "relative_path": str(node.get("relative_path", "")),
+            "learning_role": str(metadata.get("learning_role") or node.get("doc_type") or "知识点"),
+            "depth": depth_by_id.get(node_id, 1),
+            "evidence_status": evidence_status,
+            "evidence": evidence,
+        }
+
+    @staticmethod
+    def _learning_focus_subdomains(topics: list[dict[str, Any]], request_context: RequestContext) -> list[str]:
+        subdomains = [str(topic.get("subdomain", "")).strip() for topic in topics if str(topic.get("subdomain", "")).strip()]
+        if subdomains:
+            return list(dict.fromkeys(subdomains))[:5]
+        return request_context.subdomains[:5]
+
+    @staticmethod
+    def _learning_estimated_effort(stage_index: int, topic_count: int) -> str:
+        base_hours = [2, 6, 10, 14, 18][min(stage_index - 1, 4)]
+        return f"{base_hours + max(0, topic_count - 3) * 2} 小时左右"
+
+    @staticmethod
+    def _learning_practice_for_stage(stage_index: int, domain: str) -> str:
+        practices = {
+            1: f"用自己的话画出 {domain} 的一页领域地图，并标注最不确定的 3 个概念。",
+            2: "为每个核心子领域写一段定义、一个例子和一个前置知识说明。",
+            3: "选择两个相邻知识点，基于证据比较它们的适用场景、限制和常见误解。",
+            4: "完成一个跨子领域小项目或案例复盘，把用到的节点和证据链接回图谱。",
+            5: "独立扩展一个叶子节点，补证据、做质量判断，并更新个人学习复盘。",
+        }
+        return practices.get(stage_index, "完成阶段复盘并补齐证据缺口。")
+
+    @staticmethod
+    def _learning_checkpoint_for_stage(stage_index: int, domain: str) -> str:
+        checkpoints = {
+            1: "能说明这个领域是什么、不是什么，以及为什么要按当前图谱顺序学习。",
+            2: "能解释核心术语和子领域之间的包含/前置关系。",
+            3: "能引用证据说明关键方法的边界，而不是只背结论。",
+            4: "能把多个知识点组合成解决问题的路径。",
+            5: f"能围绕 {domain} 设计学习路线、审查证据质量，并指导他人入门。",
+        }
+        return checkpoints.get(stage_index, "能完成阶段目标并说明证据依据。")
+
     def generate_report(self, task_id: str) -> dict[str, Any] | None:
         frozen_payload = self._frozen_store.load(task_id)
         if frozen_payload is None:

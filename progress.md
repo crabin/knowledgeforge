@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-05 图谱驱动学习计划生成
+
+- 新增 `POST /tasks/{task_id}/learning-plan`，基于结构图谱、节点层级、学习顺序、细分领域、证据队列和路径上下文生成由浅入深到精通的学习计划。
+- 学习计划保存为任务状态 `learning_plan` 衍生产物；不改变默认主链路，不提前写入本地知识 Markdown，也不新增 ChromaDB 等存储依赖。
+- 前端任务操作区新增“生成学习计划”按钮，响应区新增“图谱学习计划”面板，展示阶段目标、主题、证据状态、练习和检查点。
+- 验证：`python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py knowledgeforge/orchestrator/state.py` 通过；`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run ruff check knowledgeforge/services/task_service.py knowledgeforge/server/api.py tests/test_dashboard.py` 通过；`PYTHONPATH=. pytest -q tests/test_dashboard.py` 结果 `11 passed`；`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 结果 `56 passed`。
+
 ## 2026-05-05 Neo4j 压缩边显示开关
 
 - 在 Neovis 图谱头部新增“显示全部边 / 收起压缩边”按钮，默认保持当前的骨架视图。

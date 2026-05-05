@@ -347,6 +347,17 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "task not found"}), 404
         return jsonify(task), 200
 
+    @app.post("/tasks/<task_id>/learning-plan")
+    def generate_learning_plan(task_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.generate_learning_plan(task_id, payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
     return app
 
 

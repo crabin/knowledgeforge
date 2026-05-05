@@ -25,6 +25,7 @@ const taskIdInput = document.querySelector("#task-id");
 const taskUpdateInput = document.querySelector("#task-update-payload");
 const queueOutput = document.querySelector("#agent-plan-output");
 const queuePanelHint = document.querySelector("#plan-panel-hint");
+const learningPlanOutput = document.querySelector("#learning-plan-output");
 const tokenUsageOutput = document.querySelector("#token-usage-output");
 const tokenFloat = document.querySelector("#token-float");
 const tokenFloatToggle = document.querySelector("#token-float-toggle");
@@ -90,6 +91,7 @@ function showPayload(payload) {
   renderSummary(payload);
   renderWorkflowMap(payload);
   renderQueuePanel(payload);
+  renderLearningPlan(payload);
   renderTokenUsage(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
@@ -105,6 +107,7 @@ function showError(error) {
   renderSummary(payload);
   renderWorkflowMap(payload);
   renderQueuePanel(payload);
+  renderLearningPlan(payload);
   renderTokenUsage(payload);
   renderExecutionLog(payload);
   renderTaskList(payload);
@@ -1863,6 +1866,62 @@ function renderQueuePanel(payload) {
   queueOutput.innerHTML = cards.join("");
 }
 
+function renderLearningPlan(payload) {
+  if (!learningPlanOutput) return;
+  const plan = payload.learning_plan || payload.task?.learning_plan || {};
+  const stages = Array.isArray(plan.stages) ? plan.stages : [];
+  if (!stages.length) {
+    learningPlanOutput.innerHTML = '<div class="empty-state">暂无学习计划。点击“生成学习计划”后会按图谱层级生成路线。</div>';
+    return;
+  }
+  const evidence = plan.evidence_summary || {};
+  const header = `
+    <article class="learning-plan-overview">
+      <strong>${escapeHtml(plan.domain || "知识领域")} 学习路线</strong>
+      <p>${escapeHtml(plan.mastery_target || "围绕当前知识图谱完成由浅入深学习。")}</p>
+      <div class="learning-plan-meta">
+        <span>主题 ${escapeHtml(String(plan.graph_summary?.topic_count || 0))}</span>
+        <span>证据就绪 ${escapeHtml(String(evidence.ready_count || 0))}</span>
+        <span>待补证据 ${escapeHtml(String(evidence.pending_count || 0))}</span>
+      </div>
+    </article>`;
+  const stageCards = stages
+    .map((stage) => {
+      const topics = Array.isArray(stage.topics) ? stage.topics : [];
+      const topicItems = topics.slice(0, 8).map((topic) => renderLearningPlanTopic(topic)).join("");
+      const focus = Array.isArray(stage.focus_subdomains) ? stage.focus_subdomains.filter(Boolean).join("、") : "";
+      return `
+        <article class="learning-stage-card">
+          <div class="learning-stage-head">
+            <span>${escapeHtml(String(stage.order || ""))}</span>
+            <div>
+              <strong>${escapeHtml(stage.title || "学习阶段")}</strong>
+              <small>${escapeHtml([stage.level, stage.estimated_effort].filter(Boolean).join(" · "))}</small>
+            </div>
+          </div>
+          <p>${escapeHtml(stage.objective || "")}</p>
+          ${focus ? `<div class="learning-focus">细分领域：${escapeHtml(focus)}</div>` : ""}
+          <ul class="learning-topic-list">${topicItems || "<li>暂无明确主题，先复盘前一阶段产物。</li>"}</ul>
+          <div class="learning-stage-task"><b>练习</b>${escapeHtml(stage.practice || "")}</div>
+          <div class="learning-stage-task"><b>检查点</b>${escapeHtml(stage.checkpoint || "")}</div>
+        </article>`;
+    })
+    .join("");
+  learningPlanOutput.innerHTML = `${header}${stageCards}`;
+}
+
+function renderLearningPlanTopic(topic) {
+  const evidenceStatus = topic.evidence_status === "ready" ? "证据已就绪" : "待补证据";
+  const link = (Array.isArray(topic.evidence) ? topic.evidence : []).find((item) => item.selected_link)?.selected_link || "";
+  return `
+    <li>
+      <strong>${escapeHtml(topic.title || topic.node_id || "知识点")}</strong>
+      <span>${escapeHtml([topic.learning_role, topic.relative_path].filter(Boolean).join(" · "))}</span>
+      <em class="${topic.evidence_status === "ready" ? "ready" : "pending"}">${escapeHtml(evidenceStatus)}</em>
+      ${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noreferrer">证据来源</a>` : ""}
+    </li>`;
+}
+
 function summarizeGenerationProgress(payload) {
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
@@ -2323,6 +2382,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
       "fill-evidence": [`/tasks/${encodeURIComponent(taskId)}/evidence/fill`, "POST"],
+      "learning-plan": [`/tasks/${encodeURIComponent(taskId)}/learning-plan`, "POST"],
       "complete-documents": [`/tasks/${encodeURIComponent(taskId)}/documents/complete`, "POST"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
       logs: [`/tasks/${encodeURIComponent(taskId)}/logs`, "GET"],
@@ -2333,7 +2393,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if (activeTaskId && ["get", "queue", "logs", "resume", "fill-evidence", "complete-documents"].includes(action)) {
+      if (activeTaskId && ["get", "queue", "logs", "resume", "fill-evidence", "learning-plan", "complete-documents"].includes(action)) {
         scheduleNeo4jGraphRefresh(activeTaskId, { force: true });
       }
       if (["get", "queue", "logs", "resume", "fill-evidence"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {

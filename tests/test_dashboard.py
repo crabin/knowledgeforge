@@ -57,12 +57,17 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert body.index('data-step-id="evidence_link_recorded"') < body.index('data-step-id="document_completion"')
     assert "data-task-action=\"complete-documents\"" in body
     assert "data-task-action=\"fill-evidence\"" in body
+    assert "data-task-action=\"learning-plan\"" in body
+    assert "图谱学习计划" in body
+    assert "由浅入深直到精通" in body
     assert "产出模式" not in body
     dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
     assert "repair_required: \"待系统修复\"" in dashboard_js
     assert "图谱上下文进度" in dashboard_js
     assert "图谱上下文已准备" in dashboard_js
     assert "[\"get\", \"queue\", \"logs\", \"resume\", \"fill-evidence\"]" in dashboard_js
+    assert "/learning-plan" in dashboard_js
+    assert "function renderLearningPlan" in dashboard_js
     assert "LLM 生成进度" not in dashboard_js
     assert "文件已生成" not in dashboard_js
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
@@ -94,6 +99,86 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert ".neo4j-inspector-edge.is-clickable" in dashboard_css
     assert ".neo4j-inspector-relation-group" in dashboard_css
     assert ".neo4j-toggle-edges" in dashboard_css
+    assert ".learning-stage-card" in dashboard_css
+
+
+def test_learning_plan_endpoint_generates_graph_based_plan(tmp_path: Path) -> None:
+    task_root = tmp_path / "runtime" / "tasks"
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=task_root,
+            intake_session_root=tmp_path / "runtime" / "intake",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    structure_graph = {
+        "root_node_id": "domain_ai",
+        "generated_at": "2026-05-05T10:00:00+09:00",
+        "nodes": [
+            {"node_id": "domain_ai", "title": "AI", "node_type": "domain", "relative_path": "README.md", "metadata": {}},
+            {"node_id": "sub_ml", "title": "Machine Learning", "node_type": "subtopic", "relative_path": "ml/README.md", "parent_node_id": "domain_ai", "metadata": {"subdomain": "Machine Learning", "learning_order": 1}},
+            {"node_id": "article_supervised", "title": "Supervised Learning", "node_type": "article", "relative_path": "ml/supervised.md", "parent_node_id": "sub_ml", "metadata": {"subdomain": "Machine Learning", "learning_role": "核心知识点"}},
+        ],
+        "edges": [
+            {"from_node_id": "domain_ai", "edge_type": "CONTAINS", "to_node_id": "sub_ml"},
+            {"from_node_id": "sub_ml", "edge_type": "CONTAINS", "to_node_id": "article_supervised"},
+        ],
+    }
+    task_root.mkdir(parents=True, exist_ok=True)
+    task_root.joinpath("task-learning.json").write_text(
+        json.dumps(
+            {
+                "task_id": "task-learning",
+                "task_status": "graph_ready",
+                "request_context": {
+                    "domain": "AI",
+                    "subdomains": ["Machine Learning"],
+                    "time_window": "",
+                    "focus_points": [],
+                    "constraints": [],
+                    "initial_strategy": [],
+                    "confirmed": True,
+                    "task_id": "task-learning",
+                    "structure_graph": structure_graph,
+                    "knowledge_blueprint": [],
+                    "navigation_targets": [],
+                    "required_files": [],
+                },
+                "structure_graph": structure_graph,
+                "task_queue_snapshot": {
+                    "final_status": "generated",
+                    "tasks": [
+                        {
+                            "task_id": "q1",
+                            "target_node_id": "article_supervised",
+                            "claim_or_gap": "监督学习定义",
+                            "selected_link": "https://example.com/supervised-learning",
+                            "source_kind": "official documentation",
+                            "status": "completed",
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    client = app.test_client()
+
+    response = client.post("/tasks/task-learning/learning-plan")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    plan = payload["learning_plan"]
+    assert plan["domain"] == "AI"
+    assert plan["source"] == "structure_graph_and_evidence_queue"
+    assert plan["evidence_summary"]["ready_count"] == 1
+    assert [stage["title"] for stage in plan["stages"]][0] == "入门定位"
+    assert any(topic["title"] == "Supervised Learning" and topic["evidence_status"] == "ready" for stage in plan["stages"] for topic in stage["topics"])
+    saved = json.loads(task_root.joinpath("task-learning.json").read_text(encoding="utf-8"))
+    assert saved["learning_plan"]["mastery_target"].startswith("能够围绕 AI")
 
 
 def test_dashboard_does_not_break_status_endpoints(tmp_path: Path) -> None:

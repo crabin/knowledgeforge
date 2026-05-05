@@ -284,6 +284,7 @@
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
               <button type="button" data-task-action="fill-evidence">查询填充</button>
+              <button type="button" data-task-action="learning-plan">生成学习计划</button>
               <button type="button" data-task-action="complete-documents">补全文档</button>
               <button type="button" data-task-action="logs">查看日志</button>
               <button type="button" data-task-action="report">生成研报</button>
@@ -323,6 +324,15 @@
           </div>
           <div id="agent-plan-output" class="plan-full-list">
             <div class="empty-state">任务启动后会显示文件生成进度和查询队列状态。</div>
+          </div>
+        </section>
+        <section class="learning-plan-panel trace-panel" aria-labelledby="learning-plan-title">
+          <div class="plan-panel-head">
+            <h3 id="learning-plan-title">图谱学习计划</h3>
+            <span class="plan-panel-hint">由浅入深直到精通</span>
+          </div>
+          <div id="learning-plan-output" class="learning-plan-list">
+            <div class="empty-state">点击“生成学习计划”后，会基于知识图谱、细分领域和证据状态生成路线。</div>
           </div>
         </section>
         <div class="trace-grid" aria-label="执行日志与任务列表">

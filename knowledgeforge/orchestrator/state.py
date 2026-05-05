@@ -38,6 +38,7 @@ class WorkflowState(TypedDict, total=False):
     structure_repair_log: list[dict]
     graph_snapshot: dict
     graph_event: dict
+    learning_plan: dict
     file_update: dict
     current_step: str
     current_action: str
