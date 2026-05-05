@@ -684,8 +684,8 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const generatingCount = counts.generating + counts.generated + counts.completion_ready + counts.document_generating;
   const evidenceCount = counts.evidence_pending + counts.evidence_running + counts.link_querying;
   const completedCount = counts.completed + counts.approved + counts.documented + counts.link_verified;
-  const issueNodeIds = getNeo4jIssueNodeIds(state.neo4jIssueInspection);
-  const visibleNodes = selectNeo4jMapNodes(nodes, issueNodeIds);
+  const visibleIssueNodeIds = getNeo4jIssueNodeIds(state.neo4jIssueInspection, nodes);
+  const visibleNodes = selectNeo4jMapNodes(nodes, visibleIssueNodeIds);
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
   const visibleEdges = buildNeo4jReadableEdges(visibleNodes, edges).filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
@@ -720,7 +720,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     edges: visibleEdges,
     selectedNodeId: selectedNode?.id || "",
     connectedNodeIds,
-    issueNodeIds,
+    issueNodeIds: visibleIssueNodeIds,
     previousNodeIds,
     previousEdgeIds,
     graph,
@@ -763,9 +763,14 @@ function chooseDefaultNeo4jSelectedNode(nodes) {
   return [...nodes].sort((a, b) => getNeo4jHtmlNodePriority(a) - getNeo4jHtmlNodePriority(b) || compareNeo4jNodesForLayout(a, b))[0];
 }
 
-function getNeo4jIssueNodeIds(inspection) {
+function getNeo4jIssueNodeIds(inspection, nodes = []) {
   const issues = Array.isArray(inspection?.issues) ? inspection.issues : [];
-  return new Set(issues.map((issue) => String(issue.graph_id || "")).filter(Boolean));
+  const graphNodeIds = new Set(nodes.map((node) => node.id));
+  return new Set(
+    issues
+      .map((issue) => String(issue.graph_id || ""))
+      .filter((graphId) => graphId && (!graphNodeIds.size || graphNodeIds.has(graphId)))
+  );
 }
 
 function selectNeo4jMapNodes(nodes, issueNodeIds = new Set()) {
@@ -1188,7 +1193,7 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
         <h3>相邻关系</h3>
         ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
       </div>
-      ${renderNeo4jGraphIssueList(state.neo4jIssueInspection, node.id)}
+      ${renderNeo4jGraphIssueList(state.neo4jIssueInspection, node.id, nodes)}
     </aside>`;
 }
 
@@ -1318,9 +1323,13 @@ function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
   });
 }
 
-function renderNeo4jGraphIssueList(inspection, selectedNodeId = "") {
+function renderNeo4jGraphIssueList(inspection, selectedNodeId = "", nodes = []) {
   if (!inspection) return "";
-  const issues = Array.isArray(inspection.issues) ? inspection.issues : [];
+  const graphNodeIds = new Set(nodes.map((node) => node.id));
+  const issues = (Array.isArray(inspection.issues) ? inspection.issues : []).filter((issue) => {
+    const graphId = String(issue.graph_id || "");
+    return graphId && (!graphNodeIds.size || graphNodeIds.has(graphId));
+  });
   if (!issues.length) {
     return `
       <div class="neo4j-issue-panel">

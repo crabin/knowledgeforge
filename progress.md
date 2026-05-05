@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-05 Neo4j 问题列表与红点同步
+
+- 修复问题列表残留：右侧“问题知识点”现在会按当前 Neo4j 图谱快照的 `graph.nodes` 过滤，只展示左侧图中真实存在、也能被标红的问题节点。
+- 红色高亮集合和右侧列表使用同一套过滤后的 `graph_id` 集合，避免左侧没有红点但右侧仍显示旧问题项。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run pytest -q tests/test_dashboard.py tests/test_graph_client.py` 结果 `11 passed`。
+
 ## 2026-05-05 Neo4j 问题节点去重
 
 - 修复问题知识点检查结果按“匹配结构关系”重复返回的情况：同一个噪声节点命中多个结构节点时，后端现在按 `graph_id` 聚合，只在结果里保留一条问题节点记录。
