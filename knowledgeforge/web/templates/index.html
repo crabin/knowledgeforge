@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">Knowledge Engineering Console</p>
         <h1>KnowledgeForge 功能工作台</h1>
-        <p class="lead">从领域输入、Neo4j 知识架构图谱、两轮架构审查、图谱补全、证据链接到质量回流和后置补全文档的一站式演示面板。</p>
+        <p class="lead">先生成完整 Neo4j 知识架构图谱，再由“查询填充”联网补充证据，补全文档与研报作为后置可选动作。</p>
       </div>
       <div class="status-stack" aria-label="系统状态">
         <div class="status-pill">
@@ -118,11 +118,11 @@
           </article>
           <article class="flow-step" data-step-id="evidence_link_query" tabindex="0" aria-describedby="evidence-query-flow-detail">
             <span>06</span>
-            <h3>证据链接</h3>
-            <p>只记录官方或高公信力链接。</p>
+            <h3>查询填充</h3>
+            <p>用户触发后联网补充可信证据。</p>
             <div class="flow-step-detail" id="evidence-query-flow-detail" role="tooltip">
               <strong>触发条件</strong>
-              <p>图谱证据任务队列已生成。</p>
+              <p>Neo4j 知识图谱已完整生成，用户点击“查询填充”。</p>
               <strong>执行步骤</strong>
               <ol>
                 <li>逐条查询官方、标准、论文或高可信来源。</li>
@@ -283,6 +283,7 @@
               <button type="button" data-task-action="queue">查看队列</button>
               <button type="button" data-task-action="resume">恢复任务</button>
               <button type="button" data-task-action="frozen">查看冻结版本</button>
+              <button type="button" data-task-action="fill-evidence">查询填充</button>
               <button type="button" data-task-action="complete-documents">补全文档</button>
               <button type="button" data-task-action="logs">查看日志</button>
               <button type="button" data-task-action="report">生成研报</button>

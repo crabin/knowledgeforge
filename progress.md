@@ -770,3 +770,24 @@
 - 结果：`51 passed in 18.58s`
 - 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
 - 结果：通过。
+
+## 2026-05-05 图谱生成与查询填充分步执行
+
+- 调整默认任务工作流：完成结构图谱生成、Neo4j 同步、两轮架构 review 和图谱补全后，任务进入 `graph_ready`，不再自动联网查询证据。
+- 新增 `POST /tasks/{task_id}/evidence/fill`，作为“查询填充”动作；触发后执行可信链接查询、轮次验证、治理质检和 Neo4j 图谱证据写入。
+- 前端任务操作区新增“查询填充”按钮，流程图第 06 步改为用户触发的“查询填充”，避免把证据为 0 误表达为异常。
+- 补全文档仍要求查询填充与治理通过后才能执行；研报仍要求冻结版本。
+- 同步更新 `docs/项目需求.md`、`docs/流程执行文档.md`、`task_plan.md`、`findings.md` 与 workflow/dashboard 回归测试。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/orchestrator/graph.py knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`54 passed in 15.81s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 初次结果：`170 passed, 1 failed`，失败用例仍按旧口径期望 workflow.run 直接完成证据查询。
+- 修复后重跑 `PYTHONPATH=. pytest -q`
+- 结果：`171 passed in 27.94s`

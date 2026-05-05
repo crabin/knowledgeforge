@@ -31,9 +31,11 @@ from knowledgeforge.models import (
     ClarificationResult,
     EnginePlan,
     EnginePlanItem,
+    EngineRunResult,
     FrozenVersionRecord,
     IntakeSession,
     RequestContext,
+    SourceRecord,
     WorkflowStepEvent,
     normalize_completion_mode,
 )
@@ -1273,6 +1275,59 @@ class TaskService:
         )
         return report.to_dict()
 
+    def fill_evidence(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot start evidence filling.")
+        if stored.get("task_status") == "verified":
+            return stored
+        if stored.get("task_status") != "graph_ready":
+            raise ValueError("knowledge graph is not ready for evidence filling yet; finish graph generation first.")
+        queue = stored.get("task_queue_snapshot") or {}
+        if not queue.get("tasks"):
+            raise ValueError("knowledge graph has no evidence tasks to fill.")
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content="用户点击查询填充，开始联网补充 Neo4j 知识图谱证据。",
+                metadata={"trigger": "manual_evidence_fill"},
+            )
+        )
+        fill_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": int(stored.get("round_number", 1)),
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "passed"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "workflow_events": stored.get("workflow_events", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_queue_path": stored.get("task_queue_path", ""),
+            "task_queue_snapshot": queue,
+            "agent_outputs": self._deserialize_agent_outputs(stored.get("agent_outputs", {})),
+            "task_status": "running",
+            "current_step": "evidence_link_query",
+            "current_action": "查询填充已启动。",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", "")})
+        with token_tracking_context(task_id):
+            final_state = self._workflow.fill_evidence(fill_state)
+        return self._persist_and_serialize(final_state, "evidence_fill_completed")
+
     def complete_documents(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)
         if stored is None:
@@ -1462,6 +1517,9 @@ class TaskService:
             )
             return stored
 
+        if stored.get("task_status") in {"research_required", "repair_required"}:
+            return self._resume_evidence_fill(task_id, stored, next_round=round_number + 1)
+
         request_context = self._deserialize_request_context(stored["request_context"])
         request_context.task_id = task_id
         previous_status = str(stored.get("task_status", "unknown"))
@@ -1550,6 +1608,52 @@ class TaskService:
         )
         with token_tracking_context(task_id):
             final_state = self._workflow.continue_after_structure_repair(resumed_state)
+        return self._persist_and_serialize(final_state, "task_completed")
+
+    def _resume_evidence_fill(self, task_id: str, stored: dict[str, Any], *, next_round: int) -> dict[str, Any]:
+        request_context = self._deserialize_request_context(stored["request_context"])
+        request_context.task_id = task_id
+        previous_status = str(stored.get("task_status", "unknown"))
+        messages = self._deserialize_messages(stored.get("messages", []))
+        messages.append(
+            AgentMessage(
+                role="system",
+                content=f"任务因 {previous_status} 进入证据填充恢复执行。",
+                metadata={"resume_from_status": previous_status, "next_round": next_round},
+            )
+        )
+        resumed_state: WorkflowState = {
+            "task_id": task_id,
+            "request_context": request_context,
+            "messages": messages,
+            "round_number": next_round,
+            "max_rounds": self._config.max_rounds,
+            "completion_mode": request_context.completion_mode,
+            "document_completion_status": stored.get("document_completion_status", stored.get("full_document_status", "not_requested")),
+            "full_document_status": stored.get("full_document_status", "not_requested"),
+            "structure_graph": stored.get("structure_graph") or request_context.structure_graph,
+            "structure_graph_sync": stored.get("structure_graph_sync", {}),
+            "structure_review_rounds": stored.get("structure_review_rounds", []),
+            "structure_review_status": stored.get("structure_review_status", "passed"),
+            "structure_repair_log": stored.get("structure_repair_log", []),
+            "workflow_events": stored.get("workflow_events", []),
+            "graph_snapshot": stored.get("graph_snapshot", {}),
+            "graph_event": stored.get("graph_event", {}),
+            "task_queue_path": stored.get("task_queue_path", ""),
+            "task_queue_snapshot": stored.get("task_queue_snapshot", {}),
+            "agent_outputs": self._deserialize_agent_outputs(stored.get("agent_outputs", {})),
+            "task_status": "resumed",
+            "current_step": "evidence_link_query",
+            "current_action": "从证据填充回流继续执行。",
+            "started_at": stored.get("started_at") or now_iso(),
+        }
+        self._audit_logger.log(
+            task_id,
+            "task_resumed",
+            {"from_status": previous_status, "round": next_round, "resume_mode": "evidence_fill"},
+        )
+        with token_tracking_context(task_id):
+            final_state = self._workflow.fill_evidence(resumed_state)
         return self._persist_and_serialize(final_state, "task_completed")
 
     def _persist_and_serialize(self, state: WorkflowState, audit_event: str) -> dict[str, Any]:
@@ -2130,6 +2234,25 @@ class TaskService:
         return plans
 
     @staticmethod
+    def _deserialize_agent_outputs(payload: dict[str, Any]) -> dict[str, EngineRunResult]:
+        outputs: dict[str, EngineRunResult] = {}
+        for agent_name, output_payload in (payload or {}).items():
+            if isinstance(output_payload, EngineRunResult):
+                outputs[agent_name] = output_payload
+                continue
+            if not isinstance(output_payload, dict):
+                continue
+            output_data = dict(output_payload)
+            sources = [
+                source if isinstance(source, SourceRecord) else SourceRecord(**source)
+                for source in output_data.get("sources", [])
+                if isinstance(source, (SourceRecord, dict))
+            ]
+            output_data["sources"] = sources
+            outputs[agent_name] = EngineRunResult(**output_data)
+        return outputs
+
+    @staticmethod
     def _is_running_status(status: object) -> bool:
         return str(status) in {"running", "resumed", "supplementing", "filled"}
 
@@ -2137,6 +2260,7 @@ class TaskService:
     def _is_terminal_status(status: object) -> bool:
         return str(status) in {
             "verified",
+            "graph_ready",
             "research_required",
             "repair_required",
             "supplement_required",

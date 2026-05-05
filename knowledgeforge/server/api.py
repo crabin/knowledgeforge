@@ -290,7 +290,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
         return jsonify(result), 200
 
     _TERMINAL_STATUSES = frozenset([
-        "verified", "research_required", "repair_required",
+        "graph_ready", "verified", "research_required", "repair_required",
         "supplement_required", "max_rounds_reached", "failed", "plan_failed",
     ])
 
@@ -326,6 +326,16 @@ def create_app(config: AppConfig | None = None) -> Flask:
         if report is None:
             return jsonify({"error": "frozen version not found"}), 404
         return jsonify(report), 200
+
+    @app.post("/tasks/<task_id>/evidence/fill")
+    def fill_evidence(task_id: str):
+        try:
+            task = service.fill_evidence(task_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if task is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(task), 200
 
     @app.post("/tasks/<task_id>/documents/complete")
     def complete_documents(task_id: str):

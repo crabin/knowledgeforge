@@ -46,7 +46,7 @@ const workflowSteps = [
   { id: "neo4j_structure_sync", order: "03", title: "Neo4j呈现", description: "先将知识架构图谱同步到 Neo4j。" },
   { id: "structure_review", order: "04", title: "架构Review", description: "执行两轮自动审查与修补。" },
   { id: "graph_completion", order: "05", title: "图谱补全", description: "写入补全文档所需的图谱上下文。" },
-  { id: "evidence_link_query", order: "06", title: "证据链接", description: "只记录官方或高公信力链接。" },
+  { id: "evidence_link_query", order: "06", title: "查询填充", description: "用户触发后联网补充可信证据。" },
   { id: "governing", order: "07", title: "治理质检", description: "抽取、Neo4j 路径关联、质量检测和回流分类。" },
   { id: "evidence_link_recorded", order: "08", title: "图谱证据写入", description: "写入证据链接、来源类型和 claim 到 Neo4j。", optional: false },
   { id: "document_completion", order: "09", title: "补全文档", description: "可选：验证后生成本地知识文档。", optional: true },
@@ -1975,6 +1975,7 @@ function formatTaskTimingStatus(payload, timing = {}) {
   if (timing.is_running) return "运行中";
   const status = payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status || "";
   return {
+    graph_ready: "图谱已生成，待查询填充",
     verified: "已完成",
     repair_required: "待系统修复",
     research_required: "待补检索",
@@ -2184,7 +2185,7 @@ function startTaskStream(taskId) {
 }
 
 function isTerminalStatus(status) {
-  return ["verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed", "plan_failed"].includes(status);
+  return ["graph_ready", "verified", "research_required", "repair_required", "supplement_required", "max_rounds_reached", "failed", "plan_failed"].includes(status);
 }
 
 function formatNumber(value) {
@@ -2321,6 +2322,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       queue: [`/tasks/${encodeURIComponent(taskId)}/plan`, "GET"],
       resume: [`/tasks/${encodeURIComponent(taskId)}/resume`, "POST"],
       frozen: [`/tasks/${encodeURIComponent(taskId)}/frozen`, "GET"],
+      "fill-evidence": [`/tasks/${encodeURIComponent(taskId)}/evidence/fill`, "POST"],
       "complete-documents": [`/tasks/${encodeURIComponent(taskId)}/documents/complete`, "POST"],
       report: [`/tasks/${encodeURIComponent(taskId)}/report`, "POST"],
       logs: [`/tasks/${encodeURIComponent(taskId)}/logs`, "GET"],
@@ -2331,7 +2333,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       const payload = await requestJson(route[0], { method: route[1] });
       showPayload(payload);
       const activeTaskId = payload.task_id || payload.task?.task_id || taskId;
-      if (activeTaskId && ["get", "queue", "logs", "resume", "complete-documents"].includes(action)) {
+      if (activeTaskId && ["get", "queue", "logs", "resume", "fill-evidence", "complete-documents"].includes(action)) {
         scheduleNeo4jGraphRefresh(activeTaskId, { force: true });
       }
       if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {

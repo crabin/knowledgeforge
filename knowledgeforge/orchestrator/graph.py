@@ -170,6 +170,32 @@ class KnowledgeGraphWorkflow:
         self._record_evidence_to_graph(state)
         return state
 
+    def fill_evidence(self, initial_state: WorkflowState) -> WorkflowState:
+        state: WorkflowState = dict(initial_state)
+        self._emit_workflow_event(
+            state,
+            "evidence_link_query",
+            "用户触发查询填充，开始联网补充图谱证据",
+            "active",
+            {"trigger": "manual_evidence_fill"},
+        )
+        self._commit_state(
+            state,
+            {
+                "task_status": "running",
+                "current_step": "evidence_link_query",
+                "current_action": "查询填充已启动，正在为 Neo4j 知识图谱补充可信证据链接。",
+            },
+        )
+        while True:
+            self._run_query_queue(state)
+            self._validate_round(state)
+            if self._route_after_validation(state) == "run_post_storage":
+                break
+        self._run_post_storage(state)
+        self._record_evidence_to_graph(state)
+        return state
+
     def generate_plans(self, state: WorkflowState) -> WorkflowState:
         return state
 
@@ -216,7 +242,7 @@ class KnowledgeGraphWorkflow:
                 "finalize_structure_review_failure": "finalize_structure_review_failure",
             },
         )
-        graph.add_edge("enrich_graph_for_completion", "query_evidence_links")
+        graph.add_edge("enrich_graph_for_completion", END)
         graph.add_edge("query_evidence_links", "validate_round")
         graph.add_conditional_edges(
             "validate_round",
@@ -565,14 +591,15 @@ class KnowledgeGraphWorkflow:
             "task_queue_snapshot": queue,
             "task_status": "running",
             "current_step": "graph_completion",
-            "current_action": "图谱补全文档上下文已完成，准备进入证据链接查询。",
+            "current_action": "Neo4j 知识图谱已生成，等待点击“查询填充”联网补充证据。",
             "document_completion_status": state.get("document_completion_status", "not_requested"),
             "full_document_status": state.get("full_document_status", "not_requested"),
             "messages": [
                 *state.get("messages", []),
-                AgentMessage(role="assistant", content="图谱补全文档上下文已写入，开始查询可信证据链接。"),
+                AgentMessage(role="assistant", content="Neo4j 知识图谱已生成，下一步可点击“查询填充”补充可信证据链接。"),
             ],
         }
+        updates["task_status"] = "graph_ready"
         self._commit_state(state, updates)
         return updates
 
