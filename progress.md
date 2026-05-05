@@ -17,6 +17,13 @@
 - 修复：`subtopic` / `article` 节点即使 LLM 显式给 `required_query_tasks=0`，也默认保留 1 个证据查询任务；只有显式 `requires_query=false` 时才允许跳过。
 - 用当前 Deep Learning 任务的真实 `structure_graph` 复核：修复后 23 个蓝图中有 17 个会派生证据查询任务。
 
+## 2026-05-05 扩展知识点实验脚本
+
+- 新增 `scripts/experiment_expand_graph_node.py`，用于从 `/tasks` 找最新任务、查询 Neo4j 中该任务领域下的 article/subtopic 叶子节点，并调用 `/tasks/{task_id}/graph/nodes/expand` 做端到端测试。
+- 脚本支持 `--base-url`、`--task-id`、`--node-id`、`--force` 和 `--dry-run`；默认会实际调用扩展 API，`--dry-run` 只打印候选节点。
+- 验证：`python -m py_compile scripts/experiment_expand_graph_node.py`、`PYTHONPATH=. python scripts/experiment_expand_graph_node.py --help`、`uv run ruff check scripts/experiment_expand_graph_node.py` 均通过。
+- 对当前 `http://localhost:5001` 干跑选中 Deep Learning 任务的 `article_definition_scope`；实际调用扩展 API 成功，新增 5 个子知识点，返回图谱快照 `28` 个节点、`57` 条边，Neo4j 同步状态为 `passed`。
+
 ## 2026-05-03 流程详情浮窗可读性增强
 
 - 根据浏览器反馈降低详情浮窗的透底感：改为更实的不透明背景、更清晰边框、更重阴影和更高对比文字颜色。
