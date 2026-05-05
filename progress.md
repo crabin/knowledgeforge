@@ -24,6 +24,13 @@
 - 验证：`python -m py_compile scripts/experiment_expand_graph_node.py`、`PYTHONPATH=. python scripts/experiment_expand_graph_node.py --help`、`uv run ruff check scripts/experiment_expand_graph_node.py` 均通过。
 - 对当前 `http://localhost:5001` 干跑选中 Deep Learning 任务的 `article_definition_scope`；实际调用扩展 API 成功，新增 5 个子知识点，返回图谱快照 `28` 个节点、`57` 条边，Neo4j 同步状态为 `passed`。
 
+## 2026-05-05 Neo4j 重名独立节点检查与修复
+
+- 新增图谱问题检查能力：`GET /tasks/{task_id}/graph/issues` 会列出和正式 `KnowledgeStructureNode` 重名、但自身不是结构节点的 `Entity/SubTopic/Article` 候选噪声节点。
+- 新增两个操作接口：`POST /tasks/{task_id}/graph/issues/delete` 清除多余节点；`POST /tasks/{task_id}/graph/issues/link` 把候选节点用 `RELATED_TO` 连到匹配的结构节点。
+- 前端 Neo4j 图谱增加“检查知识点”按钮，右侧详情栏会展示问题知识点列表，并提供“清除多余节点”和“连接到结构节点”操作。
+- 在当前 `localhost:5001` 的 Deep Learning 任务上验证检查接口，成功列出 4 个候选问题节点，包括截图中的“数学与工程前置”重名节点。
+
 ## 2026-05-03 流程详情浮窗可读性增强
 
 - 根据浏览器反馈降低详情浮窗的透底感：改为更实的不透明背景、更清晰边框、更重阴影和更高对比文字颜色。

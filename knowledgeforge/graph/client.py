@@ -133,6 +133,63 @@ class Neo4jGraphClient:
             with suppress(Exception):
                 driver.close()
 
+    def inspect_domain_graph_issues(self, *, domain: str, task_id: str) -> dict[str, Any]:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                return session.execute_read(self._read_domain_graph_issues, domain, task_id)
+        finally:
+            with suppress(Exception):
+                driver.close()
+
+    def delete_domain_graph_issue_node(self, *, domain: str, task_id: str, graph_id: str) -> dict[str, Any]:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                return session.execute_write(self._delete_domain_graph_issue_node, domain, task_id, graph_id)
+        finally:
+            with suppress(Exception):
+                driver.close()
+
+    def link_domain_graph_issue_node(
+        self,
+        *,
+        domain: str,
+        task_id: str,
+        graph_id: str,
+        target_node_id: str,
+        relationship_type: str = "RELATED_TO",
+    ) -> dict[str, Any]:
+        driver = GraphDatabase.driver(
+            self._config.uri,
+            auth=(self._config.user, self._config.password),
+            connection_timeout=1.0,
+            max_transaction_retry_time=0,
+        )
+        try:
+            with driver.session() as session:
+                return session.execute_write(
+                    self._link_domain_graph_issue_node,
+                    domain,
+                    task_id,
+                    graph_id,
+                    target_node_id,
+                    relationship_type,
+                )
+        finally:
+            with suppress(Exception):
+                driver.close()
+
     def mark_structure_node_generated(
         self,
         *,
@@ -549,6 +606,13 @@ class Neo4jGraphClient:
                    elementId(endNode(r)) AS target,
                    type(r) AS type,
                    properties(r) AS properties
+            UNION
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(ks:KnowledgeStructureNode)<-[r:RELATED_TO]-(n)
+            RETURN elementId(r) AS graph_id,
+                   elementId(startNode(r)) AS source,
+                   elementId(endNode(r)) AS target,
+                   type(r) AS type,
+                   properties(r) AS properties
             LIMIT $relationship_limit
             """,
             domain=domain,
@@ -560,6 +624,135 @@ class Neo4jGraphClient:
             if row["source"] in visible_node_ids and row["target"] in visible_node_ids
         ]
         return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
+    def _read_domain_graph_issues(tx: Any, domain: str, task_id: str) -> dict[str, Any]:
+        rows = tx.run(
+            """
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(ks:KnowledgeStructureNode)
+            MATCH (n)
+            WHERE NOT n:KnowledgeStructureNode
+              AND (
+                coalesce(n.id, '') = coalesce(ks.title, '')
+                OR coalesce(n.name, '') = coalesce(ks.title, '')
+                OR coalesce(n.title, '') = coalesce(ks.title, '')
+                OR coalesce(n.id, '') = coalesce(ks.id, '')
+              )
+              AND (n:Entity OR n:SubTopic OR n:Article)
+            OPTIONAL MATCH (n)-[r]-()
+            WITH n, ks, count(DISTINCT r) AS relationship_count, collect(DISTINCT type(r)) AS relationship_types
+            RETURN elementId(n) AS graph_id,
+                   labels(n) AS labels,
+                   properties(n) AS properties,
+                   relationship_count,
+                   relationship_types,
+                   ks.id AS matching_structure_node_id,
+                   ks.title AS matching_structure_title,
+                   ks.node_type AS matching_structure_type,
+                   ks.suggested_relative_path AS matching_structure_path
+            ORDER BY relationship_count ASC, matching_structure_title ASC
+            LIMIT 100
+            """,
+            domain=domain,
+            task_id=task_id,
+        )
+        issues = []
+        for row in rows:
+            properties = _json_safe_properties(dict(row["properties"] or {}))
+            labels = list(row["labels"] or [])
+            issues.append(
+                {
+                    "graph_id": str(row["graph_id"]),
+                    "labels": labels,
+                    "type": _node_type(labels, properties),
+                    "logical_id": str(properties.get("id") or properties.get("name") or properties.get("title") or ""),
+                    "title": str(properties.get("title") or properties.get("name") or properties.get("id") or row["graph_id"]),
+                    "path": str(properties.get("path", "")),
+                    "relationship_count": int(row["relationship_count"] or 0),
+                    "relationship_types": [str(item) for item in row["relationship_types"] or []],
+                    "reason": "duplicate_non_structure_knowledge_point",
+                    "matching_structure_node_id": str(row["matching_structure_node_id"] or ""),
+                    "matching_structure_title": str(row["matching_structure_title"] or ""),
+                    "matching_structure_type": str(row["matching_structure_type"] or ""),
+                    "matching_structure_path": str(row["matching_structure_path"] or ""),
+                    "recommended_action": "delete_or_link",
+                }
+            )
+        return {"issues": issues, "count": len(issues)}
+
+    @staticmethod
+    def _delete_domain_graph_issue_node(tx: Any, domain: str, task_id: str, graph_id: str) -> dict[str, Any]:
+        record = tx.run(
+            """
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(ks:KnowledgeStructureNode)
+            MATCH (n)
+            WHERE elementId(n) = $graph_id
+              AND NOT n:KnowledgeStructureNode
+              AND (
+                coalesce(n.id, '') = coalesce(ks.title, '')
+                OR coalesce(n.name, '') = coalesce(ks.title, '')
+                OR coalesce(n.title, '') = coalesce(ks.title, '')
+                OR coalesce(n.id, '') = coalesce(ks.id, '')
+              )
+              AND (n:Entity OR n:SubTopic OR n:Article)
+            OPTIONAL MATCH (n)-[r]-()
+            WITH n, collect(DISTINCT r) AS rels
+            DETACH DELETE n
+            RETURN 1 AS deleted_nodes, size(rels) AS deleted_relationships
+            """,
+            domain=domain,
+            task_id=task_id,
+            graph_id=graph_id,
+        ).single()
+        return {
+            "status": "deleted" if record else "not_found",
+            "graph_id": graph_id,
+            "deleted_nodes": int(record["deleted_nodes"] if record else 0),
+            "deleted_relationships": int(record["deleted_relationships"] if record else 0),
+        }
+
+    @staticmethod
+    def _link_domain_graph_issue_node(
+        tx: Any,
+        domain: str,
+        task_id: str,
+        graph_id: str,
+        target_node_id: str,
+        relationship_type: str,
+    ) -> dict[str, Any]:
+        safe_type = relationship_type if relationship_type in {"RELATED_TO", "MENTIONS", "ALIGNED_WITH"} else "RELATED_TO"
+        record = tx.run(
+            """
+            MATCH (:Domain {id: $domain})-[:HAS_STRUCTURE_NODE]->(target:KnowledgeStructureNode {id: $target_node_id})
+            MATCH (n)
+            WHERE elementId(n) = $graph_id
+              AND NOT n:KnowledgeStructureNode
+            MERGE (n)-[r:RELATED_TO]->(target)
+            SET r.type = $relationship_type,
+                r.domain = $domain,
+                r.task_id = $task_id,
+                r.created_at = datetime()
+            RETURN elementId(r) AS relationship_graph_id,
+                   elementId(n) AS source_graph_id,
+                   target.id AS target_node_id,
+                   target.title AS target_title
+            """,
+            domain=domain,
+            task_id=task_id,
+            graph_id=graph_id,
+            target_node_id=target_node_id,
+            relationship_type=safe_type,
+        ).single()
+        if record is None:
+            return {"status": "not_found", "graph_id": graph_id, "target_node_id": target_node_id}
+        return {
+            "status": "linked",
+            "graph_id": str(record["source_graph_id"]),
+            "target_node_id": str(record["target_node_id"]),
+            "target_title": str(record["target_title"] or ""),
+            "relationship_graph_id": str(record["relationship_graph_id"]),
+            "relationship_type": safe_type,
+        }
 
     @staticmethod
     def _read_structure_review_context(

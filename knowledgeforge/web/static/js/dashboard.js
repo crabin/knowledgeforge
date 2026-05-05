@@ -10,6 +10,7 @@ const state = {
   neo4jGraphRefreshTimer: null,
   neo4jAutoFollow: true,
   neo4jSelectedNodeId: "",
+  neo4jIssueInspection: null,
 };
 
 const output = document.querySelector("#response-output");
@@ -705,6 +706,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
             <span>显示 ${escapeHtml(String(visibleNodes.length))}/${escapeHtml(String(nodes.length))} 个节点</span>
             ${hiddenNodeCount ? `<span>隐藏 ${escapeHtml(String(hiddenNodeCount))} 个低优先级节点</span>` : ""}
             ${hiddenEdgeCount ? `<span>收起 ${escapeHtml(String(hiddenEdgeCount))} 条重复或跨层关系</span>` : ""}
+            <button class="neo4j-check-issues" type="button" data-check-graph-issues>检查知识点</button>
           </div>
           <div id="neo4j-neovis-viz" class="neo4j-neovis-viz"></div>
         </section>
@@ -1159,6 +1161,7 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
         <h3>相邻关系</h3>
         ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
       </div>
+      ${renderNeo4jGraphIssueList(state.neo4jIssueInspection)}
     </aside>`;
 }
 
@@ -1168,6 +1171,77 @@ function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
     button.addEventListener("click", () => {
       state.neo4jSelectedNodeId = button.dataset.neo4jNodeId || "";
       renderNeo4jGraphHtml(graph, payload, previousPayload);
+    });
+  });
+  const checkIssuesButton = neo4jGraphContainer.querySelector("[data-check-graph-issues]");
+  if (checkIssuesButton) {
+    checkIssuesButton.addEventListener("click", async () => {
+      const taskId = getTaskIdFromPayload(state.lastPayload) || payload.task_id;
+      if (!taskId) return;
+      setBusy(checkIssuesButton, true);
+      try {
+        state.neo4jIssueInspection = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/issues`);
+        renderNeo4jGraphHtml(graph, payload, previousPayload);
+      } catch (error) {
+        showError(error);
+      } finally {
+        setBusy(checkIssuesButton, false);
+      }
+    });
+  }
+  neo4jGraphContainer.querySelectorAll("[data-delete-issue-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const taskId = getTaskIdFromPayload(state.lastPayload) || payload.task_id;
+      const graphId = button.dataset.deleteIssueId || "";
+      if (!taskId || !graphId) return;
+      setBusy(button, true);
+      try {
+        const result = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/issues/delete`, {
+          method: "POST",
+          body: JSON.stringify({ graph_id: graphId }),
+        });
+        state.neo4jIssueInspection = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/issues`);
+        renderNeo4jGraphSnapshot({
+          task_id: taskId,
+          status: "local",
+          domain: result.domain || payload.domain || "",
+          graph: result.graph_snapshot,
+          refreshed_at: result.updated_at || new Date().toISOString(),
+        }, state.neo4jGraphSnapshot);
+        state.neo4jGraphSnapshot = { task_id: taskId, status: "local", graph: result.graph_snapshot };
+      } catch (error) {
+        showError(error);
+      } finally {
+        setBusy(button, false);
+      }
+    });
+  });
+  neo4jGraphContainer.querySelectorAll("[data-link-issue-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const taskId = getTaskIdFromPayload(state.lastPayload) || payload.task_id;
+      const graphId = button.dataset.linkIssueId || "";
+      const targetNodeId = button.dataset.targetNodeId || "";
+      if (!taskId || !graphId || !targetNodeId) return;
+      setBusy(button, true);
+      try {
+        const result = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/issues/link`, {
+          method: "POST",
+          body: JSON.stringify({ graph_id: graphId, target_node_id: targetNodeId, relationship_type: "RELATED_TO" }),
+        });
+        state.neo4jIssueInspection = await requestJson(`/tasks/${encodeURIComponent(taskId)}/graph/issues`);
+        renderNeo4jGraphSnapshot({
+          task_id: taskId,
+          status: "local",
+          domain: result.domain || payload.domain || "",
+          graph: result.graph_snapshot,
+          refreshed_at: result.updated_at || new Date().toISOString(),
+        }, state.neo4jGraphSnapshot);
+        state.neo4jGraphSnapshot = { task_id: taskId, status: "local", graph: result.graph_snapshot };
+      } catch (error) {
+        showError(error);
+      } finally {
+        setBusy(button, false);
+      }
     });
   });
   const expandButton = neo4jGraphContainer.querySelector("[data-expand-node-id]");
@@ -1203,6 +1277,42 @@ function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
       setBusy(expandButton, false);
     }
   });
+}
+
+function renderNeo4jGraphIssueList(inspection) {
+  if (!inspection) return "";
+  const issues = Array.isArray(inspection.issues) ? inspection.issues : [];
+  if (!issues.length) {
+    return `
+      <div class="neo4j-issue-panel">
+        <h3>问题知识点</h3>
+        <div class="neo4j-edge-empty">未发现重名或独立的非结构知识点。</div>
+      </div>`;
+  }
+  return `
+    <div class="neo4j-issue-panel">
+      <h3>问题知识点 · ${escapeHtml(String(issues.length))}</h3>
+      ${issues.map((issue) => renderNeo4jGraphIssue(issue)).join("")}
+    </div>`;
+}
+
+function renderNeo4jGraphIssue(issue) {
+  const targetNodeId = String(issue.matching_structure_node_id || "");
+  return `
+    <div class="neo4j-issue-item">
+      <span>${escapeHtml(issue.reason || "duplicate_non_structure_knowledge_point")}</span>
+      <strong>${escapeHtml(issue.title || issue.logical_id || issue.graph_id)}</strong>
+      <small>${escapeHtml(formatIssueMatch(issue))}</small>
+      <div class="neo4j-issue-actions">
+        <button type="button" data-delete-issue-id="${escapeHtml(issue.graph_id)}">清除多余节点</button>
+        ${targetNodeId ? `<button type="button" data-link-issue-id="${escapeHtml(issue.graph_id)}" data-target-node-id="${escapeHtml(targetNodeId)}">连接到结构节点</button>` : ""}
+      </div>
+    </div>`;
+}
+
+function formatIssueMatch(issue) {
+  const match = [issue.matching_structure_title, issue.matching_structure_type, issue.relationship_types?.join("/")].filter(Boolean).join(" · ");
+  return match || issue.graph_id || "";
 }
 
 function renderNeo4jNodeField(label, value) {

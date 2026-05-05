@@ -786,8 +786,7 @@ class TaskService:
         task = self.get_task(task_id)
         if task is None:
             return None
-        request_context = task.get("request_context") or {}
-        domain = str(request_context.get("domain") or request_context.get("normalized_domain") or "").strip()
+        domain = self._domain_for_task_payload(task)
         limits = {"nodes": 300, "edges": 600}
         if not domain:
             return {
@@ -833,6 +832,85 @@ class TaskService:
             "refreshed_at": now_iso(),
             "graph": graph,
             "limits": limits,
+        }
+
+    def inspect_graph_issues(self, task_id: str) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        try:
+            result = self._graph_client.inspect_domain_graph_issues(domain=domain, task_id=task_id)
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue inspection failed: {self._sanitize_graph_error(str(exc))}") from exc
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "status": "ok",
+            "inspected_at": now_iso(),
+            **result,
+        }
+
+    def delete_graph_issue_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        graph_id = str(payload.get("graph_id") or payload.get("node_graph_id") or "").strip()
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        if not graph_id:
+            raise ValueError("`graph_id` is required.")
+        try:
+            result = self._graph_client.delete_domain_graph_issue_node(domain=domain, task_id=task_id, graph_id=graph_id)
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue deletion failed: {self._sanitize_graph_error(str(exc))}") from exc
+        graph = self.get_task_graph_snapshot(task_id) or {}
+        self._audit_logger.log(task_id, "graph_issue_node_deleted", result)
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "operation": "delete",
+            "result": result,
+            "graph_snapshot": graph.get("graph", {}),
+            "updated_at": now_iso(),
+        }
+
+    def link_graph_issue_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        task = self.get_task(task_id)
+        if task is None:
+            return None
+        domain = self._domain_for_task_payload(task)
+        graph_id = str(payload.get("graph_id") or payload.get("node_graph_id") or "").strip()
+        target_node_id = str(payload.get("target_node_id") or "").strip()
+        relationship_type = str(payload.get("relationship_type") or "RELATED_TO").strip()
+        if not domain:
+            raise ValueError("Task domain is unavailable.")
+        if not graph_id:
+            raise ValueError("`graph_id` is required.")
+        if not target_node_id:
+            raise ValueError("`target_node_id` is required.")
+        try:
+            result = self._graph_client.link_domain_graph_issue_node(
+                domain=domain,
+                task_id=task_id,
+                graph_id=graph_id,
+                target_node_id=target_node_id,
+                relationship_type=relationship_type,
+            )
+        except Exception as exc:
+            raise ValueError(f"Neo4j graph issue linking failed: {self._sanitize_graph_error(str(exc))}") from exc
+        graph = self.get_task_graph_snapshot(task_id) or {}
+        self._audit_logger.log(task_id, "graph_issue_node_linked", result)
+        return {
+            "task_id": task_id,
+            "domain": domain,
+            "operation": "link",
+            "result": result,
+            "graph_snapshot": graph.get("graph", {}),
+            "updated_at": now_iso(),
         }
 
     def expand_graph_node(self, task_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -953,6 +1031,11 @@ class TaskService:
                 "task": stored,
             }
         )
+
+    @staticmethod
+    def _domain_for_task_payload(task: dict[str, Any]) -> str:
+        request_context = task.get("request_context") or {}
+        return str(request_context.get("domain") or request_context.get("normalized_domain") or task.get("domain") or "").strip()
 
     @staticmethod
     def _task_structure_graph(stored: dict[str, Any], request_context: RequestContext) -> dict[str, Any]:

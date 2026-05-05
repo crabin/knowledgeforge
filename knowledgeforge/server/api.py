@@ -246,6 +246,38 @@ def create_app(config: AppConfig | None = None) -> Flask:
             return jsonify({"error": "task not found"}), 404
         return jsonify(graph), 200
 
+    @app.get("/tasks/<task_id>/graph/issues")
+    def inspect_task_graph_issues(task_id: str):
+        try:
+            result = service.inspect_graph_issues(task_id)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
+    @app.post("/tasks/<task_id>/graph/issues/delete")
+    def delete_task_graph_issue(task_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.delete_graph_issue_node(task_id, payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
+    @app.post("/tasks/<task_id>/graph/issues/link")
+    def link_task_graph_issue(task_id: str):
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = service.link_graph_issue_node(task_id, payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if result is None:
+            return jsonify({"error": "task not found"}), 404
+        return jsonify(result), 200
+
     @app.post("/tasks/<task_id>/graph/nodes/expand")
     def expand_task_graph_node(task_id: str):
         payload = request.get_json(silent=True) or {}

@@ -34,6 +34,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "neo4j-graph" in body
     assert "neo4j-auto-follow" in body
     assert "refresh-neo4j-graph" in body
+    assert "检查知识点" in (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
     assert "https://cdn.jsdelivr.net/npm/@antv/x6/dist/index.js" in body
     assert "https://unpkg.com/neovis.js@2.1.0/dist/neovis.js" in body
     assert "生成与查询队列状态" in body
@@ -237,6 +238,78 @@ def test_task_graph_endpoint_returns_neo4j_snapshot(tmp_path: Path, monkeypatch)
     assert payload["limits"] == {"nodes": 300, "edges": 600}
     assert payload["graph"]["nodes"][0]["type"] == "Domain"
     assert payload["graph"]["edges"][0]["type"] == "HAS_ARTICLE"
+
+
+def test_graph_issue_endpoints_inspect_delete_and_link(tmp_path: Path, monkeypatch) -> None:
+    task_root = tmp_path / "runtime" / "tasks"
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=task_root,
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    task_root.joinpath("task-graph.json").write_text(
+        json.dumps({"task_id": "task-graph", "request_context": {"domain": "知识工程"}, "task_status": "verified"}),
+        encoding="utf-8",
+    )
+    calls: list[dict] = []
+
+    def fake_inspect(self, *, domain: str, task_id: str):
+        calls.append({"method": "inspect", "domain": domain, "task_id": task_id})
+        return {
+            "count": 1,
+            "issues": [
+                {
+                    "graph_id": "4:noise",
+                    "title": "工作流编排",
+                    "type": "SubTopic",
+                    "reason": "duplicate_non_structure_knowledge_point",
+                    "matching_structure_node_id": "topic-workflow",
+                    "matching_structure_title": "工作流编排",
+                }
+            ],
+        }
+
+    def fake_delete(self, *, domain: str, task_id: str, graph_id: str):
+        calls.append({"method": "delete", "domain": domain, "task_id": task_id, "graph_id": graph_id})
+        return {"status": "deleted", "graph_id": graph_id, "deleted_nodes": 1, "deleted_relationships": 2}
+
+    def fake_link(self, *, domain: str, task_id: str, graph_id: str, target_node_id: str, relationship_type: str = "RELATED_TO"):
+        calls.append(
+            {
+                "method": "link",
+                "domain": domain,
+                "task_id": task_id,
+                "graph_id": graph_id,
+                "target_node_id": target_node_id,
+                "relationship_type": relationship_type,
+            }
+        )
+        return {"status": "linked", "graph_id": graph_id, "target_node_id": target_node_id, "relationship_type": relationship_type}
+
+    def fake_snapshot(self, *, domain: str, node_limit: int = 300, relationship_limit: int = 600):
+        return {"nodes": [{"id": "topic-workflow", "title": "工作流编排", "type": "KnowledgeStructureNode", "properties": {"id": "topic-workflow"}}], "edges": []}
+
+    monkeypatch.setattr(Neo4jGraphClient, "inspect_domain_graph_issues", fake_inspect)
+    monkeypatch.setattr(Neo4jGraphClient, "delete_domain_graph_issue_node", fake_delete)
+    monkeypatch.setattr(Neo4jGraphClient, "link_domain_graph_issue_node", fake_link)
+    monkeypatch.setattr(Neo4jGraphClient, "snapshot_domain_graph", fake_snapshot)
+    client = app.test_client()
+
+    inspect_response = client.get("/tasks/task-graph/graph/issues")
+    delete_response = client.post("/tasks/task-graph/graph/issues/delete", json={"graph_id": "4:noise"})
+    link_response = client.post("/tasks/task-graph/graph/issues/link", json={"graph_id": "4:noise", "target_node_id": "topic-workflow"})
+
+    assert inspect_response.status_code == 200
+    assert inspect_response.get_json()["issues"][0]["matching_structure_node_id"] == "topic-workflow"
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["result"]["status"] == "deleted"
+    assert delete_response.get_json()["graph_snapshot"]["nodes"][0]["id"] == "topic-workflow"
+    assert link_response.status_code == 200
+    assert link_response.get_json()["result"]["status"] == "linked"
+    assert [call["method"] for call in calls] == ["inspect", "delete", "link"]
 
 
 def test_expand_graph_leaf_node_adds_children_and_refreshes_snapshot(tmp_path: Path, monkeypatch) -> None:
