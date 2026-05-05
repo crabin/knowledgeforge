@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 单条 Query 证据任务模拟脚本
+
+- 新增 `scripts/simulate_query_task.py`，用于从 `/tasks` / `/tasks/{task_id}` 读取当前队列，选择单个 `task_queue_snapshot.tasks` 项并直接调用 `QueryEngine.run_evidence_task(...)`。
+- 脚本支持 `--task-id`、`--queue-task-id`、`--node-id`、`--query`、`--claim`、`--expected`、`--preferred-source`、`--dry-run` 和 `--output`，方便复现前端单卡片查询并调试搜索优化。
+- 将 `knowledgeforge.server.create_app` 改为懒加载，避免脚本直接导入 QueryEngine 时触发 server/api/task_service 的循环初始化。
+- 验证：`uv run python -m py_compile scripts/simulate_query_task.py knowledgeforge/server/__init__.py` 通过；`uv run ruff check scripts/simulate_query_task.py knowledgeforge/server/__init__.py` 通过；`uv run python scripts/simulate_query_task.py --help` 通过；对当前 `sub_def_scope-task-1` 执行 `--dry-run` 成功读取目标节点、查询文本和预期证据。
+
 ## 2026-05-06 图谱队列与节点证据展示语义修正
 
 - 将图谱上下文进度卡从路径/保存语义改为图谱语义：主标题显示当前图谱节点标题，详情显示“建议路径”，避免在查询填充阶段误称为目标文件。
