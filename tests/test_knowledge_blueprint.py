@@ -122,6 +122,34 @@ def test_structure_graph_sanitizes_paths_and_dedupes() -> None:
     assert all(path.endswith(".md") for path in paths)
 
 
+def test_structure_graph_preserves_evidence_tasks_for_knowledge_nodes_with_zero_from_llm() -> None:
+    graph = normalize_structure_graph_payload(
+        payload={
+            "nodes": [
+                {"node_id": "root", "title": "知识工程", "node_type": "domain", "relative_path": "README.md", "required_query_tasks": 0},
+                {"node_id": "topic", "title": "状态恢复", "node_type": "subtopic", "parent_node_id": "root", "relative_path": "recovery/README.md", "required_query_tasks": 0},
+                {"node_id": "article", "title": "断点续跑", "node_type": "article", "parent_node_id": "topic", "relative_path": "recovery/resume.md", "required_query_tasks": 0},
+                {"node_id": "optional", "title": "内部导航", "node_type": "article", "parent_node_id": "topic", "relative_path": "recovery/internal.md", "required_query_tasks": 0, "requires_query": False},
+            ],
+            "edges": [
+                {"from_node_id": "root", "edge_type": "CONTAINS", "to_node_id": "topic"},
+                {"from_node_id": "topic", "edge_type": "CONTAINS", "to_node_id": "article"},
+                {"from_node_id": "topic", "edge_type": "CONTAINS", "to_node_id": "optional"},
+            ],
+        },
+        domain="知识工程",
+        subdomains=["状态恢复"],
+        focus_points=[],
+        source_intent="知识工程",
+    )
+    by_id = {node.node_id: node for node in graph.nodes}
+
+    assert by_id["root"].required_query_tasks == 0
+    assert by_id["topic"].required_query_tasks == 1
+    assert by_id["article"].required_query_tasks == 1
+    assert by_id["optional"].required_query_tasks == 0
+
+
 def test_structure_graph_falls_back_when_payload_empty() -> None:
     graph = normalize_structure_graph_payload(
         payload={},

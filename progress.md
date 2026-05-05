@@ -10,6 +10,13 @@
 - 验证：`uv run ruff check knowledgeforge/services/task_service.py knowledgeforge/server/api.py tests/test_dashboard.py` 通过；`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py` 通过；`PYTHONPATH=. pytest -q tests/test_dashboard.py` 结果 `9 passed`；`PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py` 结果 `53 passed`。
 - 本地开发服务已启动在 `http://127.0.0.1:5002`；`5001` 当时已被占用。
 
+## 2026-05-05 治理质检卡在需处理排查
+
+- 排查用户在 `http://localhost:5001/` 标记的 Deep Learning 任务，后端任务实际已终止为 `research_required`，不是仍在运行。
+- 根因：LLM 生成的结构节点显式写入 `required_query_tasks=0`，现有规范化逻辑尊重该值，导致图谱补全阶段每个节点 `enqueued_tasks=0`、证据队列总数为 0；治理摘要没有任何可引用来源，因此质量检查失败并进入 `research_flow`。
+- 修复：`subtopic` / `article` 节点即使 LLM 显式给 `required_query_tasks=0`，也默认保留 1 个证据查询任务；只有显式 `requires_query=false` 时才允许跳过。
+- 用当前 Deep Learning 任务的真实 `structure_graph` 复核：修复后 23 个蓝图中有 17 个会派生证据查询任务。
+
 ## 2026-05-03 流程详情浮窗可读性增强
 
 - 根据浏览器反馈降低详情浮窗的透底感：改为更实的不透明背景、更清晰边框、更重阴影和更高对比文字颜色。

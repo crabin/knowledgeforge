@@ -465,9 +465,14 @@ def _default_owners(node_type: str) -> list[str]:
 def _normalize_required_query_tasks(raw_node: dict[str, Any], node_type: str) -> int:
     if "required_query_tasks" in raw_node:
         try:
-            return max(0, int(raw_node.get("required_query_tasks") or 0))
+            requested_tasks = max(0, int(raw_node.get("required_query_tasks") or 0))
         except (TypeError, ValueError):
+            requested_tasks = 0
+        if requested_tasks > 0:
+            return requested_tasks
+        if raw_node.get("requires_query") is False:
             return 0
+        return 1 if node_type in {"subtopic", "article"} else 0
     if raw_node.get("requires_query") is True:
         return 1
     return 1 if node_type in {"subtopic", "article"} else 0
