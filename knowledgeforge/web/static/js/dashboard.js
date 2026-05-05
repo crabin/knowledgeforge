@@ -1166,7 +1166,8 @@ function renderNeo4jMapNode(item, isNew, isSelected, isConnected) {
 
 function renderNeo4jNodeInspector(node, nodes, edges) {
   if (!node) return '<aside class="neo4j-node-inspector"><div class="neo4j-edge-empty">暂无可查看节点</div></aside>';
-  const adjacent = edges.filter((edge) => edge.source === node.id || edge.target === node.id).slice(0, 10);
+  const incoming = edges.filter((edge) => edge.target === node.id).slice(0, 10);
+  const outgoing = edges.filter((edge) => edge.source === node.id).slice(0, 10);
   const childCount = edges.filter((edge) => edge.source === node.id && (edge.properties?.type === "CONTAINS" || edge.type === "STRUCTURE_EDGE")).length;
   const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
   const logicalNodeId = getNeo4jLogicalId(node);
@@ -1191,10 +1192,19 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
       </div>` : ""}
       <div class="neo4j-inspector-relations">
         <h3>相邻关系</h3>
-        ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
+        ${renderNeo4jInspectorRelationGroup("来自", incoming, node, nodes)}
+        ${renderNeo4jInspectorRelationGroup("指向", outgoing, node, nodes)}
       </div>
       ${renderNeo4jGraphIssueList(state.neo4jIssueInspection, node.id, nodes)}
     </aside>`;
+}
+
+function renderNeo4jInspectorRelationGroup(label, relations, selectedNode, nodes) {
+  return `
+    <div class="neo4j-inspector-relation-group">
+      <h4>${escapeHtml(label)}</h4>
+      ${relations.length ? relations.map((edge) => renderNeo4jInspectorEdge(edge, selectedNode, nodes)).join("") : '<div class="neo4j-edge-empty">暂无</div>'}
+    </div>`;
 }
 
 function focusNeo4jNode(nodeId, graph, payload, previousPayload) {

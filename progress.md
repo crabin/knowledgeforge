@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-05 Neo4j 相邻关系按方向分组
+
+- 右侧“相邻关系”从单列表改成“来自”和“指向”两个分组，阅读路径更清楚，尤其适合结构节点连接较多的场景。
+- 分组后的关系项继续保留点击聚焦能力，交互逻辑不变。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run pytest -q tests/test_dashboard.py tests/test_graph_client.py` 结果 `11 passed`。
+
 ## 2026-05-05 Neo4j 相邻关系点击聚焦
 
 - 右侧“相邻关系”列表现在支持点击聚焦对应节点：点击“来自/指向”关系项会复用现有 `focusNeo4jNode(...)` 逻辑，自动选中并将左侧图谱居中到对应节点。

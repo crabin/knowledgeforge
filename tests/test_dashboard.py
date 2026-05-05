@@ -65,6 +65,8 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "data-focus-node-id" in dashboard_js
     assert "getNeo4jIssueNodeIds" in dashboard_js
     assert "neo4j-inspector-edge${focusNodeId ? \" is-clickable\" : \"\"}" in dashboard_js
+    assert "renderNeo4jInspectorRelationGroup(\"来自\", incoming, node, nodes)" in dashboard_js
+    assert "renderNeo4jInspectorRelationGroup(\"指向\", outgoing, node, nodes)" in dashboard_js
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body
@@ -80,6 +82,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert ".neo4j-issue-item.is-selected" in dashboard_css
     assert ".neo4j-graph {" in dashboard_css
     assert ".neo4j-inspector-edge.is-clickable" in dashboard_css
+    assert ".neo4j-inspector-relation-group" in dashboard_css
 
 
 def test_dashboard_does_not_break_status_endpoints(tmp_path: Path) -> None:
