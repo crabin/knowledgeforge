@@ -61,6 +61,9 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
     assert "function normalizeStructureReviewRounds" in dashboard_js
     assert "`${rounds.length}/2" in dashboard_js
+    assert "function focusNeo4jNode" in dashboard_js
+    assert "data-focus-node-id" in dashboard_js
+    assert "getNeo4jIssueNodeIds" in dashboard_js
     assert "调用与执行日志" in body
     assert "Token 实时消耗" in body
     assert "token-float collapsed" in body
@@ -72,6 +75,9 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "初始化系统" in body
     assert "/static/css/dashboard.css" in body
     assert "/static/js/dashboard.js" in body
+    dashboard_css = (Path(app.static_folder) / "css" / "dashboard.css").read_text(encoding="utf-8")
+    assert ".neo4j-issue-item.is-selected" in dashboard_css
+    assert ".neo4j-graph {" in dashboard_css
 
 
 def test_dashboard_does_not_break_status_endpoints(tmp_path: Path) -> None:

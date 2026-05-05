@@ -11,6 +11,7 @@ const state = {
   neo4jAutoFollow: true,
   neo4jSelectedNodeId: "",
   neo4jIssueInspection: null,
+  neo4jPendingFocusNodeId: "",
 };
 
 const output = document.querySelector("#response-output");
@@ -683,7 +684,8 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
   const generatingCount = counts.generating + counts.generated + counts.completion_ready + counts.document_generating;
   const evidenceCount = counts.evidence_pending + counts.evidence_running + counts.link_querying;
   const completedCount = counts.completed + counts.approved + counts.documented + counts.link_verified;
-  const visibleNodes = selectNeo4jMapNodes(nodes);
+  const issueNodeIds = getNeo4jIssueNodeIds(state.neo4jIssueInspection);
+  const visibleNodes = selectNeo4jMapNodes(nodes, issueNodeIds);
   const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const selectedNode = nodes.find((node) => node.id === state.neo4jSelectedNodeId) || visibleNodes[0];
   const visibleEdges = buildNeo4jReadableEdges(visibleNodes, edges).filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target));
@@ -718,6 +720,7 @@ function renderNeo4jGraphHtml(graph, payload, previousPayload) {
     edges: visibleEdges,
     selectedNodeId: selectedNode?.id || "",
     connectedNodeIds,
+    issueNodeIds,
     previousNodeIds,
     previousEdgeIds,
     graph,
@@ -760,12 +763,22 @@ function chooseDefaultNeo4jSelectedNode(nodes) {
   return [...nodes].sort((a, b) => getNeo4jHtmlNodePriority(a) - getNeo4jHtmlNodePriority(b) || compareNeo4jNodesForLayout(a, b))[0];
 }
 
-function selectNeo4jMapNodes(nodes) {
+function getNeo4jIssueNodeIds(inspection) {
+  const issues = Array.isArray(inspection?.issues) ? inspection.issues : [];
+  return new Set(issues.map((issue) => String(issue.graph_id || "")).filter(Boolean));
+}
+
+function selectNeo4jMapNodes(nodes, issueNodeIds = new Set()) {
   const sorted = [...nodes].sort((a, b) => getNeo4jHtmlNodePriority(a) - getNeo4jHtmlNodePriority(b) || compareNeo4jNodesForLayout(a, b));
   const structural = sorted.filter((node) => node.type === "Domain" || isNeo4jStructureNode(node));
   const others = sorted.filter((node) => node.type !== "Domain" && !isNeo4jStructureNode(node));
   const selected = nodes.find((node) => node.id === state.neo4jSelectedNodeId);
-  const byId = new Map([...structural, ...others.slice(0, Math.max(0, 72 - structural.length)), selected].filter(Boolean).map((node) => [node.id, node]));
+  const issueNodes = nodes.filter((node) => issueNodeIds.has(node.id));
+  const byId = new Map(
+    [...structural, ...issueNodes, ...others.slice(0, Math.max(0, 72 - structural.length)), selected]
+      .filter(Boolean)
+      .map((node) => [node.id, node])
+  );
   return [...byId.values()].slice(0, 80);
 }
 
@@ -882,7 +895,7 @@ function buildNeo4jReadableEdges(nodes, edges) {
   return readableEdges;
 }
 
-function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeIds, previousNodeIds, previousEdgeIds, graph, payload, previousPayload }) {
+function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeIds, issueNodeIds, previousNodeIds, previousEdgeIds, graph, payload, previousPayload }) {
   const vizContainer = document.querySelector("#neo4j-neovis-viz");
   const NeoVisConstructor = window.NeoVis?.default || window.NeoVis?.NeoVis || window.NeoVis;
   if (!vizContainer || !NeoVisConstructor) {
@@ -907,6 +920,7 @@ function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeI
       isNew: !previousNodeIds.has(node.id),
       isSelected: node.id === selectedNodeId,
       isConnected: connectedNodeIds.has(node.id),
+      isIssue: issueNodeIds.has(node.id),
     }));
     const visEdges = edges.map((edge) => toNeo4jVisEdge(edge, {
       isNew: !previousEdgeIds.has(edge.id),
@@ -919,6 +933,14 @@ function renderNeo4jNeovisNetwork({ nodes, edges, selectedNodeId, connectedNodeI
     neoViz.network.setData({ nodes: neoViz.nodes, edges: neoViz.edges });
     neoViz.network.setOptions(buildNeo4jNeovisConfig());
     neoViz.network.fit({ animation: false });
+    if (state.neo4jPendingFocusNodeId && nodes.some((node) => node.id === state.neo4jPendingFocusNodeId)) {
+      neoViz.network.selectNodes([state.neo4jPendingFocusNodeId]);
+      neoViz.network.focus(state.neo4jPendingFocusNodeId, {
+        scale: 1.18,
+        animation: { duration: 480, easingFunction: "easeInOutQuad" },
+      });
+      state.neo4jPendingFocusNodeId = "";
+    }
     neoViz.network.on("click", (params) => {
       if (!params.nodes?.length) return;
       state.neo4jSelectedNodeId = String(params.nodes[0]);
@@ -1015,11 +1037,13 @@ function buildNeo4jNeovisConfig() {
   };
 }
 
-function toNeo4jVisNode(node, { isNew, isSelected, isConnected }) {
+function toNeo4jVisNode(node, { isNew, isSelected, isConnected, isIssue }) {
   const stateName = getNeo4jGenerationState(node);
-  const palette = getNeo4jVisNodePalette(node, stateName);
+  const palette = getNeo4jVisNodePalette(node, stateName, isIssue);
   const label = shortenNeo4jVisLabel(node.title || node.id, isSelected ? 18 : 12);
   const path = node.properties?.generated_path || node.path || node.properties?.id || node.id;
+  const selectedBackground = isIssue ? "#b6463a" : "#2f5f91";
+  const selectedBorder = isIssue ? "#7f2419" : "#17211f";
   return {
     id: node.id,
     label,
@@ -1027,23 +1051,26 @@ function toNeo4jVisNode(node, { isNew, isSelected, isConnected }) {
     group: formatNeo4jNodeKind(node),
     value: getNeo4jVisNodeValue(node),
     color: {
-      background: isSelected ? "#2f5f91" : palette.background,
-      border: isSelected ? "#17211f" : isConnected ? "#2f5f91" : palette.border,
-      highlight: { background: "#2f5f91", border: "#17211f" },
-      hover: { background: palette.hover, border: "#17211f" },
+      background: isSelected ? selectedBackground : palette.background,
+      border: isSelected ? selectedBorder : isConnected && !isIssue ? "#2f5f91" : palette.border,
+      highlight: { background: selectedBackground, border: selectedBorder },
+      hover: { background: palette.hover, border: isIssue ? "#a53e33" : "#17211f" },
     },
     font: {
       color: isSelected ? "#ffffff" : "#17302b",
       size: isSelected ? 15 : 13,
       strokeWidth: isSelected ? 2 : 4,
-      strokeColor: isSelected ? "#2f5f91" : "#fffdf8",
+      strokeColor: isSelected ? selectedBackground : "#fffdf8",
     },
     borderWidth: isNew || isConnected || isSelected ? 3 : 2,
     opacity: isConnected || isSelected ? 1 : 0.84,
   };
 }
 
-function getNeo4jVisNodePalette(node, stateName) {
+function getNeo4jVisNodePalette(node, stateName, isIssue = false) {
+  if (isIssue) {
+    return { background: "#f5b5ae", border: "#b6463a", hover: "#ffd7d2" };
+  }
   if (stateName === "failed" || stateName === "link_failed") {
     return { background: "#f6aaa1", border: "#a9483f", hover: "#ffd6d1" };
   }
@@ -1161,16 +1188,28 @@ function renderNeo4jNodeInspector(node, nodes, edges) {
         <h3>相邻关系</h3>
         ${adjacent.length ? adjacent.map((edge) => renderNeo4jInspectorEdge(edge, node, nodes)).join("") : '<div class="neo4j-edge-empty">暂无相邻关系</div>'}
       </div>
-      ${renderNeo4jGraphIssueList(state.neo4jIssueInspection)}
+      ${renderNeo4jGraphIssueList(state.neo4jIssueInspection, node.id)}
     </aside>`;
+}
+
+function focusNeo4jNode(nodeId, graph, payload, previousPayload) {
+  if (!nodeId) return;
+  state.neo4jSelectedNodeId = String(nodeId);
+  state.neo4jPendingFocusNodeId = String(nodeId);
+  renderNeo4jGraphHtml(graph, payload, previousPayload);
 }
 
 function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
   if (!neo4jGraphContainer) return;
   neo4jGraphContainer.querySelectorAll("[data-neo4j-node-id]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.neo4jSelectedNodeId = button.dataset.neo4jNodeId || "";
-      renderNeo4jGraphHtml(graph, payload, previousPayload);
+      focusNeo4jNode(button.dataset.neo4jNodeId || "", graph, payload, previousPayload);
+    });
+  });
+  neo4jGraphContainer.querySelectorAll("[data-focus-node-id]").forEach((item) => {
+    item.addEventListener("click", (event) => {
+      if (event.target.closest(".neo4j-issue-actions")) return;
+      focusNeo4jNode(item.dataset.focusNodeId || "", graph, payload, previousPayload);
     });
   });
   const checkIssuesButton = neo4jGraphContainer.querySelector("[data-check-graph-issues]");
@@ -1279,7 +1318,7 @@ function bindNeo4jGraphInteractions(graph, payload, previousPayload) {
   });
 }
 
-function renderNeo4jGraphIssueList(inspection) {
+function renderNeo4jGraphIssueList(inspection, selectedNodeId = "") {
   if (!inspection) return "";
   const issues = Array.isArray(inspection.issues) ? inspection.issues : [];
   if (!issues.length) {
@@ -1292,14 +1331,16 @@ function renderNeo4jGraphIssueList(inspection) {
   return `
     <div class="neo4j-issue-panel">
       <h3>问题知识点 · ${escapeHtml(String(issues.length))}</h3>
-      ${issues.map((issue) => renderNeo4jGraphIssue(issue)).join("")}
+      ${issues.map((issue) => renderNeo4jGraphIssue(issue, selectedNodeId)).join("")}
     </div>`;
 }
 
-function renderNeo4jGraphIssue(issue) {
+function renderNeo4jGraphIssue(issue, selectedNodeId = "") {
   const targetNodeId = String(issue.matching_structure_node_id || "");
+  const focusNodeId = String(issue.graph_id || "");
+  const isSelected = focusNodeId && focusNodeId === selectedNodeId;
   return `
-    <div class="neo4j-issue-item">
+    <div class="neo4j-issue-item${isSelected ? " is-selected" : ""}" data-focus-node-id="${escapeHtml(focusNodeId)}">
       <span>${escapeHtml(issue.reason || "duplicate_non_structure_knowledge_point")}</span>
       <strong>${escapeHtml(issue.title || issue.logical_id || issue.graph_id)}</strong>
       <small>${escapeHtml(formatIssueMatch(issue))}</small>
