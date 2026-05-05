@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-06 前端执行耗时本地计时
+
+- 将左下角执行耗时浮窗改为前端本地秒表：任务运行 payload 到来后按本地时间每秒递增，不依赖后端每次推送更新耗时。
+- 后端返回终态、SSE done 或错误时冻结计时，并显示对应状态；新的 task id 会重置计时状态。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run ruff check tests/test_dashboard.py` 通过；`uv run pytest -q tests/test_dashboard.py` 结果 `11 passed`。
+
 ## 2026-05-05 第三轮结构深化 Review
 
 - 新增第三轮 `structure_depth` 审查：在结构覆盖和执行准备度之后，专门检查倒数第二级节点是否过薄、方法族是否只挂单个叶子、叶子节点是否过宽且值得拆分。

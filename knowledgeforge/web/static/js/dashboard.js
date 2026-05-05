@@ -13,6 +13,14 @@ const state = {
   neo4jIssueInspection: null,
   neo4jPendingFocusNodeId: "",
   neo4jShowCompressedEdges: false,
+  taskTiming: {
+    taskId: "",
+    startedAtMs: null,
+    elapsedSeconds: 0,
+    running: false,
+    statusLabel: "等待任务运行",
+    meta: "",
+  },
 };
 
 const output = document.querySelector("#response-output");
@@ -108,6 +116,7 @@ function showError(error) {
     details: error.payload || null,
   };
   output.textContent = JSON.stringify(payload, null, 2);
+  stopTaskTiming("错误终止", error.message);
   renderSummary(payload);
   renderTaskTimingFloat(payload);
   renderWorkflowMap(payload);
@@ -2032,12 +2041,74 @@ function summarizeTokenUsageLabel(payload) {
 
 function renderTaskTimingFloat(payload) {
   if (!taskTimingFloat || !taskTimingFloatValue || !taskTimingFloatMeta) return;
-  const timingLabel = summarizeTaskTiming(payload);
-  const step = payload.current_step || payload.task?.current_step || "";
+  updateTaskTimingState(payload || {});
+  paintTaskTimingFloat();
+}
+
+function updateTaskTimingState(payload) {
+  const timing = payload.task_timing || payload.task?.task_timing || {};
+  const taskId = getTaskIdFromPayload(payload);
   const status = payload.task_status || payload.status || payload.task?.task_status || payload.intake_session?.status || "";
-  taskTimingFloatValue.textContent = timingLabel || "暂无";
-  taskTimingFloatMeta.textContent = [step, status].filter(Boolean).join(" · ") || "等待任务运行";
-  taskTimingFloat.classList.toggle("is-idle", !timingLabel);
+  const step = payload.current_step || payload.task?.current_step || "";
+  const startedAt = timing.started_at || payload.started_at || payload.task?.started_at || "";
+  const backendElapsed = Number(timing.elapsed_seconds);
+  const hasBackendElapsed = Number.isFinite(backendElapsed) && backendElapsed >= 0;
+  const running = !payload.error && !isTerminalStatus(status) && (timing.is_running || status === "running");
+  const startedAtMs = Date.parse(startedAt);
+
+  if (taskId && taskId !== state.taskTiming.taskId) {
+    state.taskTiming = {
+      taskId,
+      startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : null,
+      elapsedSeconds: hasBackendElapsed ? backendElapsed : 0,
+      running: false,
+      statusLabel: "等待任务运行",
+      meta: "",
+    };
+  }
+
+  if (running) {
+    state.taskTiming.taskId = taskId || state.taskTiming.taskId;
+    state.taskTiming.startedAtMs = Number.isFinite(startedAtMs)
+      ? startedAtMs
+      : state.taskTiming.startedAtMs || Date.now() - (hasBackendElapsed ? backendElapsed * 1000 : 0);
+    state.taskTiming.elapsedSeconds = hasBackendElapsed ? backendElapsed : state.taskTiming.elapsedSeconds;
+    state.taskTiming.running = true;
+    state.taskTiming.statusLabel = "运行中";
+  } else if (payload.error) {
+    stopTaskTiming("错误终止", payload.error);
+  } else if (status) {
+    state.taskTiming.elapsedSeconds = hasBackendElapsed ? backendElapsed : currentTaskTimingSeconds();
+    state.taskTiming.running = false;
+    state.taskTiming.statusLabel = formatTaskTimingStatus(payload, timing);
+  }
+
+  state.taskTiming.meta = [step, status].filter(Boolean).join(" · ") || state.taskTiming.meta || "等待任务运行";
+}
+
+function paintTaskTimingFloat() {
+  if (!taskTimingFloat || !taskTimingFloatValue || !taskTimingFloatMeta) return;
+  const hasStarted = state.taskTiming.running || state.taskTiming.startedAtMs !== null || state.taskTiming.elapsedSeconds > 0;
+  const seconds = currentTaskTimingSeconds();
+  taskTimingFloatValue.textContent = hasStarted ? `${formatDuration(seconds)} · ${state.taskTiming.statusLabel}` : "暂无";
+  taskTimingFloatMeta.textContent = state.taskTiming.meta || "等待任务运行";
+  taskTimingFloat.classList.toggle("is-idle", !hasStarted);
+}
+
+function stopTaskTiming(statusLabel, meta = "") {
+  if (state.taskTiming.running) {
+    state.taskTiming.elapsedSeconds = currentTaskTimingSeconds();
+  }
+  state.taskTiming.running = false;
+  state.taskTiming.statusLabel = statusLabel || state.taskTiming.statusLabel || "已停止";
+  if (meta) state.taskTiming.meta = meta;
+}
+
+function currentTaskTimingSeconds() {
+  if (state.taskTiming.running && state.taskTiming.startedAtMs !== null) {
+    return Math.max(0, Math.floor((Date.now() - state.taskTiming.startedAtMs) / 1000));
+  }
+  return Math.max(0, Math.floor(Number(state.taskTiming.elapsedSeconds) || 0));
 }
 
 function summarizeTaskTiming(payload) {
@@ -2257,6 +2328,8 @@ function startTaskStream(taskId) {
   };
 
   es.addEventListener("done", () => {
+    if (state.taskTiming.running) stopTaskTiming("已完成");
+    paintTaskTimingFloat();
     stopTaskStream();
   });
 
@@ -2496,6 +2569,7 @@ window.setInterval(() => {
   if (state.lastPayload?.task_timing?.is_running || state.lastPayload?.task?.task_timing?.is_running) {
     renderSummary(state.lastPayload);
   }
+  if (state.taskTiming.running) paintTaskTimingFloat();
 }, 1000);
 
 window.addEventListener("resize", () => {
