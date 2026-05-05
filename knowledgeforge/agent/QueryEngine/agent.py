@@ -358,18 +358,22 @@ class QueryEngine(BaseEngine):
 
     @staticmethod
     def _rewrite_evidence_task_queries(context: RequestContext, task: dict[str, object]) -> dict[str, list[str] | str]:
-        query_text = str(task.get("query_text", "")).strip()
-        claim = str(task.get("claim_or_gap", "")).strip()
         domain = context.normalized_domain or context.domain
-        expected = [str(item).strip() for item in task.get("expected_evidence", []) if str(item).strip()]
+        query_text = QueryEngine._normalize_evidence_search_query(domain, str(task.get("query_text", "")).strip(), task)
+        claim = QueryEngine._clean_evidence_search_text(str(task.get("claim_or_gap", "")).strip())
+        expected = [
+            cleaned
+            for item in task.get("expected_evidence", [])
+            if (cleaned := QueryEngine._clean_evidence_search_text(str(item).strip()))
+        ]
         base = query_text or " ".join([domain, claim]).strip() or f"{domain} official documentation"
         evidence_terms = " ".join(expected[:2]).strip()
         candidates = [
             base,
-            f"{domain} {claim} official documentation".strip(),
+            f"{domain} {claim} official documentation".strip() if claim else f"{base} official documentation",
             f"{base} standard specification project homepage",
             f"{base} paper benchmark reference",
-            f"{domain} {evidence_terms} official documentation".strip(),
+            f"{domain} {evidence_terms} official documentation".strip() if evidence_terms else f"{base} reference guide",
         ]
         deduped: list[str] = []
         seen: set[str] = set()
@@ -385,3 +389,30 @@ class QueryEngine(BaseEngine):
             "authority_queries": deduped[1:4],
             "fallback_queries": deduped[4:],
         }
+
+    @staticmethod
+    def _normalize_evidence_search_query(domain: str, query_text: str, task: dict[str, object]) -> str:
+        cleaned = QueryEngine._clean_evidence_search_text(query_text)
+        boilerplate_terms = ("official documentation", "wikipedia", "standard", "paper", "project homepage")
+        if cleaned and not any(term in cleaned.lower() for term in boilerplate_terms):
+            return cleaned
+        topic = cleaned
+        for term in boilerplate_terms:
+            topic = topic.replace(term, "")
+            topic = topic.replace(term.title(), "")
+        topic = " ".join(topic.split())
+        if not topic:
+            topic = str(task.get("subdomain", "") or task.get("target_node_title", "") or task.get("node_title", "")).strip()
+        if topic and domain and domain.lower() not in topic.lower():
+            return f"{domain} {topic}".strip()
+        return topic or cleaned
+
+    @staticmethod
+    def _clean_evidence_search_text(text: str) -> str:
+        cleaned = " ".join(text.split())
+        if not cleaned:
+            return ""
+        noisy_markers = ("补充", "关键依据", "官方或高公信力链接", "与知识点最贴近")
+        if any(marker in cleaned for marker in noisy_markers):
+            return ""
+        return cleaned

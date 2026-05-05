@@ -554,6 +554,57 @@ def test_query_engine_evidence_task_rewrites_single_query() -> None:
     assert any(entry["event"] == "evidence_link_selected" for entry in result.execution_log)
 
 
+def test_query_engine_rewrite_ignores_generic_evidence_action_text() -> None:
+    context = RequestContext(
+        domain="Deep Learning",
+        normalized_domain="Deep Learning",
+        subdomains=["行业落地案例"],
+        time_window="近 12 个月",
+        focus_points=["案例"],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    rewritten = QueryEngine._rewrite_evidence_task_queries(
+        context,
+        {
+            "query_text": "Deep Learning 行业落地案例",
+            "claim_or_gap": "补充 行业落地案例 的关键依据",
+            "expected_evidence": ["官方或高公信力链接", "与知识点最贴近的说明入口"],
+        },
+    )
+
+    all_queries = [rewritten["primary_query"], *rewritten["authority_queries"], *rewritten["fallback_queries"]]
+    assert rewritten["primary_query"] == "Deep Learning 行业落地案例"
+    assert not any("补充" in query or "关键依据" in query for query in all_queries)
+
+
+def test_query_engine_rewrite_focuses_legacy_official_wikipedia_query() -> None:
+    context = RequestContext(
+        domain="Deep Learning",
+        normalized_domain="Deep Learning",
+        subdomains=["定义与边界"],
+        time_window="近 12 个月",
+        focus_points=["定义"],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    rewritten = QueryEngine._rewrite_evidence_task_queries(
+        context,
+        {
+            "query_text": "定义与边界 official documentation wikipedia",
+            "claim_or_gap": "补充 定义与边界 的关键依据",
+            "expected_evidence": ["官方或高公信力链接", "与知识点最贴近的说明入口"],
+            "subdomain": "定义与边界",
+        },
+    )
+
+    all_queries = [rewritten["primary_query"], *rewritten["authority_queries"], *rewritten["fallback_queries"]]
+    assert rewritten["primary_query"] == "Deep Learning 定义与边界"
+    assert not any("补充" in query or "官方或高公信力链接" in query for query in all_queries)
+
+
 def test_query_engine_does_not_select_low_quality_results() -> None:
     crawler = LowQualityCrawler()
     engine = QueryEngine(

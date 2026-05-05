@@ -7,7 +7,7 @@ from pathlib import Path
 from knowledgeforge.server import create_app
 from knowledgeforge.server.config import AppConfig
 from knowledgeforge.server.llms.openai_compatible import OpenAICompatibleChatClient
-from knowledgeforge.server.models import GraphSyncResult
+from knowledgeforge.server.models import GraphSyncResult, RequestContext
 from knowledgeforge.server.orchestrator.graph import KnowledgeGraphWorkflow
 from knowledgeforge.server.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.server.services.task_service import TaskService
@@ -23,6 +23,30 @@ def _fill_evidence_and_wait(client, task_id: str) -> dict:
         time.sleep(0.05)
         payload = client.get(f"/tasks/{task_id}").get_json()
     return payload
+
+
+def test_evidence_query_text_focuses_on_domain_and_node_title() -> None:
+    context = RequestContext(
+        domain="Deep Learning",
+        subdomains=[],
+        time_window="",
+        focus_points=[],
+        constraints=[],
+        initial_strategy=[],
+    )
+    blueprint = {"title": "行业落地案例", "subdomain": "系统应用"}
+    file_path = Path("deep-learning/applications/industry-cases.md")
+
+    assert KnowledgeGraphWorkflow._focused_evidence_query(context, blueprint, file_path) == "Deep Learning 行业落地案例"
+    assert (
+        KnowledgeGraphWorkflow._normalize_evidence_query_text(
+            context,
+            blueprint,
+            file_path,
+            "Deep Learning 补充 行业落地案例 的关键依据 official documentation",
+        )
+        == "Deep Learning 行业落地案例"
+    )
 
 
 def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path) -> None:

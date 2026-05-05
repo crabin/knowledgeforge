@@ -613,7 +613,7 @@ class KnowledgeGraphWorkflow:
                 },
             )
             contract = self._build_graph_completion_contract(context, blueprint, spec, suggested_path)
-            query_tasks = self._extract_queue_tasks(contract, blueprint, Path(suggested_path), queue.get("current_round", 1))
+            query_tasks = self._extract_queue_tasks(context, contract, blueprint, Path(suggested_path), queue.get("current_round", 1))
             node_sync = self._update_structure_node_status(
                 state,
                 context,
@@ -1397,21 +1397,23 @@ class KnowledgeGraphWorkflow:
                 return f"图谱顺序第 {index} 个节点"
         return "按结构图谱父子关系学习"
 
-    def _default_query_tasks(self, blueprint: dict[str, Any], file_path: Path, spec) -> list[dict[str, Any]]:
+    def _default_query_tasks(self, context: RequestContext, blueprint: dict[str, Any], file_path: Path, spec) -> list[dict[str, Any]]:
         requirements = blueprint.get("completion_requirements", {})
         required_query_tasks = 0
         if isinstance(requirements, dict):
             required_query_tasks = int(requirements.get("required_query_tasks", 0) or 0)
         if required_query_tasks <= 0:
             return []
+        evidence_topic = self._evidence_topic_from_blueprint(blueprint, file_path)
+        query_text = self._focused_evidence_query(context, blueprint, file_path)
         return [
             {
                 "task_id": f"{blueprint.get('file_id', file_path.stem)}-task-1",
                 "task_type": "query",
                 "section": "证据与来源",
-                "claim_or_gap": f"补充 {blueprint.get('title', file_path.stem)} 的关键依据",
-                "query_text": f"{blueprint.get('title', file_path.stem)} official documentation wikipedia",
-                "expected_evidence": ["官方或高公信力链接", "与知识点最贴近的说明入口"],
+                "claim_or_gap": f"{evidence_topic} 的权威依据",
+                "query_text": query_text,
+                "expected_evidence": [f"{evidence_topic} 的权威说明入口", "官方、高公信力或百科来源"],
                 "preferred_source_types": ["official documentation", "standard", "paper", "project homepage", "wikipedia"],
                 "acceptance_criteria": ["至少得到一条可访问链接", "链接能解释对应知识点"],
                 "status": "pending",
@@ -1420,7 +1422,7 @@ class KnowledgeGraphWorkflow:
 
     def _build_graph_completion_contract(self, context: RequestContext, blueprint: dict[str, Any], spec, suggested_path: str) -> dict[str, Any]:
         file_path = Path(suggested_path)
-        tasks = self._default_query_tasks(blueprint, file_path, spec)
+        tasks = self._default_query_tasks(context, blueprint, file_path, spec)
         return {
             "file_id": str(blueprint.get("file_id", file_path.stem)),
             "file_path": suggested_path,
@@ -1437,20 +1439,22 @@ class KnowledgeGraphWorkflow:
             },
         }
 
-    def _extract_queue_tasks(self, contract: dict[str, Any], blueprint: dict[str, Any], file_path: Path, round_number: int) -> list[dict[str, Any]]:
+    def _extract_queue_tasks(self, context: RequestContext, contract: dict[str, Any], blueprint: dict[str, Any], file_path: Path, round_number: int) -> list[dict[str, Any]]:
         tasks: list[dict[str, Any]] = []
         node_id = self._structure_node_id_for_blueprint(blueprint)
         suggested_relative_path = str(blueprint.get("relative_path", "")).strip()
         for task in contract.get("query_tasks", []):
             if not isinstance(task, dict):
                 continue
+            query_text = self._normalize_evidence_query_text(context, blueprint, file_path, str(task.get("query_text", task.get("query_intent", ""))))
+            claim_or_gap = str(task.get("claim_or_gap", "")).strip() or f"{self._evidence_topic_from_blueprint(blueprint, file_path)} 的权威依据"
             queue_task = DomainTaskQueueItem(
                 task_id=str(task.get("task_id", "")),
                 task_type="query",
                 target_file_path=file_path.as_posix(),
                 target_section=str(task.get("section", "正文")),
-                claim_or_gap=str(task.get("claim_or_gap", "")),
-                query_text=str(task.get("query_text", task.get("query_intent", ""))),
+                claim_or_gap=claim_or_gap,
+                query_text=query_text,
                 expected_evidence=[str(item) for item in task.get("expected_evidence", []) if str(item).strip()],
                 status="pending",
                 round_number=round_number,
@@ -1465,6 +1469,30 @@ class KnowledgeGraphWorkflow:
             queue_task["suggested_relative_path"] = suggested_relative_path
             tasks.append(queue_task)
         return tasks
+
+    @staticmethod
+    def _evidence_topic_from_blueprint(blueprint: dict[str, Any], file_path: Path) -> str:
+        title = str(blueprint.get("title", "")).strip()
+        if title:
+            return title
+        subdomain = str(blueprint.get("subdomain", "")).strip()
+        if subdomain:
+            return subdomain
+        return file_path.stem.replace("-", " ").replace("_", " ").strip() or "核心知识点"
+
+    @classmethod
+    def _focused_evidence_query(cls, context: RequestContext, blueprint: dict[str, Any], file_path: Path) -> str:
+        domain = (context.normalized_domain or context.domain or "").strip()
+        topic = cls._evidence_topic_from_blueprint(blueprint, file_path)
+        return " ".join(part for part in [domain, topic] if part).strip() or f"{topic} official documentation"
+
+    @classmethod
+    def _normalize_evidence_query_text(cls, context: RequestContext, blueprint: dict[str, Any], file_path: Path, query_text: str) -> str:
+        cleaned = " ".join(query_text.split())
+        noisy_markers = ("补充", "关键依据", "官方或高公信力链接", "与知识点最贴近")
+        if not cleaned or any(marker in cleaned for marker in noisy_markers):
+            return cls._focused_evidence_query(context, blueprint, file_path)
+        return cleaned
 
     @staticmethod
     def _merge_queue_tasks(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:

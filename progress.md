@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 Query 任务查询词聚焦优化
+
+- 调整图谱补全队列的 evidence task 默认生成逻辑：`query_text` 改为“领域名 + 节点标题/证据主题”，例如 `Deep Learning 行业落地案例`，不再生成 `补充 ... 的关键依据 official documentation` 这类低价值查询。
+- 更新 framework 证据文件 prompt，要求 LLM 输出短搜索词，并将 `claim_or_gap` 写成待证事实本身而不是执行动作，减少 token 消耗和后续 query rewrite 噪声。
+- 在入队和 QueryEngine 单任务 rewrite 两层增加降噪：过滤 `补充`、`关键依据`、`官方或高公信力链接`、`与知识点最贴近` 等操作性文案；旧队列中的 `定义与边界 official documentation wikipedia` 会规整为 `Deep Learning 定义与边界`。
+- 验证：`uv run ruff check knowledgeforge/agent/QueryEngine/agent.py knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py tests/test_query_engine.py tests/test_workflow.py` 通过；`uv run python -m py_compile knowledgeforge/server/orchestrator/graph.py knowledgeforge/server/prompts/knowledge_file_generation.py knowledgeforge/agent/QueryEngine/agent.py` 通过；`uv run pytest -q tests/test_query_engine.py tests/test_workflow.py` 结果 `59 passed`；当前 `sub_def_scope-task-1 --dry-run` 输出已改为 `Deep Learning 定义与边界`。
+
 ## 2026-05-06 单条 Query 模拟脚本输出增强
 
 - 增强 `scripts/simulate_query_task.py` 的调试输出：现在分段打印 `api_request`、`query_request` 和 `query_result`，便于定位前端单个查询卡片对应的后端读取、查询改写和实际搜索结果。
