@@ -1,5 +1,11 @@
 # Progress
 
+## 2026-05-06 查询队列目标节点展示修正
+
+- 修复查询填充阶段队列卡片仍显示“目标文件”的问题：前端现在优先根据 `target_node_id` / `structure_node_id` 展示“目标节点”，并从当前结构图谱解析节点标题。
+- 无节点 id 的兼容场景仍回退为“目标位置”，显示 suggested relative path 或 target file path。
+- 验证：`node --check knowledgeforge/web/static/js/dashboard.js` 通过；`uv run pytest -q tests/test_dashboard.py` 结果 `11 passed`。
+
 ## 2026-05-06 SSE 任务状态序列化并发修复
 
 - 修复 `/tasks/{task_id}/stream` 在后台任务更新运行态 dict 时调用 `get_task()`，导致 `_serialize_state()` 抛出 `RuntimeError: dictionary changed size during iteration` 的问题。

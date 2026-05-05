@@ -1803,6 +1803,7 @@ function renderQueuePanel(payload) {
   const rounds = Array.isArray(queue.round_summaries) ? queue.round_summaries : [];
   const counts = summarizeQueueTaskCounts(tasks);
   const runningTask = tasks.find((task) => task.status === "running");
+  const nodeTitleById = buildStructureNodeTitleMap(payload);
 
   if (queuePanelHint) {
     queuePanelHint.textContent = buildQueueStatusHint(queue.final_status, queue.current_round, runningTask);
@@ -1813,6 +1814,7 @@ function renderQueuePanel(payload) {
     return;
   }
 
+  const runningTarget = getQueueTargetLabel(runningTask, nodeTitleById);
   const cards = [
     `<article class="plan-card active">
       <div class="plan-card-head">
@@ -1839,7 +1841,7 @@ function renderQueuePanel(payload) {
       <div class="plan-query">${escapeHtml(runningTask?.query_text || "当前没有运行中的队列任务")}</div>
       <div class="plan-lists">
         <div><b>当前任务</b><ul><li>${escapeHtml(runningTask?.task_id || "暂无")}</li></ul></div>
-        <div><b>目标位置</b><ul><li>${escapeHtml(runningTask?.target_file_path || "暂无")}</li></ul></div>
+        <div><b>${escapeHtml(runningTarget.label)}</b><ul><li>${escapeHtml(runningTarget.value)}</li></ul></div>
       </div>
     </article>`,
   ];
@@ -1868,6 +1870,7 @@ function renderQueuePanel(payload) {
     const statusLabel = done ? "已完成" : active ? "执行中" : item.status === "insufficient" ? "需补充" : "待执行";
     const citations = (item.citations || []).map((citation) => `<li>${escapeHtml(citation.title || citation.url || "来源")}</li>`).join("");
     const expected = (item.expected_evidence || []).map((value) => `<li>${escapeHtml(value)}</li>`).join("");
+    const target = getQueueTargetLabel(item, nodeTitleById);
     cards.push(`<article class="plan-card ${done ? "done" : active ? "active" : "pending"}">
       <div class="plan-card-head">
         <span class="checkmark" aria-hidden="true">${done ? "✓" : ""}</span>
@@ -1878,7 +1881,7 @@ function renderQueuePanel(payload) {
       </div>
       <div class="plan-query">${escapeHtml(item.query_text || item.claim_or_gap || "")}</div>
       <div class="plan-lists">
-        <div><b>目标文件</b><ul><li>${escapeHtml(item.target_file_path || "")}</li></ul></div>
+        <div><b>${escapeHtml(target.label)}</b><ul><li>${escapeHtml(target.value)}</li></ul></div>
         <div><b>预期补充</b><ul>${expected || "<li>未提供</li>"}</ul></div>
       </div>
       ${citations ? `<div class="plan-saves"><b>已收集来源</b><ul>${citations}</ul></div>` : ""}
@@ -1886,6 +1889,29 @@ function renderQueuePanel(payload) {
   });
 
   queueOutput.innerHTML = cards.join("");
+}
+
+function buildStructureNodeTitleMap(payload) {
+  const graph = payload.structure_graph || payload.task?.structure_graph || payload.request_context?.structure_graph || {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const titleById = {};
+  nodes.forEach((node) => {
+    const nodeId = String(node.node_id || node.id || "").trim();
+    const title = String(node.title || node.label || "").trim();
+    if (nodeId && title) titleById[nodeId] = title;
+  });
+  return titleById;
+}
+
+function getQueueTargetLabel(task, titleById = {}) {
+  if (!task) return { label: "目标位置", value: "暂无" };
+  const nodeId = String(task.target_node_id || task.structure_node_id || "").trim();
+  if (nodeId) {
+    const nodeTitle = titleById[nodeId] || "";
+    return { label: "目标节点", value: nodeTitle ? `${nodeTitle} (${nodeId})` : nodeId };
+  }
+  const path = String(task.suggested_relative_path || task.target_file_path || "").trim();
+  return { label: "目标位置", value: path || "暂无" };
 }
 
 function renderLearningPlan(payload) {
