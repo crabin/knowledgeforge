@@ -18,6 +18,11 @@
 - 后置补全文档分支：“补全文档”按钮是唯一的本地知识 Markdown 落盘入口；点击后检查 Neo4j 架构 review、证据链接和治理状态，再生成 `save/{领域}/README.md` 与知识点 Markdown。ChromaDB 仍不进入当前主链路。
 
 ## 下一轮增强 / 当前进行中的补充工作
+- Query 搜索入口与来源优先级（2026-05-06）
+  - [complete] 将 Query/Media 搜索入口收敛为 Google-only，移除 Bing provider 与相关 fallback 路径。
+  - [complete] 在 QueryEngine prompt、队列任务默认值和单任务 rewrite 中加入来源类别优先级：Wikipedia、官方文档、技术文档、AI/ML 论文、新闻时事、学术来源。
+  - [complete] 通过 `site:` 权威域名查询把泛化证据任务转为可执行 Google 查询，并解析 Google `/url?q=...` 真实目标链接。
+  - [complete] 更新模拟脚本、回归测试和验证记录。
 - 两轮 Review 职责细分（2026-05-05）
   - [complete] 将第一轮 review 固定为结构覆盖审查，专注领域边界、层级、知识点覆盖、节点粒度和关系完整性。
   - [complete] 将图谱补全文档上下文准备前移到第二轮 review 之前，让第二轮审查真实的证据需求、query 任务、建议路径和文档上下文。

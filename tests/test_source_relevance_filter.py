@@ -1,29 +1,26 @@
 from __future__ import annotations
 
-import base64
-
 from knowledgeforge.agent.MediaEngine.state.state import MediaSearchHit
 from knowledgeforge.agent.MediaEngine.tools.crawler import MediaPerspectiveCrawler
 from knowledgeforge.agent.MediaEngine.utils.ranking import classify_platform_type, reliability_for_platform_type
-from knowledgeforge.agent.QueryEngine.tools.crawler import resolve_bing_redirect_url
+from knowledgeforge.agent.QueryEngine.tools.crawler import resolve_google_result_url
 from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant, reliability_for_source_type_and_url
 
 
-def test_resolve_bing_redirect_decodes_base64_u_param() -> None:
+def test_resolve_google_result_url_extracts_q_param() -> None:
     real = "https://scikit-learn.org/stable/index.html"
-    encoded = base64.urlsafe_b64encode(real.encode()).decode().rstrip("=")
-    bing_redirect = f"https://www.bing.com/ck/a?!&&p=abc&u=a1a{encoded}&ntb=1"
-    assert resolve_bing_redirect_url(bing_redirect) == real
+    redirect = f"https://www.google.com/url?q={real}&sa=U&ved=abc"
+    assert resolve_google_result_url(redirect) == real
 
 
-def test_resolve_bing_redirect_returns_original_when_not_redirect() -> None:
+def test_resolve_google_result_url_returns_original_when_not_redirect() -> None:
     url = "https://scikit-learn.org/stable/"
-    assert resolve_bing_redirect_url(url) == url
+    assert resolve_google_result_url(url) == url
 
 
-def test_resolve_bing_redirect_returns_original_on_malformed() -> None:
-    url = "https://www.bing.com/ck/a?!&&p=abc&u=NOTBASE64!!!&ntb=1"
-    assert resolve_bing_redirect_url(url) == url
+def test_resolve_google_result_url_returns_original_without_target() -> None:
+    url = "https://www.google.com/url?sa=U&ved=abc"
+    assert resolve_google_result_url(url) == url
 
 
 def test_relevant_result_passes_exact_phrase() -> None:

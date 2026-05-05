@@ -12,9 +12,8 @@ from knowledgeforge.agent.MediaEngine.utils.ranking import classify_platform_typ
 from knowledgeforge.agent.MediaEngine.utils.text_processing import extract_media_text
 from knowledgeforge.agent.QueryEngine.tools.crawler import (
     SEARCH_PROVIDERS,
-    parse_brave_results,
     parse_google_results,
-    resolve_bing_redirect_url,
+    resolve_google_result_url,
 )
 from knowledgeforge.agent.QueryEngine.utils.ranking import is_result_relevant
 from knowledgeforge.server.tools.agent_browser_cli import AgentBrowserCLI
@@ -140,7 +139,7 @@ class MediaPerspectiveCrawler:
         max_results: int,
         domain_phrases: list[str] | None = None,
     ) -> list[MediaSearchHit]:
-        browser_results = self._browser.search_bing(query, limit=max_results)
+        browser_results = self._browser.search_google(query, limit=max_results)
         if not browser_results:
             self._log(f"[MEDIA-SEARCH][browser] no hits query={query}")
             return []
@@ -212,20 +211,14 @@ class MediaPerspectiveCrawler:
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
-        if provider_name == "duckduckgo":
-            raw_hits = self._parse_duckduckgo(soup)
-        elif provider_name == "bing":
-            raw_hits = self._parse_bing(soup)
-        elif provider_name == "google":
+        if provider_name == "google":
             raw_hits = parse_google_results(soup)
-        elif provider_name == "brave":
-            raw_hits = parse_brave_results(soup)
         else:
             raw_hits = []
 
         hits: list[MediaSearchHit] = []
         for raw_hit in raw_hits:
-            result_url = resolve_bing_redirect_url(raw_hit["url"])
+            result_url = resolve_google_result_url(raw_hit["url"])
             actual_platform_type = classify_platform_type(result_url)
             hits.append(
                 MediaSearchHit(
@@ -255,18 +248,6 @@ class MediaPerspectiveCrawler:
         else:
             self._log(f"[MEDIA-SEARCH][httpx:{provider_name}] no hits query={query}")
         return list(deduped.values())
-
-    @staticmethod
-    def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:
-        from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-
-        return DomainKnowledgeCrawler._parse_duckduckgo(soup)
-
-    @staticmethod
-    def _parse_bing(soup: BeautifulSoup) -> list[dict[str, str]]:
-        from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
-
-        return DomainKnowledgeCrawler._parse_bing(soup)
 
     def _filter_relevant_hits(
         self,

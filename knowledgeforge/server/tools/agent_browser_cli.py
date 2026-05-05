@@ -89,10 +89,6 @@ class AgentBrowserCLI:
         finally:
             self._close()
 
-    def search_bing(self, query: str, limit: int = 5) -> list[BrowserSearchResult]:
-        """Legacy alias kept for compatibility with older callers and tests."""
-        return self.search_google(query, limit=limit)
-
     def fetch_text(self, url: str) -> str:
         if not self.healthy:
             if self.available and self._last_failure_reason:

@@ -291,7 +291,7 @@ def _build_query_request(context: RequestContext, task: dict[str, Any], args: ar
         "rewritten_queries": rewritten,
         "executable_queries_in_order": executable_queries,
         "search_settings": {
-            "providers": ["google", "bing"],
+            "providers": ["google"],
             "search_timeout_seconds": args.search_timeout,
             "llm_timeout_seconds": args.llm_timeout,
             "embeddings": not args.no_embeddings,
@@ -325,9 +325,9 @@ def _build_diagnostics(selected: dict[str, Any] | None, attempts: list[dict[str,
     publisher = str((selected or {}).get("publisher", ""))
     source_type = str((selected or {}).get("source_type", ""))
     warnings: list[str] = []
-    if selected_url.startswith("https://www.bing.com/ck/") or selected_url.startswith("http://www.bing.com/ck/"):
-        warnings.append("selected_link_is_bing_redirect")
-    if source_type == "official" and publisher in {"www.bing.com", "bing.com"}:
+    if selected_url.startswith(("https://www.google.com/url?", "http://www.google.com/url?")):
+        warnings.append("selected_link_is_google_redirect")
+    if source_type == "official" and publisher in {"www.google.com", "google.com"}:
         warnings.append("official_source_uses_search_engine_publisher")
     if attempts and not any(int(attempt.get("hits") or 0) > 0 for attempt in attempts):
         warnings.append("all_search_attempts_returned_zero_hits")

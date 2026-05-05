@@ -1414,7 +1414,7 @@ class KnowledgeGraphWorkflow:
                 "claim_or_gap": f"{evidence_topic} 的权威依据",
                 "query_text": query_text,
                 "expected_evidence": [f"{evidence_topic} 的权威说明入口", "官方、高公信力或百科来源"],
-                "preferred_source_types": ["official documentation", "standard", "paper", "project homepage", "wikipedia"],
+                "preferred_source_types": ["wikipedia", "official documentation", "AI/ML paper", "academic"],
                 "acceptance_criteria": ["至少得到一条可访问链接", "链接能解释对应知识点"],
                 "status": "pending",
             }

@@ -38,21 +38,19 @@ def test_agent_browser_marks_itself_unhealthy_after_timeout(monkeypatch) -> None
     assert len(open_calls) == 1
 
 
-def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
+def test_query_crawler_uses_only_google_http_provider(monkeypatch) -> None:
     crawler = DomainKnowledgeCrawler(timeout=0.1)
     crawler._browser = type("FakeBrowser", (), {"search_google": lambda self, query, limit=5: []})()
     provider_calls: list[str] = []
 
     def fake_provider(*, provider_name: str, **kwargs):
         provider_calls.append(provider_name)
-        if provider_name == "google":
-            return []
         state = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["SearchHit"])
         return [
             state.SearchHit(
-                title="Fallback result",
-                url="https://example.com/query-fallback",
-                snippet="fallback hit",
+                title="Google result",
+                url="https://example.com/google-result",
+                snippet="google hit",
                 source_type="tutorial",
                 score=3.0,
             )
@@ -68,26 +66,24 @@ def test_query_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         max_results=3,
     )
 
-    assert provider_calls == ["google", "bing"]
+    assert provider_calls == ["google"]
     assert hits
-    assert hits[0].url == "https://example.com/query-fallback"
+    assert hits[0].url == "https://example.com/google-result"
 
 
-def test_media_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
+def test_media_crawler_uses_only_google_http_provider(monkeypatch) -> None:
     crawler = MediaPerspectiveCrawler(timeout=0.1)
-    crawler._browser = type("FakeBrowser", (), {"search_bing": lambda self, query, limit=5: []})()
+    crawler._browser = type("FakeBrowser", (), {"search_google": lambda self, query, limit=5: []})()
     provider_calls: list[str] = []
 
     def fake_provider(*, provider_name: str, **kwargs):
         provider_calls.append(provider_name)
-        if provider_name == "google":
-            return []
         state = __import__("knowledgeforge.agent.MediaEngine.state.state", fromlist=["MediaSearchHit"])
         return [
             state.MediaSearchHit(
-                title="Fallback media result",
-                url="https://example.com/media-fallback",
-                snippet="fallback media hit",
+                title="Google media result",
+                url="https://example.com/media-google",
+                snippet="google media hit",
                 platform_type="blog",
                 score=4.0,
             )
@@ -102,9 +98,9 @@ def test_media_crawler_falls_back_to_second_http_provider(monkeypatch) -> None:
         max_results=3,
     )
 
-    assert provider_calls == ["google", "bing"]
+    assert provider_calls == ["google"]
     assert hits
-    assert hits[0].url == "https://example.com/media-fallback"
+    assert hits[0].url == "https://example.com/media-google"
 
 
 def test_query_crawler_fetch_documents_falls_back_after_crawl4ai_failure(monkeypatch) -> None:

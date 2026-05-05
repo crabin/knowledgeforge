@@ -239,7 +239,6 @@ def test_query_engine_executes_approved_plan() -> None:
 def test_query_engine_reviews_files_after_plan_item_completion() -> None:
     context = _context()
     context.task_id = "task-query-review"
-    crawler = RecordingQueryCrawler()
     reviewed = []
 
     def review_callback(task_id, candidate):
@@ -443,7 +442,10 @@ def test_query_engine_uses_fallback_query_when_primary_search_fails() -> None:
 
     result = QueryEngine(chat_client=None, crawler=crawler).run(context, 1, approved_plan=plan)
 
-    assert crawler.queries == ["primary query", "fallback query"]
+    assert crawler.queries[0] == "primary query"
+    assert "fallback query" in crawler.queries
+    assert crawler.queries.index("fallback query") > crawler.queries.index("primary query")
+    assert any("official documentation" in query for query in crawler.queries[1:])
     assert any(entry["event"] == "query_search_failed" for entry in result.execution_log)
     assert any(source.url == "https://example.com/fallback-docs" for source in result.sources)
 

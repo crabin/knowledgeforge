@@ -17,6 +17,7 @@ from knowledgeforge.agent.QueryEngine.utils.ranking import (
     PREFERRED_TUTORIAL_DOMAINS,
     build_site_constrained_queries,
     detect_candidate_official_domains,
+    domains_for_source_priority,
     evidence_match_reason,
     score_evidence_match,
 )
@@ -236,6 +237,7 @@ class QuerySearchNode(BaseQueryNode):
                             query=query,
                             domain=context.normalized_domain or context.domain,
                             expected_info=expected_info,
+                            source_priority=source_priority,
                         ),
                         fallback_queries=[],
                         status="planned",
@@ -730,6 +732,7 @@ class QuerySearchNode(BaseQueryNode):
                     query=query,
                     domain=state.normalized_domain or state.request_context.domain,
                     expected_info=["官方定义", "权威说明", "关键事实"],
+                    source_priority=["official documentation", "standard", "vendor docs", "official GitHub"],
                 ),
                 subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
                 module_id="core_topics",
@@ -751,6 +754,7 @@ class QuerySearchNode(BaseQueryNode):
                     query=query,
                     domain=state.normalized_domain or state.request_context.domain,
                     expected_info=["教程示例", "实践步骤", "注意事项"],
+                    source_priority=["tutorial", "technical blog", "reference guide"],
                 ),
                 subdomain=state.request_context.core_topics[0] if state.request_context.core_topics else "通用",
                 module_id="core_topics",
@@ -824,6 +828,7 @@ class QuerySearchNode(BaseQueryNode):
                     query=question.google_query,
                     domain=question.subdomain or question.question,
                     expected_info=question.expected_info,
+                    source_priority=question.source_priority,
                 )
             if not question.module_label:
                 question.module_label = module_labels_by_id().get(question.module_id, "Core Topics")
@@ -958,6 +963,12 @@ class QuerySearchNode(BaseQueryNode):
         domain_phrases: list[str],
     ):
         if source_type == "official":
+            preferred_domains = domains_for_source_priority(
+                question.source_priority,
+                query=query,
+                expected_info=question.expected_info,
+                max_domains=4,
+            )
             return self._rank_question_hits(
                 question,
                 query,
@@ -966,7 +977,7 @@ class QuerySearchNode(BaseQueryNode):
                     source_type="official",
                     official_domains=state.candidate_official_domains
                     or (state.search_plan.official_domains if state.search_plan else []),
-                    preferred_domains=[],
+                    preferred_domains=preferred_domains,
                     max_results=4,
                     domain_phrases=domain_phrases,
                 ),
@@ -1044,12 +1055,25 @@ class QuerySearchNode(BaseQueryNode):
         return [*PREFERRED_TUTORIAL_DOMAINS, *PREFERRED_TECH_REFERENCE_DOMAINS]
 
     @staticmethod
-    def _build_authority_queries(*, query: str, domain: str, expected_info: list[str]) -> list[str]:
+    def _build_authority_queries(
+        *,
+        query: str,
+        domain: str,
+        expected_info: list[str],
+        source_priority: list[str] | None = None,
+    ) -> list[str]:
         compact_query = " ".join(query.split())
         compact_domain = " ".join(domain.split())
         evidence_terms = " ".join(item for item in expected_info[:2] if item).strip()
+        priority_domains = domains_for_source_priority(
+            source_priority or [],
+            query=compact_query,
+            expected_info=expected_info,
+            max_domains=3,
+        )
         candidates = [
             compact_query,
+            *build_site_constrained_queries(compact_query, priority_domains, max_domains=3),
             f"{compact_query} official documentation",
             f"{compact_query} standard specification project homepage",
             f"{compact_domain} {evidence_terms} official documentation".strip(),

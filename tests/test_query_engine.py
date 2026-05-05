@@ -603,6 +603,34 @@ def test_query_engine_rewrite_focuses_legacy_official_wikipedia_query() -> None:
     all_queries = [rewritten["primary_query"], *rewritten["authority_queries"], *rewritten["fallback_queries"]]
     assert rewritten["primary_query"] == "Deep Learning 定义与边界"
     assert not any("补充" in query or "官方或高公信力链接" in query for query in all_queries)
+    assert "Deep Learning 定义与边界 site:en.wikipedia.org" in rewritten["authority_queries"]
+    assert "Deep Learning 定义与边界 site:zh.wikipedia.org" in rewritten["authority_queries"]
+
+
+def test_query_engine_rewrite_adds_ai_ml_priority_domains() -> None:
+    context = RequestContext(
+        domain="Deep Learning",
+        normalized_domain="Deep Learning",
+        subdomains=["Transformer"],
+        time_window="近 12 个月",
+        focus_points=["论文"],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    rewritten = QueryEngine._rewrite_evidence_task_queries(
+        context,
+        {
+            "query_text": "Deep Learning Transformer architecture",
+            "claim_or_gap": "Transformer 架构论文依据",
+            "expected_evidence": ["论文", "模型实现"],
+            "preferred_source_types": ["AI/ML paper", "academic"],
+        },
+    )
+
+    all_queries = [rewritten["primary_query"], *rewritten["authority_queries"], *rewritten["fallback_queries"]]
+    assert any("site:arxiv.org" in query for query in all_queries)
+    assert any("site:paperswithcode.com" in query for query in all_queries)
 
 
 def test_query_engine_does_not_select_low_quality_results() -> None:

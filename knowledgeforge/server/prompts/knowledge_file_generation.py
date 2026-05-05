@@ -119,6 +119,7 @@ def build_generation_system_prompt(completion_mode: str = "framework") -> str:
             "query_tasks 必须优先检索官方文档、标准、规范、权威论文、项目主页或 Wikipedia。"
             "query_text 必须是短搜索词：领域名 + 节点标题/证据主题，例如 Deep Learning 行业落地案例；不要写“补充...关键依据”。"
             "claim_or_gap 写待证事实本身，不写执行动作。"
+            "preferred_source_types 按内容类别写：通用概念用 wikipedia，技术/编程用 official documentation/GitHub docs，AI/ML 论文用 paper/arxiv/paperswithcode/huggingface，新闻时事用 news，学术用 academic。"
             "证据阶段只保存可访问、贴近知识点的链接，不补全文档内容。"
             "query_tasks 每项包含 task_id、task_type、section、claim_or_gap、query_text、expected_evidence、preferred_source_types、acceptance_criteria、status。"
             "task_type 必须为 query。"

@@ -15,10 +15,20 @@ PREFERRED_TUTORIAL_DOMAINS = (
     "hashnode.dev",
 )
 PREFERRED_TECH_REFERENCE_DOMAINS = (
+    "docs.python.org",
+    "developer.mozilla.org",
     "arxiv.org",
+    "github.com",
     "huggingface.co",
     "paperswithcode.com",
 )
+PRIORITY_SOURCE_DOMAINS = {
+    "concept": ("en.wikipedia.org", "zh.wikipedia.org"),
+    "technical": ("docs.python.org", "developer.mozilla.org", "arxiv.org", "github.com"),
+    "ai_ml": ("arxiv.org", "paperswithcode.com", "huggingface.co"),
+    "news": ("reuters.com", "bbc.com", "theguardian.com"),
+    "academic": ("scholar.google.com", "semanticscholar.org"),
+}
 AUTHORITATIVE_REFERENCE_DOMAINS = (
     "en.wikipedia.org",
     "zh.wikipedia.org",
@@ -56,7 +66,7 @@ def score_url(
     if any(domain.lower() in netloc for domain in official_domains):
         score += 6.0
     if preferred_domains and any(domain.lower() in netloc for domain in preferred_domains):
-        score += 4.0 if source_type != "official" else 1.0
+        score += 4.0 if source_type != "official" else 3.0
     if any(hint in netloc for hint in OFFICIAL_HINTS):
         score += 3.0
     if any(hint in url.lower() for hint in ("docs", "reference", "api", "manual")):
@@ -164,6 +174,34 @@ def is_result_relevant(
 def build_site_constrained_queries(query: str, preferred_domains: list[str], max_domains: int = 3) -> list[str]:
     compact_query = " ".join(query.split())
     return [f"{compact_query} site:{domain}" for domain in preferred_domains[:max_domains]]
+
+
+def domains_for_source_priority(
+    source_priority: list[str],
+    *,
+    query: str = "",
+    expected_info: list[str] | None = None,
+    max_domains: int = 4,
+) -> list[str]:
+    text = " ".join([query, *(expected_info or []), *source_priority]).lower()
+    domains: list[str] = []
+
+    def add(category: str) -> None:
+        for domain in PRIORITY_SOURCE_DOMAINS[category]:
+            if domain not in domains:
+                domains.append(domain)
+
+    if any(token in text for token in ("通用", "概念", "定义", "边界", "wikipedia", "百科", "overview", "definition")):
+        add("concept")
+    if any(token in text for token in ("技术", "编程", "python", "javascript", "web", "api", "sdk", "github", "developer")):
+        add("technical")
+    if any(token in text for token in ("ai", "ml", "machine learning", "deep learning", "模型", "论文", "paper", "huggingface")):
+        add("ai_ml")
+    if any(token in text for token in ("新闻", "时事", "趋势", "news", "recent", "trend")):
+        add("news")
+    if any(token in text for token in ("学术", "academic", "scholar", "survey", "citation", "semantic scholar")):
+        add("academic")
+    return domains[:max_domains]
 
 
 def detect_candidate_official_domains(domain: str, hits: list[object], limit: int = 3) -> list[str]:

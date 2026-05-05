@@ -17,20 +17,21 @@ GOOGLE_HTML = """
     <div class="VwiC3b">Simple and efficient tools for machine learning.</div>
   </div>
   <div class="g">
-    <a href="https://developers.google.com/machine-learning"><h3>Google ML Crash Course</h3></a>
+    <a href="/url?q=https://developers.google.com/machine-learning&sa=U"><h3>Google ML Crash Course</h3></a>
     <div class="VwiC3b">Learn machine learning fundamentals from Google.</div>
   </div>
 </body></html>
 """
 
-def test_search_providers_are_only_google_and_bing() -> None:
+def test_search_providers_are_only_google() -> None:
     names = [name for name, _ in SEARCH_PROVIDERS]
-    assert names == ["google", "bing"]
+    assert names == ["google"]
 
 
-def test_provider_order_is_google_then_bing() -> None:
+def test_provider_url_is_google_search() -> None:
     names = [name for name, _ in SEARCH_PROVIDERS]
-    assert names.index("google") < names.index("bing")
+    assert names == ["google"]
+    assert SEARCH_PROVIDERS[0][1] == "https://www.google.com/search"
 
 
 def test_parse_google_results_extracts_title_url_snippet() -> None:
@@ -40,6 +41,7 @@ def test_parse_google_results_extracts_title_url_snippet() -> None:
     assert hits[0]["url"] == "https://scikit-learn.org/stable/"
     assert hits[0]["title"] == "scikit-learn: Machine Learning in Python"
     assert "machine learning" in hits[0]["snippet"].lower()
+    assert hits[1]["url"] == "https://developers.google.com/machine-learning"
 
 
 def test_wikipedia_result_dataclass_has_required_fields() -> None:

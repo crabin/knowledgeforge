@@ -1,5 +1,13 @@
 # Progress
 
+## 2026-05-06 Query 搜索入口收敛为 Google
+
+- 按用户新要求将 Query/Media 搜索入口收敛为 Google-only：`SEARCH_PROVIDERS` 仅保留 `google`，浏览器搜索和 HTTP fallback 均不再调用 Bing，脚本 `search_settings.providers` 也只输出 `["google"]`。
+- 增加 Google `/url?q=...` 结果解析，避免只接受直连 `http` 链接导致漏掉 Google redirect 中的真实结果。
+- 将来源优先级固化到 QueryEngine prompt 和 rewrite 步骤：通用概念优先 `en.wikipedia.org/zh.wikipedia.org`；技术/编程优先 `docs.python.org/developer.mozilla.org/arxiv.org/github.com`；AI/ML 论文优先 `arxiv.org/paperswithcode.com/huggingface.co`；新闻时事优先 Reuters/BBC/The Guardian；学术优先 Google Scholar/Semantic Scholar；官方文档优先产品官网。
+- Query 单任务 rewrite 会基于 `preferred_source_types` / `source_priority` 自动追加 `site:` 权威域名查询；当前 `sub_def_scope-task-1 --dry-run` 已从泛化查询改为 `Deep Learning 定义与边界 site:en.wikipedia.org`、`site:zh.wikipedia.org`、`site:arxiv.org` 等 Google 查询。
+- 验证：`uv run ruff check` 本次触达文件通过；`uv run python -m py_compile` 本次触达 Python 文件通过；`uv run pytest -q tests/test_multi_provider_search.py tests/test_browser_fallbacks.py tests/test_source_relevance_filter.py tests/test_query_engine.py tests/test_source_probe_scripts.py` 结果 `44 passed`；`uv run pytest -q tests/test_workflow.py tests/test_media_engine.py` 结果 `55 passed`；`uv run pytest -q` 结果 `173 passed`。
+
 ## 2026-05-06 Query 单任务模拟脚本可用性优化
 
 - 优化 `scripts/simulate_query_task.py` 调试体验：新增 `--list-queue`、`--queue-status`、`--queue-limit`，可先筛选/预览队列任务，并展示每个任务经过 QueryEngine rewrite 后的 `primary_query`。

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 from collections import OrderedDict
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
@@ -17,7 +16,6 @@ from knowledgeforge.server.tools.crawl4ai_adapter import Crawl4AIAdapter
 
 SEARCH_PROVIDERS: list[tuple[str, str]] = [
     ("google", "https://www.google.com/search"),
-    ("bing", "https://www.bing.com/search"),
 ]
 
 
@@ -29,7 +27,7 @@ def parse_google_results(soup: BeautifulSoup) -> list[dict[str, str]]:
             continue
         title_node = anchor.select_one("h3")
         snippet_node = block.select_one("div.VwiC3b, div.IsZvec, span.aCOpRe")
-        url = anchor.get("href", "").strip()
+        url = resolve_google_result_url(anchor.get("href", "").strip())
         if not url.startswith("http"):
             continue
         hits.append(
@@ -42,42 +40,13 @@ def parse_google_results(soup: BeautifulSoup) -> list[dict[str, str]]:
     return hits
 
 
-def parse_brave_results(soup: BeautifulSoup) -> list[dict[str, str]]:
-    hits: list[dict[str, str]] = []
-    for block in soup.select("div.snippet, div[data-type='web']"):
-        anchor = block.select_one("a.result-header, a[href]")
-        if not anchor:
-            continue
-        title_node = anchor.select_one("span.title") or anchor
-        snippet_node = block.select_one("p.snippet-description, .snippet-content")
-        url = anchor.get("href", "").strip()
-        if not url.startswith("http"):
-            continue
-        hits.append(
-            {
-                "url": url,
-                "title": " ".join(title_node.get_text(" ", strip=True).split()),
-                "snippet": " ".join((snippet_node.get_text(" ", strip=True) if snippet_node else "").split()),
-            }
-        )
-    return hits
-
-
-def resolve_bing_redirect_url(url: str) -> str:
-    """Decode Bing /ck/a redirects to the real destination URL."""
+def resolve_google_result_url(url: str) -> str:
+    """Resolve Google result redirect URLs such as /url?q=https://example.com."""
     parsed = urlparse(url)
-    if "bing.com" not in parsed.netloc or "/ck/a" not in parsed.path:
+    if parsed.path != "/url" or (parsed.netloc and "google." not in parsed.netloc):
         return url
-    raw = (parse_qs(parsed.query).get("u") or [""])[0]
-    if not raw:
-        return url
-    if raw.startswith("a1a"):
-        raw = raw[3:]
-    raw += "=" * (-len(raw) % 4)
-    try:
-        return base64.urlsafe_b64decode(raw).decode("utf-8")
-    except Exception:
-        return url
+    target = (parse_qs(parsed.query).get("q") or parse_qs(parsed.query).get("url") or [""])[0]
+    return target or url
 
 
 class DomainKnowledgeCrawler:
@@ -290,16 +259,14 @@ class DomainKnowledgeCrawler:
             return []
 
         soup = BeautifulSoup(response.text, "html.parser")
-        if provider_name == "bing":
-            raw_hits = self._parse_bing(soup)
-        elif provider_name == "google":
+        if provider_name == "google":
             raw_hits = parse_google_results(soup)
         else:
             raw_hits = []
 
         hits: list[SearchHit] = []
         for raw_hit in raw_hits:
-            result_url = resolve_bing_redirect_url(raw_hit["url"])
+            result_url = resolve_google_result_url(raw_hit["url"])
             hits.append(
                 SearchHit(
                     title=raw_hit["title"],
@@ -323,24 +290,6 @@ class DomainKnowledgeCrawler:
         else:
             self._log(f"[QUERY-SEARCH][httpx:{provider_name}] no hits query={query}")
         return list(deduped.values())
-
-    @staticmethod
-    def _parse_duckduckgo(soup: BeautifulSoup) -> list[dict[str, str]]:
-        return DomainKnowledgeCrawler._parse_search_blocks(
-            soup,
-            selectors=(".result",),
-            anchor_selectors=(".result__title a", "a.result__a"),
-            snippet_selectors=(".result__snippet",),
-        )
-
-    @staticmethod
-    def _parse_bing(soup: BeautifulSoup) -> list[dict[str, str]]:
-        return DomainKnowledgeCrawler._parse_search_blocks(
-            soup,
-            selectors=("li.b_algo",),
-            anchor_selectors=("h2 a",),
-            snippet_selectors=(".b_caption p", "p"),
-        )
 
     @staticmethod
     def _parse_search_blocks(

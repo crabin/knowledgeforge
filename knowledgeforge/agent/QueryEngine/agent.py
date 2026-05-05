@@ -9,6 +9,7 @@ from knowledgeforge.agent.QueryEngine.nodes.search_node import QueryRealtimeFile
 from knowledgeforge.agent.QueryEngine.nodes.summary_node import QuerySummaryNode
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
+from knowledgeforge.agent.QueryEngine.utils.ranking import build_site_constrained_queries, domains_for_source_priority
 from knowledgeforge.agent.base import BaseEngine
 from knowledgeforge.server.llms.openai_compatible import (
     OpenAICompatibleChatClient,
@@ -368,8 +369,15 @@ class QueryEngine(BaseEngine):
         ]
         base = query_text or " ".join([domain, claim]).strip() or f"{domain} official documentation"
         evidence_terms = " ".join(expected[:2]).strip()
+        priority_domains = domains_for_source_priority(
+            [str(item).strip() for item in task.get("preferred_source_types", []) if str(item).strip()],
+            query=base,
+            expected_info=expected,
+            max_domains=3,
+        )
         candidates = [
             base,
+            *build_site_constrained_queries(base, priority_domains, max_domains=3),
             f"{domain} {claim} official documentation".strip() if claim else f"{base} official documentation",
             f"{base} standard specification project homepage",
             f"{base} paper benchmark reference",
