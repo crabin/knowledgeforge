@@ -1279,10 +1279,34 @@ class TaskService:
         stored = self.get_task(task_id)
         if stored is None:
             return None
-        if self._is_running_status(stored.get("task_status", "")):
-            raise ValueError("running tasks cannot start evidence filling.")
         if stored.get("task_status") == "verified":
             return stored
+        fill_state = self._build_evidence_fill_state(task_id, stored)
+        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", "")})
+        with token_tracking_context(task_id):
+            final_state = self._workflow.fill_evidence(fill_state)
+        return self._persist_and_serialize(final_state, "evidence_fill_completed")
+
+    def start_evidence_fill(self, task_id: str) -> dict[str, Any] | None:
+        stored = self.get_task(task_id)
+        if stored is None:
+            return None
+        if stored.get("task_status") == "verified":
+            return stored
+        fill_state = self._build_evidence_fill_state(task_id, stored)
+        fill_state["updated_at"] = now_iso()
+        fill_state.pop("finished_at", None)
+        with self._task_lock:
+            self._tasks[task_id] = fill_state
+        payload = self._serialize_state(fill_state)
+        self._state_store.save(task_id, payload)
+        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", ""), "mode": "async"})
+        Thread(target=self._run_evidence_fill_task, args=(fill_state,), daemon=True).start()
+        return self._attach_runtime_observability(payload)
+
+    def _build_evidence_fill_state(self, task_id: str, stored: dict[str, Any]) -> WorkflowState:
+        if self._is_running_status(stored.get("task_status", "")):
+            raise ValueError("running tasks cannot start evidence filling.")
         if stored.get("task_status") != "graph_ready":
             raise ValueError("knowledge graph is not ready for evidence filling yet; finish graph generation first.")
         queue = stored.get("task_queue_snapshot") or {}
@@ -1298,6 +1322,13 @@ class TaskService:
                 metadata={"trigger": "manual_evidence_fill"},
             )
         )
+        event = WorkflowStepEvent(
+            step_id="evidence_link_query",
+            label="查询填充已启动",
+            status="active",
+            timestamp=now_iso(),
+            details={"trigger": "manual_evidence_fill"},
+        )
         fill_state: WorkflowState = {
             "task_id": task_id,
             "request_context": request_context,
@@ -1312,7 +1343,6 @@ class TaskService:
             "structure_review_rounds": stored.get("structure_review_rounds", []),
             "structure_review_status": stored.get("structure_review_status", "passed"),
             "structure_repair_log": stored.get("structure_repair_log", []),
-            "workflow_events": stored.get("workflow_events", []),
             "graph_snapshot": stored.get("graph_snapshot", {}),
             "graph_event": stored.get("graph_event", {}),
             "task_queue_path": stored.get("task_queue_path", ""),
@@ -1320,13 +1350,35 @@ class TaskService:
             "agent_outputs": self._deserialize_agent_outputs(stored.get("agent_outputs", {})),
             "task_status": "running",
             "current_step": "evidence_link_query",
-            "current_action": "查询填充已启动。",
+            "current_action": "查询填充已启动，正在为 Neo4j 知识图谱补充可信证据链接。",
             "started_at": stored.get("started_at") or now_iso(),
+            "workflow_events": [*stored.get("workflow_events", []), event.to_dict()],
         }
-        self._audit_logger.log(task_id, "evidence_fill_started", {"from_status": stored.get("task_status", "")})
-        with token_tracking_context(task_id):
-            final_state = self._workflow.fill_evidence(fill_state)
-        return self._persist_and_serialize(final_state, "evidence_fill_completed")
+        return fill_state
+
+    def _run_evidence_fill_task(self, initial_state: WorkflowState) -> None:
+        task_id = initial_state["task_id"]
+        try:
+            with token_tracking_context(task_id):
+                final_state = self._workflow.fill_evidence(initial_state)
+        except _TaskCancelled:
+            return
+        except Exception as exc:
+            if self._is_cancelled(task_id):
+                return
+            failed_state = dict(initial_state)
+            failed_state["task_status"] = "failed"
+            failed_state["finished_at"] = now_iso()
+            failed_state["updated_at"] = failed_state["finished_at"]
+            with self._task_lock:
+                self._tasks[task_id] = failed_state
+            payload = self._serialize_state(failed_state)
+            self._state_store.save(task_id, payload)
+            self._audit_logger.log(task_id, "evidence_fill_failed", {"error": str(exc)})
+            return
+        if self._is_cancelled(task_id):
+            return
+        self._persist_and_serialize(final_state, "evidence_fill_completed")
 
     def complete_documents(self, task_id: str) -> dict[str, Any] | None:
         stored = self.get_task(task_id)

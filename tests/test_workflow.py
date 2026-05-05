@@ -13,6 +13,18 @@ from knowledgeforge.postprocess.pipeline import PostStoragePipeline
 from knowledgeforge.services.task_service import TaskService
 
 
+def _fill_evidence_and_wait(client, task_id: str) -> dict:
+    response = client.post(f"/tasks/{task_id}/evidence/fill")
+    assert response.status_code in {200, 202}
+    payload = response.get_json()
+    for _ in range(80):
+        if payload.get("task_status") not in {"running", "resumed", "supplementing", "filled"} and payload.get("finished_at"):
+            return payload
+        time.sleep(0.05)
+        payload = client.get(f"/tasks/{task_id}").get_json()
+    return payload
+
+
 def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path) -> None:
     app = create_app(
         AppConfig(
@@ -55,9 +67,7 @@ def test_task_workflow_updates_graph_without_markdown_by_default(tmp_path: Path)
     assert all(task["task_type"] == "query" for task in payload["task_queue_snapshot"]["tasks"])
     assert all(not task.get("selected_link") for task in payload["task_queue_snapshot"]["tasks"])
 
-    fill_response = client.post(f"/tasks/{payload['task_id']}/evidence/fill")
-    assert fill_response.status_code == 200
-    payload = fill_response.get_json()
+    payload = _fill_evidence_and_wait(client, payload["task_id"])
     assert payload["task_status"] == "verified"
     assert payload["document_completion_status"] == "not_requested"
     assert payload["full_document_status"] == "not_requested"
@@ -132,6 +142,36 @@ def test_task_workflow_ignores_full_document_mode_until_completion_button(tmp_pa
     assert payload["full_document_status"] == "not_requested"
     assert "document_artifact" not in payload
     assert not list((tmp_path / "save" / "知识工程").rglob("*.md"))
+
+
+def test_evidence_fill_returns_running_state_before_completion(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
+
+    response = client.post(f"/tasks/{created['task_id']}/evidence/fill")
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["task_status"] == "running"
+    assert payload["current_step"] == "evidence_link_query"
+    assert "查询填充已启动" in payload["current_action"]
+    assert payload["task_timing"]["is_running"] is True
+    assert any(event["step_id"] == "evidence_link_query" and event["status"] == "active" for event in payload["workflow_events"])
+    final_payload = payload
+    for _ in range(80):
+        final_payload = client.get(f"/tasks/{created['task_id']}").get_json()
+        if final_payload.get("task_status") not in {"running", "resumed", "supplementing", "filled"} and final_payload.get("finished_at"):
+            break
+        time.sleep(0.05)
+    assert final_payload["task_status"] == "verified"
 
 
 def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, monkeypatch) -> None:
@@ -447,8 +487,8 @@ def test_complete_documents_requires_finished_framework_then_expands_files(tmp_p
     )
     client = app.test_client()
     created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
-    filled = client.post(f"/tasks/{created['task_id']}/evidence/fill")
-    assert filled.status_code == 200
+    filled = _fill_evidence_and_wait(client, created["task_id"])
+    assert filled["task_status"] == "verified"
 
     response = client.post(f"/tasks/{created['task_id']}/documents/complete")
 
@@ -747,9 +787,7 @@ def test_post_storage_result_contains_graph_and_extraction(tmp_path: Path) -> No
 
     assert response.status_code == 201
     created = response.get_json()
-    fill_response = client.post(f"/tasks/{created['task_id']}/evidence/fill")
-    assert fill_response.status_code == 200
-    payload = fill_response.get_json()
+    payload = _fill_evidence_and_wait(client, created["task_id"])
     governance = payload["post_storage_result"]
     assert governance["extraction"]["chunks"]
     assert governance["graph_sync"]["nodes"]
@@ -770,9 +808,7 @@ def test_task_response_and_logs_include_query_execution_trace(tmp_path: Path) ->
 
     assert response.status_code == 201
     created = response.get_json()
-    fill_response = client.post(f"/tasks/{created['task_id']}/evidence/fill")
-    assert fill_response.status_code == 200
-    payload = fill_response.get_json()
+    payload = _fill_evidence_and_wait(client, created["task_id"])
     query_output = payload["agent_outputs"]["QueryEngine"]
     assert any(item == "链接级采集计划：" for item in query_output["raw_material"])
     assert payload["execution_log"]
@@ -1281,9 +1317,7 @@ def test_research_flow_resume_and_max_round_protection(tmp_path: Path) -> None:
 
     assert response.status_code == 201
     created = response.get_json()
-    fill_response = client.post(f"/tasks/{created['task_id']}/evidence/fill")
-    assert fill_response.status_code == 200
-    payload = fill_response.get_json()
+    payload = _fill_evidence_and_wait(client, created["task_id"])
     assert payload["task_status"] == "research_required"
     assert payload["post_storage_result"]["status"] == "failed"
     assert "research_flow" in payload["post_storage_result"]["remediation_flows"]
@@ -1312,8 +1346,8 @@ def test_task_state_persists_across_app_recreation(tmp_path: Path) -> None:
     client = app.test_client()
     created = client.post("/tasks", json={"domain": "知识工程", "constraints": ["simulate_duplicate"]})
     task_id = created.get_json()["task_id"]
-    fill_response = client.post(f"/tasks/{task_id}/evidence/fill")
-    assert fill_response.status_code == 200
+    fill_response = _fill_evidence_and_wait(client, task_id)
+    assert fill_response["task_status"] == "repair_required"
 
     recreated_app = create_app(config)
     recreated_client = recreated_app.test_client()
@@ -1343,8 +1377,8 @@ def test_frozen_version_and_report_only_use_verified_knowledge(tmp_path: Path) -
 
     created = client.post("/tasks", json={"domain": "知识工程"})
     task_id = created.get_json()["task_id"]
-    fill_response = client.post(f"/tasks/{task_id}/evidence/fill")
-    assert fill_response.status_code == 200
+    fill_response = _fill_evidence_and_wait(client, task_id)
+    assert fill_response["task_status"] == "verified"
 
     frozen = client.get(f"/tasks/{task_id}/frozen")
     assert frozen.status_code == 200

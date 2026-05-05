@@ -1793,8 +1793,8 @@ function renderQueuePanel(payload) {
       <div class="plan-card-head">
         <span class="checkmark" aria-hidden="true"></span>
         <div>
-          <strong>LLM 生成进度</strong>
-          <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 文件`)}</span>
+          <strong>图谱上下文进度</strong>
+          <span>${escapeHtml(`${generation.completed_files || 0}/${generation.total_files || 0} 节点`)}</span>
         </div>
       </div>
       <div class="plan-query">${escapeHtml(generation.current_file || "等待生成任务")}</div>
@@ -1867,7 +1867,7 @@ function summarizeGenerationProgress(payload) {
   const queue = payload.task_queue_snapshot || payload.task?.task_queue_snapshot || {};
   const generation = payload.generation_progress || payload.task?.generation_progress || queue.generation_status || {};
   if (!Object.keys(generation).length) return "";
-  return `${generation.completed_files || 0}/${generation.total_files || 0} 文件已生成`;
+  return `${generation.completed_files || 0}/${generation.total_files || 0} 图谱上下文已准备`;
 }
 
 function summarizeCurrentFile(payload) {
@@ -2336,7 +2336,7 @@ document.querySelectorAll("[data-task-action]").forEach((button) => {
       if (activeTaskId && ["get", "queue", "logs", "resume", "fill-evidence", "complete-documents"].includes(action)) {
         scheduleNeo4jGraphRefresh(activeTaskId, { force: true });
       }
-      if (["get", "queue", "logs", "resume"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
+      if (["get", "queue", "logs", "resume", "fill-evidence"].includes(action) && activeTaskId && !isTerminalStatus(payload.task_status || payload.task?.task_status)) {
         startTaskStream(activeTaskId);
       }
     } catch (error) {

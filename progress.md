@@ -791,3 +791,22 @@
 - 初次结果：`170 passed, 1 failed`，失败用例仍按旧口径期望 workflow.run 直接完成证据查询。
 - 修复后重跑 `PYTHONPATH=. pytest -q`
 - 结果：`171 passed in 27.94s`
+
+## 2026-05-05 查询填充实时同步修复
+
+- 修复“查询填充”按钮点击后前端不立即更新的问题：`/tasks/{task_id}/evidence/fill` 改为异步启动，先保存 `task_status=running`、`current_step=evidence_link_query` 和活动 workflow event，再由后台线程继续执行联网证据填充。
+- 前端点击“查询填充”后会立即 `showPayload(...)` 并启动 SSE 跟踪，summary、实时流程图和查询队列区域不再等查询全部结束才刷新。
+- SSE 终止条件调整为“终态且已有 finished_at”，避免治理中途把状态暂时写成 `verified/research_required` 时过早断开，导致图谱证据写入阶段不再同步。
+- 将队列面板的“LLM 生成进度 / 文件已生成”改为“图谱上下文进度 / 图谱上下文已准备”，避免误导为已经进入本地 Markdown 生成阶段。
+- 浏览器插件验证尝试被 Browser Use 安全策略拦截，改用 Flask 测试客户端和前端静态断言验证实时同步契约。
+
+## Verification
+
+- 运行 `PYTHONPATH=. python -m py_compile knowledgeforge/services/task_service.py knowledgeforge/server/api.py`
+- 结果：通过。
+- 运行 `node --check knowledgeforge/web/static/js/dashboard.js`
+- 结果：通过。
+- 运行 `PYTHONPATH=. pytest -q tests/test_workflow.py tests/test_dashboard.py`
+- 结果：`55 passed in 14.32s`
+- 运行 `PYTHONPATH=. pytest -q`
+- 结果：`172 passed in 29.23s`

@@ -43,6 +43,7 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert "图谱补全" in body
     assert "架构Review" in body
     assert "补全文档" in body
+    assert "查询填充" in body
     assert "写入证据链接、来源类型和 claim 到 Neo4j。" in body
     assert "可选：补全文档前写入证据链接、来源类型和 claim。" not in body
     assert "governing-flow-detail" in body
@@ -55,9 +56,15 @@ def test_dashboard_index_renders_feature_workbench(tmp_path: Path) -> None:
     assert body.index('data-step-id="governing"') < body.index('data-step-id="evidence_link_recorded"')
     assert body.index('data-step-id="evidence_link_recorded"') < body.index('data-step-id="document_completion"')
     assert "data-task-action=\"complete-documents\"" in body
+    assert "data-task-action=\"fill-evidence\"" in body
     assert "产出模式" not in body
     dashboard_js = (Path(app.static_folder) / "js" / "dashboard.js").read_text(encoding="utf-8")
     assert "repair_required: \"待系统修复\"" in dashboard_js
+    assert "图谱上下文进度" in dashboard_js
+    assert "图谱上下文已准备" in dashboard_js
+    assert "[\"get\", \"queue\", \"logs\", \"resume\", \"fill-evidence\"]" in dashboard_js
+    assert "LLM 生成进度" not in dashboard_js
+    assert "文件已生成" not in dashboard_js
     assert "timing.is_running ? \"运行中\" : \"已完成\"" not in dashboard_js
     assert "function normalizeStructureReviewRounds" in dashboard_js
     assert "`${rounds.length}/2" in dashboard_js

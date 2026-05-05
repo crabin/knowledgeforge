@@ -309,7 +309,7 @@ def create_app(config: AppConfig | None = None) -> Flask:
                     logs = service.get_task_logs(task_id) or {}
                     payload = {**task, **logs}
                     yield f"data: {_json.dumps(payload, default=str)}\n\n"
-                    if task.get("task_status") in _TERMINAL_STATUSES:
+                    if task.get("task_status") in _TERMINAL_STATUSES and task.get("finished_at"):
                         yield "event: done\ndata: {}\n\n"
                         return
                 time.sleep(0.25)
@@ -330,12 +330,12 @@ def create_app(config: AppConfig | None = None) -> Flask:
     @app.post("/tasks/<task_id>/evidence/fill")
     def fill_evidence(task_id: str):
         try:
-            task = service.fill_evidence(task_id)
+            task = service.start_evidence_fill(task_id)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         if task is None:
             return jsonify({"error": "task not found"}), 404
-        return jsonify(task), 200
+        return jsonify(task), 202 if task.get("task_status") == "running" else 200
 
     @app.post("/tasks/<task_id>/documents/complete")
     def complete_documents(task_id: str):

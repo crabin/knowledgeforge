@@ -42,6 +42,8 @@
 - 默认 `/tasks` / `/tasks/async` 不应继续自动跑证据查询、治理和图谱证据写入；任务完成图谱补全后进入 `graph_ready`，前端保留完整图谱和待查询证据队列。
 - 新增 `/tasks/{task_id}/evidence/fill` 比复用“恢复任务”更符合产品语义；恢复任务继续用于失败 / 回流状态接续。
 - 补全文档仍必须等待查询填充后的治理通过状态；研报仍只消费已冻结、通过质量检测的知识版本。
+- 查询填充不能用长同步 HTTP 请求，否则浏览器会等接口结束才更新 summary、流程图和队列卡片；应先持久化 `running/evidence_link_query` 并返回 202，再由后台线程执行证据填充，前端立刻接入 SSE。
+- 图谱补全阶段的 `generation_progress` 实际表达的是图谱上下文 / 证据任务准备进度，不代表 Markdown 文件已生成；前端文案应避免“LLM 生成进度”“文件已生成”。
 
 ## 2026-05-03 架构 Review 去人工化与 Neo4j 上下文增强
 - 当前 `KnowledgeGraphWorkflow._run_structure_review` 只把本地 `structure_graph`、领域、子领域和关注点传给 LLM，没有查询当前知识 ID 在 Neo4j 中的相关节点、关系与状态。
