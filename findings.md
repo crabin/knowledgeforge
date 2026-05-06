@@ -46,6 +46,7 @@
 - 图谱补全阶段的 `generation_progress` 实际表达的是图谱上下文 / 证据任务准备进度，不代表 Markdown 文件已生成；前端文案应避免“LLM 生成进度”“文件已生成”。
 - 2026-05-06 新决策：Query/Media 搜索入口收敛为 Google-only，不再把 Bing 作为检索 provider；Google 结果中的 `/url?q=...` 需要解析成真实目标 URL 后再做来源判断。
 - 2026-05-06 新决策：证据任务查询词必须以“领域名 + 节点标题/证据主题”为核心，并按类别生成 `site:` 权威域名查询；通用概念优先 Wikipedia，技术/编程优先官方文档/GitHub/arXiv，AI/ML 论文优先 arXiv/Papers with Code/Hugging Face，新闻时事优先 Reuters/BBC/The Guardian，学术优先 Google Scholar/Semantic Scholar，官方文档优先产品官网。
+- 2026-05-06 新决策：批量待查内容可以先由 LLM 按权威来源优先级表分类，生成 `preferred_source_types/source_priority/authority_queries/acceptance_criteria`，再落为运行态 JSON 查询队列；这个步骤属于查询任务准备辅助，不改变主链路的 Neo4j-first 与后置补全文档边界。
 
 ## 2026-05-05 图谱驱动学习计划生成发现
 - 学习计划应作为 Neo4j/结构图谱的衍生产物，而不是默认主链路的新阶段；否则会打乱“graph_ready 后等待用户动作”的流程语义。

@@ -1,5 +1,12 @@
 # Progress
 
+## 2026-05-06 来源优先级批量查询队列脚本
+
+- 新增 `scripts/build_source_priority_query_queue.py`，内置权威来源优先级策略，可将批量待查询条目与来源优先级表拼接成 LLM prompt，并请求 OpenAI-compatible `/chat/completions` 返回结构化 JSON。
+- 脚本会把 LLM 返回内容规整为当前 KnowledgeForge query task 队列字段：`task_id/task_type/target_node_id/claim_or_gap/query_text/expected_evidence/preferred_source_types/source_priority/authority_queries/acceptance_criteria/status`。
+- 支持 `--query` 多次传入、`--queries-json` 批量文件输入、`--dry-run` 离线检查 prompt、`--mock-response` 离线处理 LLM JSON 响应、`--output` 保存 JSON 队列。
+- 验证：`uv run python -m py_compile scripts/build_source_priority_query_queue.py` 通过；`uv run ruff check scripts/build_source_priority_query_queue.py` 通过；`--dry-run` 能生成包含来源优先级表、待查列表和输出 schema 的 prompt；`normalize_queue(...)` 离线样例能生成合法 pending 查询队列。
+
 ## 2026-05-06 Query 搜索入口收敛为 Google
 
 - 按用户新要求将 Query/Media 搜索入口收敛为 Google-only：`SEARCH_PROVIDERS` 仅保留 `google`，浏览器搜索和 HTTP fallback 均不再调用 Bing，脚本 `search_settings.providers` 也只输出 `["google"]`。
