@@ -1576,6 +1576,8 @@ class TaskService:
             return None
         if stored.get("task_status") == "verified":
             return stored
+        if self._is_evidence_fill_in_progress(stored):
+            return self._attach_runtime_observability(stored)
         fill_state = self._build_evidence_fill_state(task_id, stored)
         fill_state["updated_at"] = now_iso()
         fill_state.pop("finished_at", None)
@@ -1588,6 +1590,8 @@ class TaskService:
         return self._attach_runtime_observability(payload)
 
     def _build_evidence_fill_state(self, task_id: str, stored: dict[str, Any]) -> WorkflowState:
+        if self._is_evidence_fill_in_progress(stored):
+            raise ValueError("evidence filling is already running for this task.")
         if self._is_running_status(stored.get("task_status", "")):
             raise ValueError("running tasks cannot start evidence filling.")
         if stored.get("task_status") != "graph_ready":
@@ -2600,6 +2604,13 @@ class TaskService:
     @staticmethod
     def _is_running_status(status: object) -> bool:
         return str(status) in {"running", "resumed", "supplementing", "filled"}
+
+    @classmethod
+    def _is_evidence_fill_in_progress(cls, stored: dict[str, Any]) -> bool:
+        if not cls._is_running_status(stored.get("task_status", "")):
+            return False
+        current_step = str(stored.get("current_step", ""))
+        return current_step in {"evidence_link_query", "evidence_filling"}
 
     @staticmethod
     def _is_terminal_status(status: object) -> bool:

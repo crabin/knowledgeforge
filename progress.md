@@ -950,3 +950,21 @@
 
 - 已暂存本次结构重构相关文件：`knowledgeforge/`、`tests/`、`scripts/`、`task_plan.md`、`findings.md`、`progress.md`。
 - 未暂存用户已有改动：`AGENTS.md`、`docs/流程图.excalidraw` 和 `docs/learning_coach_在线资源说明包/`。
+
+## 2026-05-06 查询填充重复点击幂等修复
+
+- 修复 `/tasks/{task_id}/evidence/fill` 在证据查询已运行时再次触发会返回 400 的问题。
+- 当任务当前处于 `evidence_link_query` 或 `evidence_filling` 时，接口现在直接返回当前运行态快照，不重复启动线程。
+- 保留原有状态门禁：只有真正处于图谱完成待填充的任务才会启动新的查询填充流程，其他运行态仍拒绝重复启动。
+- 新增回归测试，覆盖“第一次点击启动异步查询填充，第二次点击返回当前 running 状态”的场景。
+
+## Verification
+
+- 运行 `PYTHONPATH=. pytest tests/test_workflow.py -k 'evidence_fill'`
+- 结果：`2 passed, 47 deselected in 2.41s`
+- 运行 `PYTHONPATH=. pytest tests/test_workflow.py -k 'task_workflow_updates_graph_without_markdown_by_default'`
+- 结果：`1 passed, 48 deselected in 1.51s`
+
+## Follow-up
+
+- 前端“查询填充”按钮可以继续优化为运行中禁用或显示“处理中”，减少用户二次点击带来的困惑。

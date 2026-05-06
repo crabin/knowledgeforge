@@ -203,6 +203,30 @@ def test_evidence_fill_returns_running_state_before_completion(tmp_path: Path) -
     assert final_payload["task_status"] == "verified"
 
 
+def test_evidence_fill_is_idempotent_while_running(tmp_path: Path) -> None:
+    app = create_app(
+        AppConfig(
+            save_root=tmp_path / "save",
+            task_state_root=tmp_path / "runtime" / "tasks",
+            audit_root=tmp_path / "runtime" / "audit",
+            frozen_root=tmp_path / "runtime" / "frozen",
+        )
+    )
+    client = app.test_client()
+    created = client.post("/tasks", json={"domain": "知识工程", "subdomains": ["工作流编排"]}).get_json()
+
+    first = client.post(f"/tasks/{created['task_id']}/evidence/fill")
+    assert first.status_code == 202
+
+    second = client.post(f"/tasks/{created['task_id']}/evidence/fill")
+
+    assert second.status_code == 202
+    payload = second.get_json()
+    assert payload["task_status"] == "running"
+    assert payload["current_step"] == "evidence_link_query"
+    assert payload["task_timing"]["is_running"] is True
+
+
 def test_structure_review_repairs_first_round_before_documents(tmp_path: Path, monkeypatch) -> None:
     original_complete_json = OpenAICompatibleChatClient.complete_json
     review_calls = {"count": 0}
