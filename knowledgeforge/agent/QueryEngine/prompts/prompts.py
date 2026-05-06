@@ -71,10 +71,14 @@ SUMMARY_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "short_summary": {"type": "string"},
         "key_points": {"type": "array", "items": {"type": "string"}},
         "coverage_topics": {"type": "array", "items": {"type": "string"}},
         "official_findings": {"type": "array", "items": {"type": "string"}},
         "tutorial_findings": {"type": "array", "items": {"type": "string"}},
+        "structured_answer": {"type": "array", "items": {"type": "object"}},
+        "excluded_concepts": {"type": "array", "items": {"type": "object"}},
+        "source_cross_check": {"type": "array", "items": {"type": "object"}},
     },
     "required": ["summary", "key_points", "coverage_topics", "official_findings", "tutorial_findings"],
 }
@@ -139,7 +143,7 @@ REFLECTION_SYSTEM_PROMPT = f"""
 
 SUMMARY_SYSTEM_PROMPT = f"""
 你是 KnowledgeForge 的 QueryEngine 总结器。
-请基于抓取到的网页材料和反思结果，输出“官方文档优先、教程补充”的结构化总结。
+请基于抓取到的网页材料、候选概念池、验证矩阵和反思结果，输出“官方文档优先、教程补充”的结构化总结。
 
 要求：
 1. summary 用中文，先写结论，再写范围。
@@ -147,7 +151,13 @@ SUMMARY_SYSTEM_PROMPT = f"""
 3. official_findings 专门总结官方文档中的事实、接口、规范、步骤。
 4. tutorial_findings 专门总结教程中的示例、经验和注意事项。
 5. coverage_topics 应覆盖用户提供的子主题。
-6. 只返回 JSON。
+6. 如果 deep_search.search_intent 是 basic_components 或 core_concepts，必须额外输出：
+   - structured_answer：按“结构组成 / 训练组成 / 核心内容”分组，每项包含 name 和 role。
+   - excluded_concepts：非当前问题必需的扩展项及剔除原因。
+   - source_cross_check：至少 3 个可靠来源的交叉验证摘要；不足 3 个时如实列出现有可靠来源。
+   - short_summary：300 到 500 字内，适合初学者理解。
+7. 不直接复制原文，要自己提炼。
+8. 只返回 JSON。
 
 输出 JSON Schema：
 {json.dumps(SUMMARY_SCHEMA, ensure_ascii=False, indent=2)}

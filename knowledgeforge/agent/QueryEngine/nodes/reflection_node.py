@@ -74,6 +74,31 @@ class QueryReflectionNode(BaseQueryNode):
                     ],
                 },
                 "search_history": state.search_history,
+                "deep_search": {
+                    "search_intent": state.search_intent,
+                    "candidate_concepts": [
+                        {
+                            "name": concept.name,
+                            "canonical_name": concept.canonical_name,
+                            "mentions": concept.mentions,
+                            "source_urls": concept.source_urls,
+                            "source_types": concept.source_types,
+                            "preliminary_category": concept.preliminary_category,
+                        }
+                        for concept in state.candidate_concepts
+                    ],
+                    "verification_matrix": [
+                        {
+                            "canonical_name": item.canonical_name,
+                            "support_count": item.support_count,
+                            "reliable_support_count": item.reliable_support_count,
+                            "category": item.category,
+                            "included": item.included,
+                            "reason": item.reason,
+                        }
+                        for item in state.verification_matrix
+                    ],
+                },
                 "documents": documents_payload,
             },
             ensure_ascii=False,
@@ -124,7 +149,17 @@ class QueryReflectionNode(BaseQueryNode):
                     supplementary_tutorial_queries.extend(question.fallback_queries or [question.google_query])
                 else:
                     supplementary_official_queries.extend(question.fallback_queries or [question.google_query])
-        elif not state.search_plan:
+        weak_concepts = [
+            item
+            for item in state.verification_matrix
+            if item.category != "excluded_extension" and item.reliable_support_count <= 1
+        ]
+        for item in weak_concepts[:3]:
+            missing_aspects.append(f"{item.canonical_name}：候选概念缺少 2-3 个可靠来源交叉验证")
+            supplementary_official_queries.append(
+                f"{state.normalized_domain or state.request_context.domain} {item.canonical_name} reliable source"
+            )
+        if not insufficient_questions and not state.search_plan:
             official_docs = [doc for doc in state.crawled_documents if doc.source_type == "official"]
             tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
             if not official_docs:

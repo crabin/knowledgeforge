@@ -2,6 +2,12 @@
 
 ## 2026-05-06 来源优先级集成到 QueryEngine
 
+- 深度搜索优化已落地到 QueryEngine：新增 `search_strategy.py`，支持识别 `basic_components/core_concepts` 类查询，生成 broad queries、抽取候选概念池、生成 verification queries，并输出验证矩阵、来源交叉验证、剔除项和初学者友好的结构化摘要。
+- `QuerySearchNode` 现在会对“基本组成 / 核心要点 / 主要部分 / 入门结构”类查询启用两阶段搜索：先追加宽泛搜索建立候选概念池，再围绕候选概念发起定向验证查询；普通 evidence task 仍保持原有改写与队列兼容。
+- `QueryReflectionNode` 会把弱验证候选概念纳入缺口判断；`QuerySummaryNode` 和 `QueryFormattingNode` 会展示结构化答案、候选概念池、验证矩阵、扩展项剔除和来源交叉验证。
+- `scripts/simulate_query_task.py` 的 dry-run 支持离线上下文：当 `localhost` API 不可用但传入 `--query --dry-run` 时，仍能展示 QueryEngine rewrite、`search_intent`、broad queries 和权威查询计划。
+- 验证：`uv run ruff check knowledgeforge/agent/QueryEngine scripts/simulate_query_task.py tests/test_query_engine.py` 通过；`uv run python -m py_compile ...` 通过；`uv run pytest -q tests/test_query_engine.py` 结果 `14 passed`；`simulate_query_task.py --dry-run --json-only` 可输出 `basic_components`、broad queries 和离线 rewrite 结果。
+
 - 新增 `knowledgeforge/agent/QueryEngine/source_priority.py`，将权威来源优先级表、LLM prompt 拼接、LLM JSON 解析、队列规整和非 LLM 来源类型推断放入 QueryEngine 内部能力。
 - QueryEngine 真实链路已接入来源优先级：搜索规划 prompt 直接带权威来源表；`_prepare_plan_questions` 会补齐 `source_priority / authority_queries / acceptance_criteria`；`run_evidence_task` 会在单条证据任务 rewrite 时自动推断优先来源和 `site:` 权威查询。
 - `scripts/build_source_priority_query_queue.py` 已改为薄包装，只调用 QueryEngine 内部 `source_priority` 能力，保留 `--dry-run / --mock-response / --output` 用于调试。

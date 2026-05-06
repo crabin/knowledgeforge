@@ -7,6 +7,7 @@ from knowledgeforge.agent.QueryEngine.nodes.formatting_node import QueryFormatti
 from knowledgeforge.agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
 from knowledgeforge.agent.QueryEngine.nodes.search_node import QueryRealtimeFileCallback, QuerySearchNode
 from knowledgeforge.agent.QueryEngine.nodes.summary_node import QuerySummaryNode
+from knowledgeforge.agent.QueryEngine.search_strategy import build_broad_queries, classify_query_intent
 from knowledgeforge.agent.QueryEngine.source_priority import advise_source_priority
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
@@ -336,7 +337,7 @@ class QueryEngine(BaseEngine):
         return EngineRunResult(
             agent_name=result.agent_name,
             summary=link_summary,
-            key_points=[],
+            key_points=result.key_points,
             raw_material=result.raw_material,
             coverage_topics=result.coverage_topics,
             sources=result.sources,
@@ -369,6 +370,8 @@ class QueryEngine(BaseEngine):
             if (cleaned := QueryEngine._clean_evidence_search_text(str(item).strip()))
         ]
         base = query_text or " ".join([domain, claim]).strip() or f"{domain} official documentation"
+        search_intent = classify_query_intent(" ".join([domain, base, claim, *expected]))
+        broad_queries = build_broad_queries(domain=domain, query=base, intent=search_intent)
         evidence_terms = " ".join(expected[:2]).strip()
         source_advice = advise_source_priority(
             domain=domain,
@@ -408,11 +411,16 @@ class QueryEngine(BaseEngine):
             "preferred_source_types": source_advice["preferred_source_types"],
             "acceptance_criteria": source_advice["acceptance_criteria"],
             "expected_evidence": source_advice["expected_evidence"],
+            "search_intent": search_intent,
+            "broad_queries": broad_queries,
+            "verification_queries": [],
         }
 
     @staticmethod
     def _normalize_evidence_search_query(domain: str, query_text: str, task: dict[str, object]) -> str:
         cleaned = QueryEngine._clean_evidence_search_text(query_text)
+        if domain.lower() == "deep learning" and cleaned.lower().startswith("dl "):
+            cleaned = f"{domain} {cleaned[3:].strip()}".strip()
         boilerplate_terms = ("official documentation", "wikipedia", "standard", "paper", "project homepage")
         if cleaned and not any(term in cleaned.lower() for term in boilerplate_terms):
             return cleaned

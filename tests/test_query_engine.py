@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from knowledgeforge.agent.QueryEngine.agent import QueryEngine
+from knowledgeforge.agent.QueryEngine.search_strategy import classify_verified_concepts, extract_candidate_concepts
+from knowledgeforge.agent.QueryEngine.state.state import SearchHit
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.server.models import RequestContext
 
@@ -322,6 +324,123 @@ class PartialCrawler(FakeCrawler):
             preferred_domains=preferred_domains,
             max_results=max_results,
         )
+
+
+class ConceptCrawler(DomainKnowledgeCrawler):
+    def __init__(self) -> None:
+        self.queries: list[tuple[str, str]] = []
+
+    def search(
+        self,
+        *,
+        query: str,
+        source_type: str,
+        official_domains: list[str],
+        preferred_domains: list[str] | None = None,
+        max_results: int = 5,
+    ):
+        self.queries.append((source_type, query))
+        return [
+            SearchHit(
+                title="Neural network components",
+                url="https://en.wikipedia.org/wiki/Artificial_neural_network",
+                snippet="Input layer, hidden layer, output layer, neurons, weights, bias, and activation function are neural network components.",
+                source_type="official",
+                score=8.0,
+                provider="google",
+            ),
+            SearchHit(
+                title="Deep learning basics",
+                url="https://www.tensorflow.org/tutorials",
+                snippet="Training uses a loss function, backpropagation, and an optimizer to update weights and bias.",
+                source_type="official",
+                score=7.0,
+                provider="google",
+            ),
+            SearchHit(
+                title="Advanced neural network techniques",
+                url="https://example.com/blog/deep-learning-advanced",
+                snippet="Dropout, batch normalization, attention, and residual connection are advanced extensions.",
+                source_type="tutorial",
+                score=3.0,
+                provider="google",
+            ),
+        ]
+
+    def fetch_documents(self, hits, *, max_documents: int = 6):
+        CrawledDocument = __import__("knowledgeforge.agent.QueryEngine.state.state", fromlist=["CrawledDocument"]).CrawledDocument
+        return [
+            CrawledDocument(
+                title=hit.title,
+                url=hit.url,
+                snippet=hit.snippet,
+                content=hit.snippet,
+                source_type=hit.source_type,
+                publisher=hit.publisher,
+                score=hit.score,
+            )
+            for hit in hits[:max_documents]
+        ]
+
+
+def test_search_strategy_merges_aliases_and_excludes_extensions() -> None:
+    hits = [
+        SearchHit(
+            title="Neural network basics",
+            url="https://en.wikipedia.org/wiki/Artificial_neural_network",
+            snippet="Input layer and 输入层 are the entry point. Dropout is an advanced technique.",
+            source_type="official",
+            score=8.0,
+        ),
+        SearchHit(
+            title="Neural network guide",
+            url="https://www.tensorflow.org/tutorials",
+            snippet="Input layer, hidden layer, weights, bias, and activation function appear in basic explanations.",
+            source_type="official",
+            score=7.0,
+        ),
+    ]
+
+    concepts = extract_candidate_concepts(hits)
+    matrix = classify_verified_concepts(concepts, hits)
+
+    assert [concept.canonical_name for concept in concepts].count("input layer") == 1
+    assert any(item.canonical_name == "input layer" and item.included for item in matrix)
+    assert any(item.canonical_name == "dropout" and not item.included for item in matrix)
+
+
+def test_query_engine_deep_search_builds_candidate_pool_and_verification() -> None:
+    crawler = ConceptCrawler()
+    engine = QueryEngine(chat_client=None, embedding_client=None, crawler=crawler)
+    context = RequestContext(
+        domain="Deep Learning",
+        normalized_domain="Deep Learning",
+        subdomains=["神经网络基本组成"],
+        time_window="",
+        focus_points=[],
+        constraints=[],
+        initial_strategy=[],
+    )
+
+    result = engine.run_evidence_task(
+        context=context,
+        round_number=1,
+        task={
+            "task_id": "T-components",
+            "query_text": "Deep Learning 神经网络基本组成",
+            "claim_or_gap": "神经网络的基本组成部分",
+            "expected_evidence": ["定义", "核心组成"],
+            "preferred_source_types": ["official documentation", "wikipedia"],
+        },
+    )
+
+    assert any(entry["event"] == "query_deep_search_plan_created" for entry in result.execution_log)
+    assert any(entry["event"] == "query_deep_verification_started" for entry in result.execution_log)
+    assert any(entry["event"] == "query_deep_search_completed" for entry in result.execution_log)
+    assert any("候选概念池：" == item for item in result.raw_material)
+    assert any("验证矩阵：" == item for item in result.raw_material)
+    assert any("input layer" in item for item in result.key_points)
+    assert any("dropout" in item and "进阶扩展" in item for item in result.raw_material)
 
 
 def test_query_engine_prioritizes_official_sources() -> None:

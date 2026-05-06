@@ -23,6 +23,7 @@
   - [complete] 在 QueryEngine prompt、队列任务默认值和单任务 rewrite 中加入来源类别优先级：Wikipedia、官方文档、技术文档、AI/ML 论文、新闻时事、学术来源。
   - [complete] 通过 `site:` 权威域名查询把泛化证据任务转为可执行 Google 查询，并解析 Google `/url?q=...` 真实目标链接。
   - [complete] 将权威来源优先级集成进 QueryEngine 内部 `source_priority` 能力，脚本仅作为调试入口复用内部逻辑。
+  - [complete] 新增 QueryEngine 通用深度搜索策略：识别基本组成/核心要点类查询，执行宽搜候选池 + 定向验证 + 结构化答案输出。
   - [complete] 更新模拟脚本、回归测试和验证记录。
 - 两轮 Review 职责细分（2026-05-05）
   - [complete] 将第一轮 review 固定为结构覆盖审查，专注领域边界、层级、知识点覆盖、节点粒度和关系完整性。

@@ -11,15 +11,30 @@ class QueryFormattingNode(BaseQueryNode):
         payload = state.summary_payload
         official_docs = [doc for doc in state.crawled_documents if doc.source_type == "official"]
         tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
+        source_cross_check_lines = [
+            f"- {item.get('title', '')} | {item.get('url', '')}"
+            for item in state.source_cross_check
+        ] or ["- 无"]
 
         raw_material = [
             f"术语归一化：{state.request_context.domain} -> {state.normalized_domain or state.request_context.domain}",
             f"归一化说明：{state.normalization_reasoning or '无'}",
             f"搜索规划：{state.search_plan.reasoning if state.search_plan else '无'}",
+            f"搜索意图：{state.search_intent}",
+            f"宽泛搜索：{'; '.join(state.broad_queries) if state.broad_queries else '无'}",
+            f"验证搜索：{'; '.join(state.verification_queries[:12]) if state.verification_queries else '无'}",
             "链接级采集计划：",
             *self._format_search_plan(state),
+            "候选概念池：",
+            *self._format_candidate_concepts(state),
+            "验证矩阵：",
+            *self._format_verification_matrix(state),
+            "剔除项：",
+            *self._format_excluded_concepts(state),
             f"反思结论：{state.reflection_plan.reasoning if state.reflection_plan else '无'}",
             f"候选官方域名：{', '.join(state.candidate_official_domains) if state.candidate_official_domains else '无'}",
+            "来源交叉验证：",
+            *source_cross_check_lines,
             "官方文档优先：",
             *[
                 f"- {doc.title} | {doc.url}"
@@ -75,7 +90,18 @@ class QueryFormattingNode(BaseQueryNode):
                 ]
             )
 
-        key_points = [str(item) for item in payload.get("key_points", []) if str(item).strip()]
+        structured_answer = payload.get("structured_answer") if isinstance(payload.get("structured_answer"), list) else []
+        structured_key_points: list[str] = []
+        for section in structured_answer:
+            if not isinstance(section, dict):
+                continue
+            for item in section.get("items", []):
+                if isinstance(item, dict) and item.get("name") and item.get("role"):
+                    structured_key_points.append(f"{item['name']}：{item['role']}")
+        key_points = [
+            *structured_key_points,
+            *[str(item) for item in payload.get("key_points", []) if str(item).strip()],
+        ]
         official_findings = [str(item) for item in payload.get("official_findings", []) if str(item).strip()]
         tutorial_findings = [str(item) for item in payload.get("tutorial_findings", []) if str(item).strip()]
         key_points.extend([f"官方文档：{item}" for item in official_findings[:2]])
@@ -85,6 +111,8 @@ class QueryFormattingNode(BaseQueryNode):
         return EngineRunResult(
             agent_name="QueryEngine",
             summary=str(payload.get("summary", "")).strip()
+            or str(payload.get("short_summary", "")).strip()
+            or state.short_summary
             or f"{state.request_context.domain} 的查询结果已按官方文档优先策略完成整理。",
             key_points=key_points[:6] or [
                 "官方文档优先，教程补充。",
@@ -132,6 +160,33 @@ class QueryFormattingNode(BaseQueryNode):
             if question.evidence_match_reason:
                 formatted.append(f"  匹配原因：{question.evidence_match_reason}")
         return formatted
+
+    @staticmethod
+    def _format_candidate_concepts(state: QueryEngineState) -> list[str]:
+        if not state.candidate_concepts:
+            return ["- 无"]
+        return [
+            f"- {concept.canonical_name} | mentions={concept.mentions} | category={concept.preliminary_category} | sources={len(concept.source_urls)}"
+            for concept in state.candidate_concepts[:12]
+        ]
+
+    @staticmethod
+    def _format_verification_matrix(state: QueryEngineState) -> list[str]:
+        if not state.verification_matrix:
+            return ["- 无"]
+        return [
+            f"- {'纳入' if item.included else '剔除'} | {item.canonical_name} | {item.category} | support={item.support_count} | reliable={item.reliable_support_count} | {item.reason}"
+            for item in state.verification_matrix[:12]
+        ]
+
+    @staticmethod
+    def _format_excluded_concepts(state: QueryEngineState) -> list[str]:
+        if not state.excluded_concepts:
+            return ["- 无"]
+        return [
+            f"- {item.get('name', '')}：{item.get('reason', '')}"
+            for item in state.excluded_concepts[:8]
+        ]
 
     @staticmethod
     def _fallback_sources(state: QueryEngineState) -> list[SourceRecord]:

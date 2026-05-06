@@ -92,6 +92,33 @@ class CrawledDocument:
 
 
 @dataclass(slots=True)
+class CandidateConcept:
+    name: str
+    canonical_name: str
+    mentions: int = 0
+    source_urls: list[str] = field(default_factory=list)
+    source_types: list[str] = field(default_factory=list)
+    preliminary_category: str = "core_content"
+
+
+@dataclass(slots=True)
+class ConceptVerification:
+    canonical_name: str
+    support_count: int
+    reliable_support_count: int
+    category: str
+    included: bool
+    reason: str
+    one_sentence_role: str = ""
+
+
+@dataclass(slots=True)
+class StructuredAnswerSection:
+    title: str
+    items: list[dict[str, str]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class QueryEngineState:
     request_context: RequestContext
     round_number: int
@@ -105,6 +132,16 @@ class QueryEngineState:
     search_hits: list[SearchHit] = field(default_factory=list)
     crawled_documents: list[CrawledDocument] = field(default_factory=list)
     summary_payload: dict[str, Any] = field(default_factory=dict)
+    search_intent: str = "general"
+    broad_queries: list[str] = field(default_factory=list)
+    verification_queries: list[str] = field(default_factory=list)
+    candidate_concepts: list[CandidateConcept] = field(default_factory=list)
+    verification_matrix: list[ConceptVerification] = field(default_factory=list)
+    useful_information_checks: list[dict[str, Any]] = field(default_factory=list)
+    structured_answer_sections: list[StructuredAnswerSection] = field(default_factory=list)
+    excluded_concepts: list[dict[str, str]] = field(default_factory=list)
+    source_cross_check: list[dict[str, str]] = field(default_factory=list)
+    short_summary: str = ""
     search_history: list[dict[str, Any]] = field(default_factory=list)
     execution_log: list[dict[str, Any]] = field(default_factory=list)
     observation_notes: list[str] = field(default_factory=list)

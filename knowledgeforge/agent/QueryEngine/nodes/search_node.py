@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 
@@ -10,8 +10,19 @@ from typing import Any
 
 from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from knowledgeforge.agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
+from knowledgeforge.agent.QueryEngine.search_strategy import (
+    build_broad_queries,
+    build_short_summary,
+    build_structured_sections,
+    build_verification_queries,
+    classify_query_intent,
+    classify_verified_concepts,
+    extract_candidate_concepts,
+    source_cross_check,
+    useful_information_checks,
+)
 from knowledgeforge.agent.QueryEngine.source_priority import advise_source_priority
-from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
+from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion, StructuredAnswerSection
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.agent.QueryEngine.utils.ranking import (
     PREFERRED_TECH_REFERENCE_DOMAINS,
@@ -286,6 +297,7 @@ class QuerySearchNode(BaseQueryNode):
             tutorial_queries=tutorial_queries,
         )
         self._prepare_plan_questions(plan_questions)
+        self._augment_with_deep_search_plan(state, plan_questions)
         self._record_event(
             state,
             "query_plan_created",
@@ -428,9 +440,14 @@ class QuerySearchNode(BaseQueryNode):
                 source_type=task_result.source_type,
                 hits=question_hits,
             )
+        if state.search_intent in {"basic_components", "core_concepts"}:
+            verification_hits = self._run_deep_verification_search(state, all_hits, domain_phrases)
+            all_hits.extend(verification_hits)
         deduped_hits = self._dedupe_hits(all_hits)
         evidence_hits = [hit for hit in deduped_hits if self._question_satisfied([hit])]
         state.search_hits = evidence_hits
+        if state.search_intent in {"basic_components", "core_concepts"}:
+            self._finalize_deep_search_state(state, evidence_hits)
         state.candidate_official_domains = self._merge_candidate_domains(
             state,
             detect_candidate_official_domains(state.request_context.domain, evidence_hits),
@@ -476,6 +493,209 @@ class QuerySearchNode(BaseQueryNode):
                     "query_embeddings_failed",
                     {"document_count": len(state.crawled_documents)},
                 )
+
+    def _augment_with_deep_search_plan(self, state: QueryEngineState, questions: list[SearchQuestion]) -> None:
+        context = state.request_context
+        intent_text = " ".join(
+            [
+                state.normalized_domain or context.domain,
+                context.domain,
+                *context.subdomains,
+                *context.focus_points,
+                *[question.question for question in questions],
+                *[question.google_query for question in questions],
+            ]
+        )
+        state.search_intent = classify_query_intent(intent_text)
+        if state.search_intent not in {"basic_components", "core_concepts"}:
+            return
+        if state.broad_queries:
+            return
+        base_query = questions[0].google_query if questions else (state.normalized_domain or context.domain)
+        state.broad_queries = build_broad_queries(
+            domain=state.normalized_domain or context.domain,
+            query=base_query,
+            intent=state.search_intent,
+        )
+        broad_questions = [
+            SearchQuestion(
+                question=f"广搜候选概念：{query}",
+                google_query=query,
+                expected_info=["高频候选概念", "来源类型", "基础组成线索"],
+                source_priority=["official documentation", "wikipedia", "academic"],
+                success_criteria=["找到可用于建立候选概念池的来源"],
+                fallback_queries=[],
+                status="planned",
+                plan_item_id=f"B{index}",
+                search_targets=["高频概念", "权威来源", "基础/扩展边界"],
+                subdomain=context.subdomains[0] if context.subdomains else "通用",
+                doc_type="source",
+                doc_role="topic_article",
+                module_id="core_topics",
+                module_label="Core Topics",
+            )
+            for index, query in enumerate(state.broad_queries[:6], start=1)
+        ]
+        questions.extend(broad_questions)
+        self._record_event(
+            state,
+            "query_deep_search_plan_created",
+            {
+                "search_intent": state.search_intent,
+                "broad_queries": state.broad_queries,
+            },
+        )
+
+    def _run_deep_verification_search(
+        self,
+        state: QueryEngineState,
+        all_hits: list[Any],
+        domain_phrases: list[str],
+    ) -> list[Any]:
+        state.candidate_concepts = extract_candidate_concepts(all_hits)
+        state.verification_queries = build_verification_queries(
+            domain=state.normalized_domain or state.request_context.domain,
+            query=state.search_plan.questions[0].google_query if state.search_plan and state.search_plan.questions else state.request_context.domain,
+            concepts=state.candidate_concepts,
+        )
+        if not state.verification_queries:
+            return []
+        verification_questions = [
+            SearchQuestion(
+                question=f"验证候选概念：{query}",
+                google_query=query,
+                expected_info=["是否属于核心内容", "多源支持", "基础/扩展分类"],
+                source_priority=["official documentation", "wikipedia", "academic"],
+                success_criteria=["验证候选概念是否可纳入最终结论"],
+                fallback_queries=[],
+                status="planned",
+                plan_item_id=f"V{index}",
+                search_targets=["候选概念验证", "分类", "来源交叉验证"],
+                subdomain=state.request_context.subdomains[0] if state.request_context.subdomains else "通用",
+                doc_type="source",
+                doc_role="topic_article",
+                module_id="core_topics",
+                module_label="Core Topics",
+            )
+            for index, query in enumerate(state.verification_queries[:12], start=1)
+        ]
+        if state.search_plan:
+            state.search_plan.questions.extend(verification_questions)
+        self._prepare_plan_questions(verification_questions)
+        self._record_event(
+            state,
+            "query_deep_verification_started",
+            {
+                "candidate_count": len(state.candidate_concepts),
+                "verification_queries": state.verification_queries,
+            },
+        )
+        verification_results = self._run_question_tasks(state, verification_questions, domain_phrases)
+        verification_hits: list[Any] = []
+        for task_result in verification_results:
+            question = task_result.question
+            question_hits = task_result.hits
+            for attempt in task_result.attempts:
+                state.search_history.append(
+                    {
+                        "question": question.question,
+                        "query": attempt.query,
+                        "expected_info": question.expected_info,
+                        "source_type": task_result.source_type,
+                        "hits": len(attempt.hits),
+                        "status": attempt.status,
+                        "error": attempt.error,
+                        "url": question.candidate_url,
+                        "subdomain": question.subdomain,
+                        "providers": sorted(
+                            {
+                                str(getattr(hit, "provider", ""))
+                                for hit in attempt.hits
+                                if getattr(hit, "provider", "")
+                            }
+                        ),
+                        "selected": [
+                            {
+                                "url": getattr(hit, "url", ""),
+                                "score": getattr(hit, "score", 0),
+                                "reason": getattr(hit, "rank_reason", ""),
+                            }
+                            for hit in attempt.hits[:3]
+                            if self._question_satisfied([hit])
+                        ],
+                        "rejected": [],
+                    }
+                )
+                details = {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "query": attempt.query,
+                    "search_targets": question.search_targets,
+                    "expected_info": question.expected_info,
+                    "source_type": task_result.source_type,
+                    "hits": len(attempt.hits),
+                    "status": attempt.status,
+                    "subdomain": question.subdomain,
+                    "planned_path": question.planned_path,
+                }
+                if attempt.error:
+                    details["error"] = attempt.error
+                    details["failure_category"] = "network_query_failed"
+                self._record_event(state, "query_search_failed" if attempt.status == "failed" else "query_search_executed", details)
+            verification_hits.extend(question_hits)
+            question.status = "completed" if self._question_satisfied(question_hits) else "insufficient"
+            self._record_event(
+                state,
+                "query_question_completed",
+                {
+                    "plan_item_id": question.plan_item_id,
+                    "question": question.question,
+                    "query": question.google_query,
+                    "search_targets": question.search_targets,
+                    "status": question.status,
+                    "total_hits": len(question_hits),
+                    "completed_at": now_iso() if question.status == "completed" else "",
+                    "subdomain": question.subdomain,
+                    "module_id": question.module_id,
+                    "doc_role": question.doc_role,
+                    "planned_path": question.planned_path,
+                },
+            )
+        return verification_hits
+
+    def _finalize_deep_search_state(self, state: QueryEngineState, evidence_hits: list[Any]) -> None:
+        if not state.candidate_concepts:
+            state.candidate_concepts = extract_candidate_concepts(evidence_hits)
+        state.verification_matrix = classify_verified_concepts(state.candidate_concepts, evidence_hits)
+        state.useful_information_checks = useful_information_checks(state.verification_matrix)
+        structured_sections = build_structured_sections(state.verification_matrix)
+        state.structured_answer_sections = [
+            StructuredAnswerSection(
+                title=str(section.get("title", "")),
+                items=[
+                    {"name": str(item.get("name", "")), "role": str(item.get("role", ""))}
+                    for item in section.get("items", [])
+                    if isinstance(item, dict)
+                ],
+            )
+            for section in structured_sections
+        ]
+        state.excluded_concepts = [
+            {"name": item.canonical_name, "reason": item.reason}
+            for item in state.verification_matrix
+            if not item.included or item.category == "excluded_extension"
+        ]
+        state.source_cross_check = source_cross_check(evidence_hits)
+        state.short_summary = build_short_summary(state.verification_matrix)
+        self._record_event(
+            state,
+            "query_deep_search_completed",
+            {
+                "candidate_concepts": [asdict(concept) for concept in state.candidate_concepts],
+                "verification_matrix": [asdict(item) for item in state.verification_matrix],
+                "source_cross_check": state.source_cross_check,
+            },
+        )
 
     def _run_question_tasks(
         self,

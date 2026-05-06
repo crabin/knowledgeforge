@@ -27,7 +27,12 @@ def main() -> int:
     config = AppConfig.from_env() if args.use_env_config else AppConfig()
     base_url = args.base_url.rstrip("/")
     api_requests: list[dict[str, Any]] = []
-    task_payload = _load_task(base_url, args.task_id)
+    try:
+        task_payload = _load_task(base_url, args.task_id)
+    except Exception:
+        if not args.dry_run or not args.query:
+            raise
+        task_payload = _build_offline_task_payload(args)
     task_id = str(task_payload.get("task_id", "")).strip()
     context = _build_context(task_payload, task_id)
     if args.list_queue:
@@ -78,6 +83,7 @@ def main() -> int:
     elapsed = time.perf_counter() - started
     selected = next((source for source in result.sources if source.url.startswith(("http://", "https://"))), None)
     query_attempts = _extract_query_attempts(result.execution_log)
+    deep_search = _extract_deep_search(result.execution_log)
 
     sections.append(
         (
@@ -88,6 +94,7 @@ def main() -> int:
                 "selected": selected.to_dict() if selected else None,
                 "diagnostics": _build_diagnostics(selected.to_dict() if selected else None, query_attempts, trace_lines),
                 "query_attempts": query_attempts,
+                "deep_search": deep_search,
                 "sources": [source.to_dict() for source in result.sources],
                 "execution_log": result.execution_log,
                 "raw_material": result.raw_material,
@@ -107,6 +114,7 @@ def main() -> int:
                     "result": result.to_dict(),
                     "diagnostics": _build_diagnostics(selected.to_dict() if selected else None, query_attempts, trace_lines),
                     "query_attempts": query_attempts,
+                    "deep_search": deep_search,
                     "trace": trace_lines,
                 },
                 ensure_ascii=False,
@@ -128,6 +136,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--queue-task-id", default="", help="Existing task_queue_snapshot task id to run.")
     parser.add_argument("--node-id", default="", help="Target node id for an ad-hoc query task.")
     parser.add_argument("--query", default="", help="Override or provide query_text.")
+    parser.add_argument("--domain", default="", help="Domain used when --dry-run cannot read a task from the API.")
     parser.add_argument("--claim", default="", help="Override or provide claim_or_gap.")
     parser.add_argument(
         "--expected",
@@ -156,6 +165,37 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--env-file", default=".env", help="Env file to load before creating clients.")
     parser.add_argument("--use-env-config", action="store_true", help="Use AppConfig.from_env instead of defaults.")
     return parser.parse_args()
+
+
+def _build_offline_task_payload(args: argparse.Namespace) -> dict[str, Any]:
+    domain = args.domain.strip() or _infer_domain_from_query(args.query) or "Unknown"
+    return {
+        "task_id": "offline-simulate-query-task",
+        "domain": domain,
+        "normalized_domain": domain,
+        "request_context": {
+            "domain": domain,
+            "normalized_domain": domain,
+            "subdomains": [domain],
+            "time_window": "",
+            "focus_points": [],
+            "constraints": [],
+            "initial_strategy": [],
+            "confirmed": True,
+        },
+        "task_queue_snapshot": {"tasks": []},
+    }
+
+
+def _infer_domain_from_query(query: str) -> str:
+    lowered = query.lower()
+    if "deep learning" in lowered or lowered.startswith("dl "):
+        return "Deep Learning"
+    if "machine learning" in lowered or lowered.startswith("ml "):
+        return "Machine Learning"
+    if "large language model" in lowered or lowered.startswith("llm "):
+        return "Large Language Models"
+    return ""
 
 
 def _build_queue_listing(task_payload: dict[str, Any], context: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
@@ -206,6 +246,14 @@ def _load_task(base_url: str, task_id: str) -> dict[str, Any]:
 
 
 def _describe_api_requests(base_url: str, args: argparse.Namespace, resolved_task_id: str) -> list[dict[str, Any]]:
+    if resolved_task_id == "offline-simulate-query-task":
+        return [
+            {
+                "method": "OFFLINE",
+                "url": "",
+                "purpose": "API 不可用且提供了 --query --dry-run，已使用离线上下文展示 QueryEngine rewrite 计划。",
+            }
+        ]
     if args.task_id:
         return [
             {
@@ -294,10 +342,13 @@ def _build_query_request(context: RequestContext, task: dict[str, Any], args: ar
         },
         "effective_task_after_rewrite": {
             "query_text": rewritten["primary_query"],
+            "search_intent": rewritten.get("search_intent", "general"),
             "expected_evidence": rewritten["expected_evidence"],
             "preferred_source_types": rewritten["preferred_source_types"],
             "acceptance_criteria": rewritten["acceptance_criteria"],
+            "broad_queries": rewritten.get("broad_queries", []),
             "authority_queries": rewritten["authority_queries"],
+            "verification_queries": rewritten.get("verification_queries", []),
             "fallback_queries": rewritten["fallback_queries"],
         },
         "rewritten_queries": rewritten,
@@ -330,6 +381,29 @@ def _extract_query_attempts(execution_log: list[dict[str, Any]]) -> list[dict[st
             }
         )
     return attempts
+
+
+def _extract_deep_search(execution_log: list[dict[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "search_intent": "",
+        "broad_queries": [],
+        "verification_queries": [],
+        "candidate_concepts": [],
+        "verification_matrix": [],
+        "source_cross_check": [],
+    }
+    for entry in execution_log:
+        details = entry.get("details") if isinstance(entry.get("details"), dict) else {}
+        if entry.get("event") == "query_deep_search_plan_created":
+            payload["search_intent"] = details.get("search_intent", "")
+            payload["broad_queries"] = details.get("broad_queries", [])
+        if entry.get("event") == "query_deep_verification_started":
+            payload["verification_queries"] = details.get("verification_queries", [])
+        if entry.get("event") == "query_deep_search_completed":
+            payload["candidate_concepts"] = details.get("candidate_concepts", [])
+            payload["verification_matrix"] = details.get("verification_matrix", [])
+            payload["source_cross_check"] = details.get("source_cross_check", [])
+    return payload
 
 
 def _build_diagnostics(selected: dict[str, Any] | None, attempts: list[dict[str, Any]], trace_lines: list[str]) -> dict[str, Any]:

@@ -46,6 +46,41 @@ class QuerySummaryNode(BaseQueryNode):
                     "missing_aspects": state.reflection_plan.missing_aspects if state.reflection_plan else [],
                     "reasoning": state.reflection_plan.reasoning if state.reflection_plan else "",
                 },
+                "deep_search": {
+                    "search_intent": state.search_intent,
+                    "broad_queries": state.broad_queries,
+                    "verification_queries": state.verification_queries,
+                    "candidate_concepts": [
+                        {
+                            "name": concept.name,
+                            "canonical_name": concept.canonical_name,
+                            "mentions": concept.mentions,
+                            "source_urls": concept.source_urls,
+                            "source_types": concept.source_types,
+                            "preliminary_category": concept.preliminary_category,
+                        }
+                        for concept in state.candidate_concepts
+                    ],
+                    "verification_matrix": [
+                        {
+                            "canonical_name": item.canonical_name,
+                            "support_count": item.support_count,
+                            "reliable_support_count": item.reliable_support_count,
+                            "category": item.category,
+                            "included": item.included,
+                            "reason": item.reason,
+                            "one_sentence_role": item.one_sentence_role,
+                        }
+                        for item in state.verification_matrix
+                    ],
+                    "structured_answer": [
+                        {"title": section.title, "items": section.items}
+                        for section in state.structured_answer_sections
+                    ],
+                    "excluded_concepts": state.excluded_concepts,
+                    "source_cross_check": state.source_cross_check,
+                    "short_summary": state.short_summary,
+                },
                 "documents": documents_payload,
             },
             ensure_ascii=False,
@@ -70,13 +105,24 @@ class QuerySummaryNode(BaseQueryNode):
         official_docs = [doc for doc in state.crawled_documents if doc.source_type == "official"]
         tutorial_docs = [doc for doc in state.crawled_documents if doc.source_type == "tutorial"]
         return {
-            "summary": f"{state.request_context.domain} 的 QueryEngine 已优先检索官方文档，并用教程资料补充落地用法。",
+            "summary": state.short_summary or f"{state.request_context.domain} 的 QueryEngine 已优先检索官方文档，并用教程资料补充落地用法。",
+            "short_summary": state.short_summary,
             "key_points": [
+                *[
+                    f"{item.canonical_name}：{item.one_sentence_role}"
+                    for item in state.verification_matrix
+                    if item.included
+                ][:4],
                 "官方文档是当前结果的主要依据。",
                 "教程资料只用于补充步骤、案例与经验。",
-                "当前结果已按知识主题聚合为可追溯来源列表。",
             ],
             "coverage_topics": state.request_context.subdomains,
             "official_findings": [doc.title for doc in official_docs[:3]],
             "tutorial_findings": [doc.title for doc in tutorial_docs[:3]],
+            "structured_answer": [
+                {"title": section.title, "items": section.items}
+                for section in state.structured_answer_sections
+            ],
+            "excluded_concepts": state.excluded_concepts,
+            "source_cross_check": state.source_cross_check,
         }
