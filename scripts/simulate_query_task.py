@@ -173,18 +173,22 @@ def _build_queue_listing(task_payload: dict[str, Any], context: RequestContext, 
         "total": len(tasks),
         "filtered_total": len(filtered),
         "shown": len(visible),
-        "tasks": [
-            {
-                "task_id": task.get("task_id"),
-                "status": task.get("status"),
-                "target_node_id": task.get("target_node_id"),
-                "query_text": task.get("query_text"),
-                "primary_query": QueryEngine._rewrite_evidence_task_queries(context, task)["primary_query"],
-                "claim_or_gap": task.get("claim_or_gap"),
-                "selected_link": task.get("selected_link"),
-            }
-            for task in visible
-        ],
+        "tasks": [_queue_task_preview(context, task) for task in visible],
+    }
+
+
+def _queue_task_preview(context: RequestContext, task: dict[str, Any]) -> dict[str, Any]:
+    rewritten = QueryEngine._rewrite_evidence_task_queries(context, task)
+    return {
+        "task_id": task.get("task_id"),
+        "status": task.get("status"),
+        "target_node_id": task.get("target_node_id"),
+        "query_text": task.get("query_text"),
+        "primary_query": rewritten["primary_query"],
+        "preferred_source_types": rewritten["preferred_source_types"],
+        "authority_queries": rewritten["authority_queries"],
+        "claim_or_gap": task.get("claim_or_gap"),
+        "selected_link": task.get("selected_link"),
     }
 
 
@@ -288,6 +292,14 @@ def _build_query_request(context: RequestContext, task: dict[str, Any], args: ar
             "target_file_path": task.get("target_file_path"),
             "status": task.get("status"),
         },
+        "effective_task_after_rewrite": {
+            "query_text": rewritten["primary_query"],
+            "expected_evidence": rewritten["expected_evidence"],
+            "preferred_source_types": rewritten["preferred_source_types"],
+            "acceptance_criteria": rewritten["acceptance_criteria"],
+            "authority_queries": rewritten["authority_queries"],
+            "fallback_queries": rewritten["fallback_queries"],
+        },
         "rewritten_queries": rewritten,
         "executable_queries_in_order": executable_queries,
         "search_settings": {
@@ -329,6 +341,8 @@ def _build_diagnostics(selected: dict[str, Any] | None, attempts: list[dict[str,
         warnings.append("selected_link_is_google_redirect")
     if source_type == "official" and publisher in {"www.google.com", "google.com"}:
         warnings.append("official_source_uses_search_engine_publisher")
+    if not selected_url and attempts:
+        warnings.append("no_selected_link_after_rewrite")
     if attempts and not any(int(attempt.get("hits") or 0) > 0 for attempt in attempts):
         warnings.append("all_search_attempts_returned_zero_hits")
     return {

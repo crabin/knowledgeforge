@@ -5,6 +5,7 @@
 - 新增 `knowledgeforge/agent/QueryEngine/source_priority.py`，将权威来源优先级表、LLM prompt 拼接、LLM JSON 解析、队列规整和非 LLM 来源类型推断放入 QueryEngine 内部能力。
 - QueryEngine 真实链路已接入来源优先级：搜索规划 prompt 直接带权威来源表；`_prepare_plan_questions` 会补齐 `source_priority / authority_queries / acceptance_criteria`；`run_evidence_task` 会在单条证据任务 rewrite 时自动推断优先来源和 `site:` 权威查询。
 - `scripts/build_source_priority_query_queue.py` 已改为薄包装，只调用 QueryEngine 内部 `source_priority` 能力，保留 `--dry-run / --mock-response / --output` 用于调试。
+- `scripts/simulate_query_task.py` 也已适配：现在会展示 rewrite 后的 `effective_task_after_rewrite`，并在队列预览中直接显示 `preferred_source_types` 与 `authority_queries`，便于排查 QueryEngine 内部来源优先级是否生效。
 - 验证：`uv run ruff check knowledgeforge/agent/QueryEngine scripts/build_source_priority_query_queue.py tests/test_query_engine.py` 通过；`uv run python -m py_compile knowledgeforge/agent/QueryEngine/source_priority.py knowledgeforge/agent/QueryEngine/prompts/prompts.py knowledgeforge/agent/QueryEngine/nodes/search_node.py knowledgeforge/agent/QueryEngine/agent.py scripts/build_source_priority_query_queue.py` 通过；`uv run pytest -q tests/test_query_engine.py` 结果 `12 passed`；脚本 `--dry-run` 和 `normalize_source_priority_queue(...)` 离线样例均可正常输出。
 
 ## 2026-05-06 Query 搜索入口收敛为 Google
