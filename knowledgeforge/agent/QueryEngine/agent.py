@@ -7,6 +7,7 @@ from knowledgeforge.agent.QueryEngine.nodes.formatting_node import QueryFormatti
 from knowledgeforge.agent.QueryEngine.nodes.reflection_node import QueryReflectionNode
 from knowledgeforge.agent.QueryEngine.nodes.search_node import QueryRealtimeFileCallback, QuerySearchNode
 from knowledgeforge.agent.QueryEngine.nodes.summary_node import QuerySummaryNode
+from knowledgeforge.agent.QueryEngine.source_priority import advise_source_priority
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.agent.QueryEngine.utils.ranking import build_site_constrained_queries, domains_for_source_priority
@@ -303,10 +304,10 @@ class QueryEngine(BaseEngine):
                     plan_item_id=str(task.get("task_id", "Q1")),
                     title=str(task.get("claim_or_gap", task.get("query_text", "补充证据"))),
                     query_or_action=rewritten["primary_query"],
-                    targets=[str(item) for item in task.get("expected_evidence", []) if str(item).strip()],
-                    success_criteria=[str(item) for item in task.get("acceptance_criteria", []) if str(item).strip()],
+                    targets=[str(item) for item in rewritten["expected_evidence"] if str(item).strip()],
+                    success_criteria=[str(item) for item in rewritten["acceptance_criteria"] if str(item).strip()],
                     fallbacks=rewritten["fallback_queries"],
-                    source_priority=[str(item) for item in task.get("preferred_source_types", []) if str(item).strip()],
+                    source_priority=[str(item) for item in rewritten["preferred_source_types"] if str(item).strip()],
                     status="approved",
                     metadata={
                         "authority_queries": rewritten["authority_queries"],
@@ -369,8 +370,16 @@ class QueryEngine(BaseEngine):
         ]
         base = query_text or " ".join([domain, claim]).strip() or f"{domain} official documentation"
         evidence_terms = " ".join(expected[:2]).strip()
-        priority_domains = domains_for_source_priority(
-            [str(item).strip() for item in task.get("preferred_source_types", []) if str(item).strip()],
+        source_advice = advise_source_priority(
+            domain=domain,
+            query=base,
+            claim=claim,
+            expected_info=expected,
+            source_priority=[str(item).strip() for item in task.get("preferred_source_types", []) if str(item).strip()],
+            acceptance_criteria=[str(item).strip() for item in task.get("acceptance_criteria", []) if str(item).strip()],
+        )
+        priority_domains = source_advice["priority_domains"] or domains_for_source_priority(
+            source_advice["preferred_source_types"],
             query=base,
             expected_info=expected,
             max_domains=3,
@@ -396,6 +405,9 @@ class QueryEngine(BaseEngine):
             "primary_query": primary,
             "authority_queries": deduped[1:4],
             "fallback_queries": deduped[4:],
+            "preferred_source_types": source_advice["preferred_source_types"],
+            "acceptance_criteria": source_advice["acceptance_criteria"],
+            "expected_evidence": source_advice["expected_evidence"],
         }
 
     @staticmethod

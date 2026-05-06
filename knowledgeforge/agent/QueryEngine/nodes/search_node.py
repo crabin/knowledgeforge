@@ -10,6 +10,7 @@ from typing import Any
 
 from knowledgeforge.agent.QueryEngine.nodes.base_node import BaseQueryNode, QueryEventCallback
 from knowledgeforge.agent.QueryEngine.prompts.prompts import SEARCH_PLAN_SYSTEM_PROMPT
+from knowledgeforge.agent.QueryEngine.source_priority import advise_source_priority
 from knowledgeforge.agent.QueryEngine.state.state import QueryEngineState, SearchPlan, SearchQuestion
 from knowledgeforge.agent.QueryEngine.tools.crawler import DomainKnowledgeCrawler
 from knowledgeforge.agent.QueryEngine.utils.ranking import (
@@ -823,8 +824,22 @@ class QuerySearchNode(BaseQueryNode):
                 question.plan_item_id = f"Q{index}"
             if not question.search_targets:
                 question.search_targets = list(question.expected_info)
+            advice = advise_source_priority(
+                domain=question.subdomain or question.question,
+                query=question.google_query,
+                claim=question.question,
+                expected_info=question.expected_info,
+                source_priority=question.source_priority,
+                acceptance_criteria=question.success_criteria,
+            )
+            question.source_priority = advice["preferred_source_types"]
+            question.success_criteria = advice["acceptance_criteria"]
+            if not question.expected_info:
+                question.expected_info = advice["expected_evidence"]
+            if not question.search_targets:
+                question.search_targets = list(question.expected_info)
             if not question.authority_queries:
-                question.authority_queries = QuerySearchNode._build_authority_queries(
+                question.authority_queries = advice["authority_queries"] or QuerySearchNode._build_authority_queries(
                     query=question.google_query,
                     domain=question.subdomain or question.question,
                     expected_info=question.expected_info,

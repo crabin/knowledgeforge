@@ -1,11 +1,11 @@
 # Progress
 
-## 2026-05-06 来源优先级批量查询队列脚本
+## 2026-05-06 来源优先级集成到 QueryEngine
 
-- 新增 `scripts/build_source_priority_query_queue.py`，内置权威来源优先级策略，可将批量待查询条目与来源优先级表拼接成 LLM prompt，并请求 OpenAI-compatible `/chat/completions` 返回结构化 JSON。
-- 脚本会把 LLM 返回内容规整为当前 KnowledgeForge query task 队列字段：`task_id/task_type/target_node_id/claim_or_gap/query_text/expected_evidence/preferred_source_types/source_priority/authority_queries/acceptance_criteria/status`。
-- 支持 `--query` 多次传入、`--queries-json` 批量文件输入、`--dry-run` 离线检查 prompt、`--mock-response` 离线处理 LLM JSON 响应、`--output` 保存 JSON 队列。
-- 验证：`uv run python -m py_compile scripts/build_source_priority_query_queue.py` 通过；`uv run ruff check scripts/build_source_priority_query_queue.py` 通过；`--dry-run` 能生成包含来源优先级表、待查列表和输出 schema 的 prompt；`normalize_queue(...)` 离线样例能生成合法 pending 查询队列。
+- 新增 `knowledgeforge/agent/QueryEngine/source_priority.py`，将权威来源优先级表、LLM prompt 拼接、LLM JSON 解析、队列规整和非 LLM 来源类型推断放入 QueryEngine 内部能力。
+- QueryEngine 真实链路已接入来源优先级：搜索规划 prompt 直接带权威来源表；`_prepare_plan_questions` 会补齐 `source_priority / authority_queries / acceptance_criteria`；`run_evidence_task` 会在单条证据任务 rewrite 时自动推断优先来源和 `site:` 权威查询。
+- `scripts/build_source_priority_query_queue.py` 已改为薄包装，只调用 QueryEngine 内部 `source_priority` 能力，保留 `--dry-run / --mock-response / --output` 用于调试。
+- 验证：`uv run ruff check knowledgeforge/agent/QueryEngine scripts/build_source_priority_query_queue.py tests/test_query_engine.py` 通过；`uv run python -m py_compile knowledgeforge/agent/QueryEngine/source_priority.py knowledgeforge/agent/QueryEngine/prompts/prompts.py knowledgeforge/agent/QueryEngine/nodes/search_node.py knowledgeforge/agent/QueryEngine/agent.py scripts/build_source_priority_query_queue.py` 通过；`uv run pytest -q tests/test_query_engine.py` 结果 `12 passed`；脚本 `--dry-run` 和 `normalize_source_priority_queue(...)` 离线样例均可正常输出。
 
 ## 2026-05-06 Query 搜索入口收敛为 Google
 

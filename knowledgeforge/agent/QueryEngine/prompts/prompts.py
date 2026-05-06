@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from knowledgeforge.agent.QueryEngine.source_priority import SOURCE_PRIORITY_POLICY
+
 
 SEARCH_PLAN_SCHEMA = {
     "type": "object",
@@ -81,6 +83,9 @@ SUMMARY_SCHEMA = {
 SEARCH_PLAN_SYSTEM_PROMPT = f"""
 你是 KnowledgeForge 的 QueryEngine 搜索规划器。
 任务目标：在任何网络检索前，先生成“文章级采集候选模板”。系统只使用 Google 检索，再展开成逐条 URL 计划项。
+
+权威来源优先级表：
+{SOURCE_PRIORITY_POLICY}
 
 强制规则：
 1. google_query 必须是短搜索词：领域名 + 节点标题/证据主题；不要写“补充...关键依据”这类执行动作。
