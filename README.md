@@ -65,19 +65,7 @@ uv run python app.py
 
 展示流程图、交互式输入、任务操作、生成与查询队列状态、Neo4j 实时知识图谱。
 
-![KnowledgeForge 控制台总览](docs/images/knowledgeforge-dashboard-overview.png)
-
-### 运行中状态
-
-展示文件生成、证据查询、即时回写、图谱节点完成度和任务日志。
-
-![KnowledgeForge 运行中状态](docs/images/knowledgeforge-dashboard-runtime.png)
-
-### 完成状态
-
-展示治理链路完成后的结果状态，包括质量检查、冻结版本、保存文件、图谱状态和研报入口。
-
-![KnowledgeForge 爬取结束状态](docs/images/knowledgeforge-dashboard-finished.png)
+![KnowledgeForge 控制台总览](docs/images/homepage.png)
 
 ## 目录说明
 
@@ -103,3 +91,4 @@ uv run python app.py
 - SSE 直接推送任务状态、图谱快照和文件回写事件
 - 领域 README、子领域 README、实时资料索引刷新
 - 结构化治理、质量检测、版本冻结和研报生成入口
+
